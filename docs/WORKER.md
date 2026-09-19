@@ -8,6 +8,12 @@ exception. Layer 04b (#11) adds custom structural and evidence-grounded semantic
 criteria for the store and project board before the layer 05 wall. Natural-language
 evaluation is a recorded heuristic, not a deterministic outcome oracle.
 
+The unconnected [public HTTP transport library](EXECUTION.md#public-http-transport-library-offline-not-enabled)
+adds a bounded per-job API, not a worker mode. Do not route public jobs through it
+until the native deny boundary and combined real browser/transport proof are
+accepted. Future integration must bind its immutable authorization and abort
+signal to the durable lease and drain/close it during teardown.
+
 Layer07 adds [advanced controlled workflows](ADVANCED_WORKFLOWS.md) on this same
 worker: private context creation/adoption/retirement, acknowledged exclusive
 human control, immutable reruns and deterministic bounded reproduction jobs.
