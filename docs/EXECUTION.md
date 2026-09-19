@@ -384,7 +384,7 @@ installation and debugger remain trusted. Its in-memory readiness flag is
 not sufficient public admission.
 
 `npm run test:native-policy` uses Playwright 1.58.2's **full Chromium channel**,
-locally measured as `145.0.7632.6`, with no interception at all. Eight independent
+locally measured as `145.0.7632.6`, with no interception at all. Nine independent
 tests compare owned TCP/UDP listeners with policy-off positive controls:
 
 - HTTP navigation/redirect and localhost, encoded IPv4 and IPv4-mapped aliases;
@@ -393,7 +393,10 @@ tests compare owned TCP/UDP listeners with policy-off positive controls:
   worker attempt fetches before and after native policy installation.
 - HTTPS navigation/redirect, fetch/image/frame and WSS; only the ephemeral test
   certificate's SPKI is trusted. Production certificate checks are unchanged.
-- STUN UDP, TURN UDP/TCP, and WebTransport QUIC packets. The QUIC positive control
+- STUN UDP and TURN UDP/TCP in both page and srcdoc realms, and WebTransport
+  QUIC packets in page, classic/module/shared/service-worker realms. All four
+  worker kinds expose WebTransport in the measured build; each has a separate
+  owned UDP positive control and a zero-packet native-policy negative. The QUIC positive control
   proves actual packets reach the listener, **not a completed WebTransport
   session**. Its browser is closed before negatives to avoid counting unfinished
   positive-handshake retransmissions as leakage.

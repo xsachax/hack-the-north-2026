@@ -146,7 +146,28 @@ must also be usable. There is no attempt to repair or reconfigure host
 networking if any prerequisite fails.
 
 A mode-0700 scratch directory in the checkout contains the resolver file,
-private browser profiles, and browser temporary files. `/etc/resolv.conf` is
+private browser profiles, and browser temporary files. The private mount
+namespace bind-mounts that same owned directory at the existing `/mnt` as a
+short browser scratch alias, verifying identical device/inode identity. The host's `/mnt`
+is neither modified nor used as backing storage; namespace teardown removes
+the alias. `/run` is deliberately not overlaid because `/etc/resolv.conf`
+can be a symlink into it. This avoids Chromium's Linux process-singleton Unix socket
+exceeding the 108-byte `sockaddr_un.sun_path` limit when `TMPDIR` contains the
+long hosted checkout path. The launcher checks the expected short socket
+path length and logs only its length and process/user IDs. Chromium stderr
+logging is enabled to retain useful startup diagnostics without changing any
+network policy or sandbox flags.
+
+The first hosted namespace attempt at commit `96137d4` died during Chromium
+startup with `SIGTRAP`; its checkout-backed temporary path would produce a
+131-byte process-singleton socket path. Crashpad's missing CPU-frequency
+sysfs messages were not evidence that CPU scaling caused the crash. The
+short namespace-private alias addresses that concrete path-length hazard,
+but the underlying startup diagnosis and the repaired acceptance scenario
+still require a subsequent hosted run; local macOS checks cannot confirm
+Linux startup.
+
+`/etc/resolv.conf` is
 bind-mounted in the private mount namespace to use only `127.0.0.1`; its
 host contents are never edited. The network-namespaced
 `net.ipv4.ip_unprivileged_port_start=0` setting permits the unprivileged test
@@ -154,8 +175,9 @@ process to bind its local UDP DNS listener on port 53. The test independently
 rechecks namespace identities and the resolver contents before binding.
 
 Each namespace setup command has a 10-second timeout. Browser launch is
-bounded at 15 seconds, initial extension-worker discovery at 10 seconds, and
-navigation at 5 seconds. The test has a 120-second timeout and the Playwright
+bounded at 15 seconds, initial extension-worker discovery at 10 seconds,
+navigation at 5 seconds, and each trusted browser cache-control click at
+3 seconds. The test has a 120-second timeout and the Playwright
 run a 150-second global timeout; the inner runner and outer launcher add
 180- and 210-second hard-stop bounds. The PID namespace and
 `unshare --kill-child=SIGKILL` contain surviving descendants when the namespace
@@ -197,23 +219,51 @@ no CDP interception, request routing, `route.abort`, or simulated responses.
 
 The local UDP DNS responder returns TTL-zero A records for exactly
 `owned-rebind.test`, first pointing to `10.77.0.1`, then to `169.254.77.1`.
-It returns no AAAA data for that name and NXDOMAIN for other names. In each
-phase, a positive-control browser must generate an observed DNS A response
-and reach the corresponding sentinel using the **same hostname and port**.
-That browser is fully closed before a fresh policy-enabled browser exercises
-the blocked lane. A fresh profile and browser process for the next phase
-also eliminate the preceding browser's DNS cache and connection pools.
+It returns no AAAA data for that name and NXDOMAIN for other names. Two
+separate Chromium processes are launched once: one positive-control browser
+with the proxy cleared, and one browser retaining its native policy. **Both
+stay alive, with the same profiles, contexts, and target pages, across the DNS
+answer flip.** No browser restart is used to clear resolver state.
 
-This proves **answer changes across fresh browser processes**, with reachable
-owned destinations and denial in each fresh policy lane. It does **not**
-prove same-process DNS rebinding, active-document origin changes, DNS cache
-expiry behavior, or connection-pool invalidation within a running browser.
-The blocked proxy can reject before resolving the destination, so blocked
-lanes are deliberately not required to query DNS or consume its current
-answer. Do not describe them as observing a rebinding response under policy.
+In each phase the fixture explicitly destroys and awaits closure of its
+accepted TCP sockets; HTTP responses also carry `Connection: close` and
+`Cache-Control: no-store`. The trusted harness visits
+`chrome://net-internals/#sockets` and clicks `#sockets-view-flush-button`,
+then visits `chrome://net-internals/#dns` and clicks `#dns-view-clear-cache`
+in each existing browser. These actual DOM controls were inspected and
+successfully clicked locally in the pinned full Chromium build
+145.0.7632.6. Missing controls, failed clicks, or navigation failures fail the
+acceptance test; there is no silent fallback, skipped assertion, resolver
+mapping, or new security-relaxing browser flag.
+
+After each cache clear the positive-control page navigates to the **exact
+same URL**, `http://owned-rebind.test:<port>/same-process-rebind`. Each
+navigation must produce a new observed A response containing the current
+owned IP, an increased connection count at that IP's sentinel, HTTP 200, and
+the correct address-specific body. Thus a successful run proves real
+same-process resolution to both owned listeners on new TCP connections,
+not merely successful cache-button clicks or different fresh profiles.
+After the control finishes, its fixture sockets are closed again. The
+still-policy-enabled browser attempts that identical URL twice in each
+phase, as well as the literal address controls, and must leave all destination
+connection and request counters unchanged.
+
+This covers **same-process, harness-forced DNS answer changes on
+navigation**, with an independently retained native-policy process denying
+that hostname before and after the answer switch. The blocked proxy can
+reject before resolving the destination, so blocked lanes are deliberately
+not required to query DNS or consume its current answer. Do not describe
+them as observing a rebinding response under policy. The test does not prove
+unassisted TTL expiry, malicious-page access to privileged cache controls,
+same-document fetch rebinding, retained HTTP/2 connections, or a transition
+from an initially permitted public address to a denied private address.
+Both DNS answers are deliberately owned and private; no public or provider
+destination is probed. Local macOS inspection validates the internal-page
+control mechanism only, not Linux DNS or namespace acceptance; the modified
+scenario still requires an exact-head hosted Linux pass.
 
 This focused lane covers HTTP navigation, repeated proxy failure, those four
-owned addresses, and process-boundary DNS answer changes only. It does not
+owned addresses, and forced same-process DNS answer changes only. It does not
 establish HTTPS/TLS or QUIC coverage, WebRTC/STUN/TURN transport behavior,
 workers/subresource behavior, IPv6 link-local scope-ID handling, every address
 representation, UDP/TCP DNS fallback, provider execution, or deployment

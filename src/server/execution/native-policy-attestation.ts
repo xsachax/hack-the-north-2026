@@ -1,4 +1,4 @@
-import type { BrowserContext } from "playwright-core";
+import type { BrowserContext, Page } from "playwright-core";
 import { z } from "zod";
 
 const webRtcPreferences = z.strictObject({
@@ -19,9 +19,10 @@ export function assertNativeWebRtcPreferences(value: unknown): void {
 }
 
 /** Offline candidate only: call before any untrusted document or live-view grant. */
-export async function verifyNativeWebRtcPreferences(context: BrowserContext): Promise<void> {
-  const page = await context.newPage();
+export async function verifyNativeWebRtcPreferences(context: Pick<BrowserContext, "newPage">): Promise<void> {
+  let page: Page | undefined;
   try {
+    page = await context.newPage();
     await page.goto("chrome://prefs-internals/", { waitUntil: "domcontentloaded", timeout: 5000 });
     const selected: unknown = await page.evaluate(() => {
       const property = (value: unknown, key: string): unknown =>
@@ -29,10 +30,12 @@ export async function verifyNativeWebRtcPreferences(context: BrowserContext): Pr
           ? Reflect.get(value, key) : undefined;
       const root: unknown = JSON.parse(document.body.textContent ?? "");
       const webrtc = property(root, "webrtc");
-      // Never return the complete profile: it may contain credentials or history.
+      const global = property(property(webrtc, "ip_handling_policy"), "value");
+      const overrides = property(property(webrtc, "ip_handling_url"), "value");
+      // Return only validated constants, never profile data or override URLs.
       return {
-        global: property(property(webrtc, "ip_handling_policy"), "value"),
-        overrides: property(property(webrtc, "ip_handling_url"), "value"),
+        global: global === "disable_non_proxied_udp" ? global : null,
+        overrides: Array.isArray(overrides) && overrides.length === 0 ? [] : null,
       };
     });
     assertNativeWebRtcPreferences(selected);
@@ -40,6 +43,7 @@ export async function verifyNativeWebRtcPreferences(context: BrowserContext): Pr
     if (error instanceof NativePolicyAttestationError) throw error;
     throw new NativePolicyAttestationError("native_webrtc_preferences_unavailable");
   } finally {
-    await page.close();
+    try { await page?.close(); }
+    catch { throw new NativePolicyAttestationError("native_webrtc_preferences_unavailable"); }
   }
 }

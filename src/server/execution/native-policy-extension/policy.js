@@ -11,6 +11,8 @@ export const proxyValue = {
 function equal(actual, expected) {
   if (actual === expected) return true;
   if (!actual || !expected || typeof actual !== "object" || typeof expected !== "object") return false;
+  if (Array.isArray(actual) !== Array.isArray(expected)) return false;
+  if (Array.isArray(actual) && actual.length !== expected.length) return false;
   const keys = Object.keys(expected);
   return Object.keys(actual).length === keys.length
     && keys.every((key) => Object.hasOwn(actual, key) && equal(actual[key], expected[key]));

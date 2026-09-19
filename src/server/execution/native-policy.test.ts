@@ -1,11 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { readFile } from "node:fs/promises";
-import { controlled, installPolicy, proxyValue, readPolicy } from "./native-policy-extension/policy.js";
-import { assertNativeWebRtcPreferences } from "./native-policy-attestation";
+import { runInNewContext } from "node:vm";
+import { controlled, installPolicy, proxyValue, readPolicy, settings } from "./native-policy-extension/policy.js";
+import { assertNativeWebRtcPreferences, verifyNativeWebRtcPreferences } from "./native-policy-attestation";
 
 function setting(value: unknown, levelOfControl = "controllable_by_this_extension") {
+  const changed = new Set<(details: unknown) => void>();
   return {
     value, levelOfControl, writes: 0,
+    onChange: { addListener: (listener: (details: unknown) => void) => changed.add(listener) },
+    emit: (details: unknown) => changed.forEach((listener) => listener(details)),
     async get() { return { value: this.value, levelOfControl: this.levelOfControl }; },
     async set(options: { value: unknown; scope: string }) {
       expect(options.scope).toBe("regular");
@@ -25,6 +29,39 @@ function api() {
 }
 
 describe("native policy candidate (not public execution admission)", () => {
+  it("fails closed with a fixed code when a privileged page cannot be created", async () => {
+    await expect(verifyNativeWebRtcPreferences({
+      newPage: async () => { throw new Error("sensitive upstream detail"); },
+    })).rejects.toThrow("native_webrtc_preferences_unavailable");
+  });
+
+  it("latches policy drift and direct-fallback faults while bounding diagnostics", async () => {
+    const source = (await readFile(new URL("./native-policy-extension/background.js", import.meta.url), "utf8"))
+      .replace(/^import .* from "\.\/policy\.js";$/m, "");
+    for (const fault of ["native_policy_changed", "native_proxy_direct_fallback"]) {
+      const chrome = api();
+      const listeners = new Set<(details: { fatal: boolean }) => void>();
+      const sandbox = {
+        chrome: { ...chrome, proxy: { ...chrome.proxy, onProxyError: {
+          addListener: (listener: (details: { fatal: boolean }) => void) => listeners.add(listener),
+        } } },
+        controlled, installPolicy, readPolicy, settings,
+        flashFloodNativePolicy: undefined as undefined | { ready: boolean; fault: string | null; proxyErrors: number },
+      };
+      runInNewContext(source, sandbox);
+      await vi.waitFor(() => expect(sandbox.flashFloodNativePolicy).toMatchObject({ ready: true, fault: null }));
+      for (let count = 0; count < 1005; count++) listeners.forEach((listener) => listener({ fatal: true }));
+      expect(sandbox.flashFloodNativePolicy).toEqual({ ready: true, fault: null, proxyErrors: 1000 });
+      if (fault === "native_policy_changed") {
+        chrome.proxy.settings.emit({ value: { mode: "direct" }, levelOfControl: "controlled_by_other_extensions" });
+      } else listeners.forEach((listener) => listener({ fatal: false }));
+      expect(sandbox.flashFloodNativePolicy).toEqual({ ready: false, fault, proxyErrors: 1000 });
+      chrome.proxy.settings.emit({ value: proxyValue, levelOfControl: "controlled_by_this_extension" });
+      expect(sandbox.flashFloodNativePolicy?.ready).toBe(false);
+      expect(sandbox.flashFloodNativePolicy?.fault).toBe(fault);
+    }
+  });
+
   it("requires the native global preference and an explicitly empty override list", () => {
     expect(() => assertNativeWebRtcPreferences({ global: "disable_non_proxied_udp", overrides: [] })).not.toThrow();
     for (const input of [
@@ -75,6 +112,7 @@ describe("native policy candidate (not public execution admission)", () => {
     { ...proxyValue, pacScript: { data: "DIRECT" } },
     { mode: "direct" },
     { ...proxyValue, rules: { ...proxyValue.rules, bypassList: ["<local>"] } },
+    { ...proxyValue, rules: { ...proxyValue.rules, bypassList: { 0: "<-loopback>" } } },
     { ...proxyValue, rules: { ...proxyValue.rules, fallbackProxy: { ...proxyValue.rules.fallbackProxy, scheme: "socks4" } } },
     { ...proxyValue, rules: { ...proxyValue.rules, fallbackProxy: undefined } },
   ]) {

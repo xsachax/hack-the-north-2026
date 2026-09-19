@@ -1,4 +1,4 @@
-import { test, expect, chromium, type BrowserContext, type Worker as PlaywrightWorker } from "@playwright/test";
+import { test, expect, chromium, type BrowserContext, type Frame, type Page, type Worker as PlaywrightWorker } from "@playwright/test";
 import { createServer } from "node:http";
 import { createServer as createTcpServer,type AddressInfo,type Socket } from "node:net";
 import { createSocket } from "node:dgram";
@@ -32,6 +32,13 @@ type ExtensionGlobal=typeof globalThis&{
   };
 };
 
+const cleanup = new Set<() => Promise<void>>();
+test.afterEach(async () => {
+  const results = await Promise.allSettled([...cleanup].map((close) => close()));
+  const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason);
+  if (errors.length) throw new AggregateError(errors, "native_probe_cleanup_failed");
+});
+
 async function state(worker: PlaywrightWorker): Promise<PolicyState> {
   return worker.evaluate(() => (globalThis as ExtensionGlobal).flashFloodNativePolicy);
 }
@@ -64,14 +71,19 @@ async function fixture() {
   server.on("upgrade",(request,socket) => { hits.push(request.url??""); socket.destroy(); });
   await new Promise<void>((done) => server.listen(0,"127.0.0.1",done));
   const port=(server.address() as AddressInfo).port;
+  let closing: Promise<void> | undefined;
+  const close = () => closing ??= (async () => {
+    try {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((done, reject) => server.close((error) => error ? reject(error) : done()));
+    } finally { cleanup.delete(close); }
+  })();
+  cleanup.add(close);
   return {
     origin: `http://127.0.0.1:${port}`,port,hits,
     connections: () => connections,
     reset: () => { hits.length=0; connections=0; },
-    close: async () => {
-      for(const socket of sockets) socket.destroy();
-      await new Promise<void>((done,reject) => server.close((error) => error? reject(error):done()));
-    },
+    close,
   };
 }
 
@@ -98,12 +110,16 @@ async function launch(extraArguments: string[] = [], preferences?: object) {
     });
     const worker=context.serviceWorkers()[0]??await context.waitForEvent("serviceworker");
     await expect.poll(() => state(worker)).toMatchObject({ ready: true,fault: null });
-    return {
-      context,worker,
-      close: async () => {
+    let closing: Promise<void> | undefined;
+    const close = () => closing ??= (async () => {
+      try {
         await context!.close();
         await rm(directory,{ recursive: true,force: true });
-      },
+      } finally { cleanup.delete(close); }
+    })();
+    cleanup.add(close);
+    return {
+      context, worker, close,
     };
   } catch(error) {
     await context?.close();
@@ -301,18 +317,22 @@ test("policy remains in the native network stack after extension worker terminat
     await cdp.detach();
   } finally { await browser.close(); await sentinel.close(); }
 });
-test("WebRTC STUN and TURN UDP/TCP have reachable positive controls without policy",async () => {
+test("page and srcdoc WebRTC STUN and TURN UDP/TCP have reachable positive controls", async () => {
   const sentinel=await fixture();
   const udp=createSocket("udp4");
   let datagrams=0;
   udp.on("message",() => { datagrams++; });
   await new Promise<void>((done) => udp.bind(0,"127.0.0.1",done));
   const udpPort=udp.address().port;
-  const browser=await launch();
+  let browser: Awaited<ReturnType<typeof launch>> | undefined;
   try {
+    browser = await launch();
     const page=browser.context.pages()[0];
     await page.goto("about:blank");
-    const probe=async (url: string) => page.evaluate(async (address) => {
+    await page.setContent("<!doctype html><iframe srcdoc='<!doctype html><body>Owned child frame</body>'></iframe>");
+    const frame = page.frames().find((candidate) => candidate !== page.mainFrame());
+    if (!frame) throw new Error("native_probe_frame_missing");
+    const probe = async (url: string, realm: Page | Frame) => realm.evaluate(async (address) => {
       const connection=new RTCPeerConnection({
         iceServers: [{ urls: address,username: "owned-probe",credential: "not-a-secret" }],
       });
@@ -331,17 +351,17 @@ test("WebRTC STUN and TURN UDP/TCP have reachable positive controls without poli
       `turn:127.0.0.1:${udpPort}?transport=udp`,
       `turn:127.0.0.1:${sentinel.port}?transport=tcp`,
     ];
-    for(const url of urls) await probe(url);
+    for (const realm of [page, frame]) for (const url of urls) await probe(url, realm);
     expect(datagrams).toBe(0);
     expect(sentinel.connections()).toBe(0);
     await clearForPositiveControl(browser.worker);
-    for(const url of urls) {
+    for (const realm of [page, frame]) for (const url of urls) {
       const before=url.endsWith("tcp")? sentinel.connections():datagrams;
-      await probe(url);
+      await probe(url, realm);
       expect(url.endsWith("tcp")? sentinel.connections():datagrams,`positive control ${url}`).toBeGreaterThan(before);
     }
   } finally {
-    await browser.close(); await sentinel.close();
+    await browser?.close(); await sentinel.close();
     await new Promise<void>((done) => udp.close(done));
   }
 });

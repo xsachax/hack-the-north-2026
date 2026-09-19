@@ -33,13 +33,26 @@ function inside(args: string[]) {
   command("sysctl", ["-w", "net.ipv4.ip_unprivileged_port_start=0"]);
   command("mount", ["--bind", join(scratch, "resolv.conf"), "/etc/resolv.conf"]);
   assert.equal(readFileSync("/etc/resolv.conf", "utf8"), "nameserver 127.0.0.1\noptions timeout:1 attempts:1\n");
+  // Chromium's process-singleton AF_UNIX socket cannot use the long hosted
+  // checkout path. Alias only our checkout-owned scratch in this private mount
+  // namespace; /mnt's host contents and the actual backing files are unchanged.
+  // Do not overlay /run: /etc/resolv.conf may resolve to a path beneath it.
+  const browserScratch = "/mnt";
+  command("mount", ["--bind", scratch, browserScratch]);
+  const backing = statSync(scratch);
+  const alias = statSync(browserScratch);
+  assert.equal(alias.dev, backing.dev);
+  assert.equal(alias.ino, backing.ino, "Browser scratch must alias the owned directory");
+  const singletonSocketBytes = Buffer.byteLength(join(browserScratch, ".org.chromium.Chromium.XXXXXX/SingletonSocket"));
+  assert(singletonSocketBytes < 108, "Chromium process-singleton socket exceeds Linux sockaddr_un.sun_path");
+  console.log(`Namespace setup: pid=${process.pid}, test uid=${uid}, gid=${gid}, scratch socket path=${singletonSocketBytes} bytes`);
   const environment = {
     ...process.env,
     HOME: home,
-    TMPDIR: scratch,
-    TMP: scratch,
-    TEMP: scratch,
-    NATIVE_POLICY_LINUX_SCRATCH: scratch,
+    TMPDIR: browserScratch,
+    TMP: browserScratch,
+    TEMP: browserScratch,
+    NATIVE_POLICY_LINUX_SCRATCH: browserScratch,
     NATIVE_POLICY_LINUX_HOST_NET: hostNet,
     NATIVE_POLICY_LINUX_HOST_MOUNT: hostMount,
   };
