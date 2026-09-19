@@ -22,17 +22,30 @@ function input(): BrainInput {
     history: [],
   };
 }
-function fixture(data: unknown = decision) {
+function fixture(data: unknown = decision, readOnly = false) {
   const extract = vi.fn<
     (prompt: string, schema: typeof decisionSchema, options: StagehandClientExtractOptions) => Promise<{ data: unknown }>
   >(async () => ({ data }));
   // SDK classes contain private transport fields; this boundary only needs extract and page identity.
   const stagehand = { extract } as unknown as Stagehand;
   const page = { id: "bound-fixture-page" } as unknown as Page;
-  return { extract, page, brain: new GatewayBrain(stagehand, page) };
+  return { extract, page, brain: new GatewayBrain(stagehand, page, { readOnly }) };
 }
 
 describe("Stagehand gateway brain", () => {
+  it("discloses finite read-only actions without altering the observed control evidence or model accounting", async () => {
+    const f = fixture({ ...decision, action: "give_up", candidateId: null }, true);
+    const signal = new AbortController().signal;
+    const budget = new ModelBudget(1, signal);
+    await f.brain.decide(input(), signal, budget);
+    const prompt = f.extract.mock.calls[0][0];
+    expect(prompt).toContain("Read-only execution:");
+    expect(prompt).toContain("Do not click buttons, submit forms, type, select or press keys");
+    expect(prompt).not.toContain("click uses a link/button");
+    expect(JSON.parse(prompt.split("\n").at(-1)!).observation.candidates).toEqual(input().observation.candidates);
+    expect(budget.snapshot()).toEqual({ decision: 1, evaluation: 0, retry: 0, total: 1 });
+  });
+
   it("quiesces the actual inflight RPC without closing the gateway or refunding attempted calls", async () => {
     const f = fixture();
     let finish!: (value: { data: unknown }) => void;

@@ -20,6 +20,10 @@ export const fixtureCapabilities = Object.freeze({
   humanTakeover: "unsupported", networkThrottling: "unsupported",
   arbitraryTargets: "disabled",
 } as const);
+export const readOnlyCapabilities = Object.freeze({
+  ...fixtureCapabilities, click: "links_only", type: false, select: false, keyboard: false,
+  arbitraryTargets: "requires_native_policy",
+} as const);
 
 export type CriterionVerifier = (page: Page, observation: Observation) => Promise<readonly CriterionCheck[]>;
 export type DriverOptions = {
@@ -31,6 +35,8 @@ export type DriverOptions = {
   close: () => Promise<CleanupOutcome>;
   networkErrors: readonly string[];
   keyboardOnly?: boolean;
+  readOnly?: boolean;
+  networkFailureCode?: "fixture_network_failed" | "public_transport_failed";
   assertActive?: () => void;
 };
 export type ScopedDriverOptions = DriverOptions & {
@@ -40,7 +46,7 @@ export type ScopedDriverOptions = DriverOptions & {
 };
 
 export class ScopedBrowserDriver implements BrowserDriver {
-  readonly capabilities = fixtureCapabilities;
+  get capabilities() { return this.options.readOnly ? readOnlyCapabilities : fixtureCapabilities; }
   private readonly page: Page;
   private actionId = "setup";
   private actionNumber = 0;
@@ -107,7 +113,7 @@ export class ScopedBrowserDriver implements BrowserDriver {
     this.options.assertActive?.();
     if (this.closed) throw new ExecutionError("infra", "driver_closed");
     if (this.unsupported) throw new ExecutionError("unsupported", this.unsupported);
-    if (this.options.networkErrors.length) throw new ExecutionError("infra", "fixture_network_failed");
+    if (this.options.networkErrors.length) throw new ExecutionError("infra", this.options.networkFailureCode ?? "fixture_network_failed");
     if (this.errors.length) throw new ExecutionError("limit", "telemetry_limit");
     if (!allowsNavigation(this.options.scope, this.page.url())) throw new ExecutionError("block", "page_out_of_scope");
     if (this.page.frames().length !== 1) throw new ExecutionError("unsupported", "subframes_unsupported");
@@ -250,10 +256,16 @@ export class ScopedBrowserDriver implements BrowserDriver {
   async act(action: BrowserAction, signal: AbortSignal): Promise<void> {
     this.guard(signal);
     if (action.actor !== "agent") throw new ExecutionError("unsupported", "human_actor_not_enabled");
+    if (this.options.readOnly && !["click", "navigate", "back", "scroll", "wait"].includes(action.action)) {
+      throw new ExecutionError("unsupported", "read_only_action_required");
+    }
     if (this.lastObservationUrl !== this.page.url()) throw new ExecutionError("block", "stale_observation");
     this.actionId = `action-${++this.actionNumber}`;
     const candidate = action.candidateId ? this.candidates.get(action.candidateId) : undefined;
     const locator = candidate ? this.page.locator(`[data-ff-candidate="${candidate.id}"]`) : undefined;
+    if (this.options.readOnly && action.action === "click" && candidate?.kind !== "link") {
+      throw new ExecutionError("unsupported", "read_only_link_required");
+    }
     if (["click", "type", "select"].includes(action.action)) {
       if (!candidate || !locator || !await locator.isVisible() || !await locator.isEnabled()) throw new ExecutionError("block", "ungrounded_candidate");
       const box = await locator.boundingBox();
@@ -264,6 +276,11 @@ export class ScopedBrowserDriver implements BrowserDriver {
     switch (action.action) {
       case "click":
         if (this.options.keyboardOnly) throw new ExecutionError("unsupported", "pointer_disabled");
+        if (this.options.readOnly && !await locator!.evaluate((element) =>
+          element instanceof HTMLAnchorElement && !element.hasAttribute("download")
+          && ["", "_self"].includes(element.getAttribute("target") ?? ""))) {
+          throw new ExecutionError("unsupported", "read_only_link_required");
+        }
         if (candidate?.kind === "link") {
           const href = await locator!.getAttribute("href");
           if (!href || !allowsNavigation(this.options.scope, new URL(href, this.page.url()).href)) throw new ExecutionError("block", "link_out_of_scope");

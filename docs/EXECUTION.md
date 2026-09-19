@@ -364,6 +364,71 @@ unsafe opt-out. Until these inputs and real positive/negative proofs exist,
 
 ### Native browser policy candidate (offline Phase A)
 
+#### Composed extension and trusted bootstrap
+
+The offline integration adds `composed-extension.ts`, `native-browser.ts`,
+`native-policy-session.ts`, `native-proxy-attestation.ts` and
+`native-resources.ts`. These are not public API admission or hosted acceptance.
+The public integration CLI currently accepts **only** `--offline-preflight`
+from a clean verified deployment package; paid modes fail before allocation.
+
+The composer accepts only the audited Stagehand 4.1.0 archive with SHA-256
+`8efc7d171a625cca95c02d02d369b59435fae776cae6c7dd2f6fe72eb19785c0`.
+It bounds archive/expanded bytes, accepts the exact eight vendor entries and
+manifest, and retains every vendor script byte. The root `service-worker.js`
+gets one static side-effect import; its registered URL and existing Gateway
+initiator identity do not change. Only `proxy` and `privacy` permissions are
+added. The deterministic ZIP includes the vendor MIT license, the native module,
+and input-digest provenance. There is no new page messaging, content script,
+web-accessible resource, generic privileged fetch bridge, or committed vendor
+archive. The vendor's existing isolated-world locator script is unchanged.
+
+Native activation is a debugger-only operation after Stagehand's trusted
+initialization. Only fresh blank/trusted extension contexts are admitted.
+Returning contexts, restored tabs and persistent service workers cannot enter
+this bootstrap. Before untrusted navigation or live-view publication, the
+adapter verifies actual installed extension file digests, the exact measured
+Chromium version, effective proxy/privacy values and control ownership, and
+the actual profile's empty WebRTC per-origin override list. Unknown versions,
+shapes, conflicts, restart/lost-worker state and drift fail closed. No code
+clears or restores the policy while a remote browser may remain alive.
+
+Proxy refusal is not inferred merely from `ERR_PROXY_CONNECTION_FAILED`.
+A short **caller-owned** CDP NetLog trace must also contain complete paired
+`TCP_CONNECT` and `TCP_CONNECT_ATTEMPT` records for exactly
+`127.0.0.1:65534`, Chromium `net_error=-102`, and measured Darwin/Linux
+`ECONNREFUSED` values. Success, reset, timeout, other addresses, missing records,
+unknown shape and truncated/lost trace data reject admission. An already
+running provider trace is not stopped: conflicting tracing fails startup.
+Raw trace bytes are bounded to 1 MiB, processed only in memory and discarded;
+only a constant verdict may be retained. This proves an observed refusal,
+not that a trusted host can never open that port later. Host/profile stability
+for the session remains an explicit trust assumption. No direct private-port
+scan or provider-internal destination probe is performed.
+
+The native resource lifecycle requires a synchronous durable journal before
+upload/allocation. It records archive identity, known extension/session IDs,
+unknown upload outcomes and late callbacks. Upload/session creation is never
+automatically retried. Cleanup drains Gateway work and reads metrics, requests
+remote release while attachments and policy remain installed, and checks the
+exact correlated session. An extension may be deleted only after matching
+`COMPLETED` readback, or trusted proof no session allocation was dispatched.
+Deletion itself requires exact-ID not-found confirmation. Unknown or other
+remote states quarantine the resource; they are not reported as clean closure.
+
+This composition does not remove any remaining remote-policy, broker,
+end-to-end public-objective or accounting proof requirement below.
+
+The independent read-only driver option permits scoped link clicks, navigation,
+back, scrolling and bounded waits. It rejects button/input/select/key actions,
+downloads and new-tab links before dispatch, including a previously observed link
+replaced with a button. The normal controlled driver is unchanged. Actual
+read-only driver regressions use an explicitly synthetic owned document; they
+are not public-site execution evidence. Observations retain real control state:
+controls are not falsely marked disabled or removed to force a model verdict.
+The Gateway receives the finite action capability in its instructions, while the
+driver remains the action guard and criterion/citation rules stay unchanged.
+
 An external hosted proxy is **not assumed to be the only possible solution**.
 `src/server/execution/native-policy-extension/` is a maintained, isolated MV3
 probe, not a runtime capability or an opt-out from #8. Its native Chrome proxy
