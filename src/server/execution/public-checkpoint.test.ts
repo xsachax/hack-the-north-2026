@@ -32,8 +32,8 @@ function options(): PublicExecutionOptions {
   const artifact = { key: "a".repeat(64), sha256: "a".repeat(64), bytes: 0 };
   return {
     mode: "public-readonly", executionPolicy: PUBLIC_EXECUTION_POLICY, assetPolicy: PUBLIC_ASSET_POLICY,
-    runId: "e7680f23-76b4-491e-afb3-4b33e8befce2", personaId: "careful-first-timer",
-    correlationToken: "d36a6bd6-a364-4440-b7e3-0c9e5c34f8b9",
+    runId: "11111111-1111-4111-8111-111111111111", personaId: "careful-first-timer",
+    correlationToken: "22222222-2222-4222-8222-222222222222",
     targetUrl: "https://example.com/", scope: {
       targetUrl: "https://example.com/", pathPrefixes: ["/"], allowedSubdomains: [],
     },
@@ -53,8 +53,8 @@ describe("actual offline checkpoint hard stop, no readiness mock", () => {
     vi.stubEnv("ENABLE_PUBLIC_RUNS", "true");
     vi.stubEnv("PUBLIC_EXECUTION_IMPLEMENTATION_READY", "true");
     const config = { ...configSchema.parse({
-      BROWSERBASE_API_KEY: "owned-offline-key",
-      BROWSERBASE_PROJECT_ID: "f504cf13-49b7-4193-86ac-61c9bde4bada",
+      BROWSERBASE_API_KEY: "test",
+      BROWSERBASE_PROJECT_ID: "33333333-3333-4333-8333-333333333333",
     }), ENABLE_PUBLIC_RUNS: enabled };
     const input = options();
     expect(PUBLIC_EXECUTION_IMPLEMENTATION_READY).toBe(false);

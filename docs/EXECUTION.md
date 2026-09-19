@@ -30,7 +30,8 @@ with synthetic Gateway responses does not establish production WSS startup,
 failure cleanup or a genuine external objective.
 
 Local composed probes have also exhibited intermittent, fail-closed
-`native_proxy_endpoint_unconfirmed` startup failures; their cause is unresolved.
+`native_proxy_endpoint_unconfirmed` and native-worker CDP readiness timeouts;
+their cause is unresolved.
 Passing offline reruns are not hosted startup-reliability proof. The checkpoint
 does not relax refusal evidence, widen its deadlines or add automatic retries.
 
