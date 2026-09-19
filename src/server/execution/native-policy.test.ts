@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
 import { controlled, installPolicy, proxyValue, readPolicy, settings } from "./native-policy-extension/policy.js";
 import { assertNativeWebRtcPreferences, verifyNativeWebRtcPreferences } from "./native-policy-attestation";
+import { assertWorkerChannelProof } from "../../../tests/native-policy/channel-proof";
 
 function setting(value: unknown, levelOfControl = "controllable_by_this_extension") {
   const changed = new Set<(details: unknown) => void>();
@@ -29,6 +30,18 @@ function api() {
 }
 
 describe("native policy candidate (not public execution admission)", () => {
+  it.each(["classic", "module", "shared", "service"] as const)("requires actual positive packets and API availability in the %s realm", (realm) => {
+    expect(() => assertWorkerChannelProof(realm, "available", 3, false)).not.toThrow();
+    expect(() => assertWorkerChannelProof(realm, "available", 0, true)).not.toThrow();
+    for (const protectedLane of [false, true]) {
+      expect(() => assertWorkerChannelProof(realm, "unavailable", 0, protectedLane)).toThrow(`native_worker_channel_unsupported:${realm}`);
+      expect(() => assertWorkerChannelProof(realm, "unavailable", 3, protectedLane)).toThrow(`native_worker_channel_unsupported:${realm}`);
+      expect(() => assertWorkerChannelProof(realm, "available", NaN, protectedLane)).toThrow("native_worker_channel_invalid_evidence");
+    }
+    expect(() => assertWorkerChannelProof(realm, "available", 0, false)).toThrow("native_worker_channel_positive_control_missing");
+    expect(() => assertWorkerChannelProof(realm, "available", 3, true)).toThrow("native_worker_channel_destination_reached");
+  });
+
   it("fails closed with a fixed code when a privileged page cannot be created", async () => {
     await expect(verifyNativeWebRtcPreferences({
       newPage: async () => { throw new Error("sensitive upstream detail"); },

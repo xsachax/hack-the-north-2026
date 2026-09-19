@@ -396,7 +396,9 @@ tests compare owned TCP/UDP listeners with policy-off positive controls:
 - STUN UDP and TURN UDP/TCP in both page and srcdoc realms, and WebTransport
   QUIC packets in page, classic/module/shared/service-worker realms. All four
   worker kinds expose WebTransport in the measured build; each has a separate
-  owned UDP positive control and a zero-packet native-policy negative. The QUIC positive control
+  owned UDP positive control and a zero-packet native-policy negative. Missing
+  API availability or missing positive packets in **any** claimed realm fails
+  acceptance as unsupported, never as successful native enforcement. The QUIC positive control
   proves actual packets reach the listener, **not a completed WebTransport
   session**. Its browser is closed before negatives to avoid counting unfinished
   positive-handshake retransmissions as leakage.

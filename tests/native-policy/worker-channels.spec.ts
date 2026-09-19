@@ -6,6 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { proxyValue } from "../../src/server/execution/native-policy-extension/policy.js";
+import { assertWorkerChannelProof } from "./channel-proof";
 
 const workerProbe = `
 async function probe(address, reply) {
@@ -117,13 +118,11 @@ test("native policy blocks WebTransport packets from every exposed worker kind",
                 channel.port1.close();
               }
             }, { kind, workerProbe, address });
+            assertWorkerChannelProof(kind, availability, packets, protectedLane);
             if (protectedLane) {
               expect(availability, kind).toBe(baseline.get(kind));
-              expect(packets, `${kind} native-blocked UDP`).toBe(0);
             } else {
               baseline.set(kind, availability);
-              if (availability === "available") expect(packets, `${kind} positive UDP`).toBeGreaterThan(0);
-              else expect(availability).toBe("unavailable");
             }
           } finally { await new Promise<void>((done) => udp.close(done)); }
         }
@@ -132,8 +131,7 @@ test("native policy blocks WebTransport packets from every exposed worker kind",
         await rm(directory, { recursive: true, force: true });
       }
     }
-    expect(baseline.get("classic")).toBe("available");
-    expect(baseline.get("module")).toBe("available");
+    for (const kind of ["classic", "module", "shared", "service"]) expect(baseline.get(kind), kind).toBe("available");
     console.log("Native worker WebTransport exposure:", Object.fromEntries(baseline));
   } finally {
     for (const socket of sockets) socket.destroy();

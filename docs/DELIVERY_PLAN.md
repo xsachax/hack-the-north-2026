@@ -175,7 +175,7 @@ public objective remain required; this follow-up references, not closes, #8.
 PR #22's implementation revision `be1c18f` passed the full hosted check and
 container jobs, nine native-channel browser tests, and the isolated Linux
 private/link-local/IPv6/same-process DNS-change test. Local validation includes
-2,061 unit/API tests, the preserved 103-test E2E baseline, production build and
+2,065 unit/API tests, the preserved 103-test E2E baseline, production build and
 HTTP/SSE smoke. The first namespace bootstrap (`96137d4`) failed before probes;
 the accepted short private scratch path resolved it. Known-private-value scans
 cover source and client build output. Security review found no reachable
