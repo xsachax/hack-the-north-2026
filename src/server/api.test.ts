@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ZodError } from "zod";
 import type { CreateRun, Persona, PersonaProfile, Run } from "../lib/contracts";
 import { createApi, type ApiConfiguration } from "./api";
 import { Repository } from "./repository";
@@ -764,6 +766,30 @@ describe("persistent rates, safe errors and route surface", () => {
     expect(log).toHaveBeenCalledExactlyOnceWith("flash_flood_api_internal_error");
     expect(JSON.stringify(log.mock.calls)).not.toContain(privateDetail);
     expect(validateScope).not.toHaveBeenCalled();
+  });
+
+  it("treats persisted schema corruption as a safe internal error, not invalid client input", async () => {
+    const owner = await bootstrap();
+    const persona = repository.createPersona(owner.ownerId, profile);
+    const privateDetail = "private-persisted-profile-detail";
+    const database = new DatabaseSync(resolve(directory, "flash-flood.sqlite"));
+    try {
+      database.prepare("UPDATE personas SET profile=? WHERE id=?").run(
+        JSON.stringify({ ...profile, name: 42, [privateDetail]: owner.csrfToken }), persona.id,
+      );
+    } finally {
+      database.close();
+    }
+    expect(() => repository.listPersonas(owner.ownerId)).toThrow(ZodError);
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expectError(await handler(request("personas", { session: owner })), 503, "unavailable");
+    expect(log).toHaveBeenCalledExactlyOnceWith("flash_flood_api_internal_error");
+    expect(JSON.stringify(log.mock.calls)).not.toContain(privateDetail);
+    expect(JSON.stringify(log.mock.calls)).not.toContain(owner.csrfToken);
+    await expectError(await handler(request("personas", {
+      method: "POST", session: owner, body: { ...profile, name: 42 },
+    })), 400, "invalid_request");
+    expect(log).toHaveBeenCalledOnce();
   });
 
   it("uses only the four supported methods in the simple Node catchall adapter", () => {
