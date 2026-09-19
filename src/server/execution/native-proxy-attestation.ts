@@ -5,7 +5,9 @@ const endpoint = "127.0.0.1:65534";
 const eventSchema = z.object({
   name: z.enum(["TCP_CONNECT", "TCP_CONNECT_ATTEMPT"]),
   cat: z.literal("netlog"), ph: z.enum(["b", "e"]),
-  pid: z.int().nonnegative(), id2: z.strictObject({ local: z.string().regex(/^0x[0-9a-f]+$/) }),
+  pid: z.int().nonnegative(), tid: z.int().nonnegative(),
+  ts: z.number().finite().min(0).max(Number.MAX_SAFE_INTEGER),
+  id2: z.strictObject({ local: z.string().regex(/^0x[0-9a-f]+$/) }),
   args: z.object({ params: z.record(z.string(), z.unknown()).optional(), source_type: z.string().optional() }),
 });
 
@@ -13,7 +15,10 @@ const eventSchema = z.object({
 export function assertNativeProxyRefusalTrace(value: unknown): "tcp_connection_refused" {
   const root = z.object({ traceEvents: z.array(z.unknown()).max(10000) }).safeParse(value);
   if (!root.success) throw new Error("native_proxy_trace_rejected");
-  const connections = new Map<string, { connect: number; attempt: number; connectEnd: number; attemptEnd: number }>();
+  const connections = new Map<string, { stage: number; thread: number; timestamp: number }>();
+  const seen = new Set<string>();
+  const sequence = ["TCP_CONNECT:b", "TCP_CONNECT_ATTEMPT:b", "TCP_CONNECT_ATTEMPT:e", "TCP_CONNECT:e"];
+  let cycles = 0;
   for (const item of root.data.traceEvents) {
     if (!item || typeof item !== "object") throw new Error("native_proxy_trace_rejected");
     const name: unknown = Reflect.get(item, "name");
@@ -22,32 +27,37 @@ export function assertNativeProxyRefusalTrace(value: unknown): "tcp_connection_r
     if (!parsed.success) throw new Error("native_proxy_trace_rejected");
     const event = parsed.data;
     const key = `${event.pid}/${event.id2.local}`;
-    const counts = connections.get(key) ?? { connect: 0, attempt: 0, connectEnd: 0, attemptEnd: 0 };
-    connections.set(key, counts);
-    if (connections.size > 8) throw new Error("native_proxy_trace_rejected");
+    const connection = connections.get(key) ?? { stage: 0, thread: event.tid, timestamp: event.ts };
+    connections.set(key, connection);
+    const step = `${event.name}:${event.ph}`;
+    const identity = `${key}/${event.tid}/${event.ts}/${step}`;
+    if (connections.size > 8 || seen.size >= 32 || seen.has(identity)
+      || connection.thread !== event.tid || event.ts < connection.timestamp
+      || sequence[connection.stage] !== step) throw new Error("native_proxy_trace_rejected");
+    seen.add(identity);
+    connection.timestamp = event.ts;
+    connection.stage = (connection.stage + 1) % sequence.length;
+    if (connection.stage === 0 && ++cycles > 8) throw new Error("native_proxy_trace_rejected");
+    const params = event.args.params;
+    if (event.args.source_type !== undefined && event.args.source_type !== "SOCKET") throw new Error("native_proxy_trace_rejected");
     if (event.ph === "e") {
-      if (event.name === "TCP_CONNECT") counts.connectEnd++;
-      else counts.attemptEnd++;
+      if (params && Object.keys(params).length) throw new Error("native_proxy_trace_rejected");
       continue;
     }
-    const params = event.args.params;
     if (event.args.source_type !== "SOCKET" || !params) throw new Error("native_proxy_trace_rejected");
     if (event.name === "TCP_CONNECT") {
-      counts.connect++;
       if (params.net_error !== -102 || !Array.isArray(params.address_list)
         || params.address_list.length !== 1 || params.address_list[0] !== endpoint) {
         throw new Error("native_proxy_trace_rejected");
       }
     } else {
-      counts.attempt++;
       // ECONNREFUSED on the measured Darwin/Linux hosts; no reset/timeout success.
       if (params.address !== endpoint || (params.os_error !== 61 && params.os_error !== 111)) {
         throw new Error("native_proxy_trace_rejected");
       }
     }
   }
-  if (!connections.size || [...connections.values()].some((counts) =>
-    Object.values(counts).some((count) => count !== 1))) throw new Error("native_proxy_trace_rejected");
+  if (!cycles || [...connections.values()].some((connection) => connection.stage !== 0)) throw new Error("native_proxy_trace_rejected");
   return "tcp_connection_refused";
 }
 

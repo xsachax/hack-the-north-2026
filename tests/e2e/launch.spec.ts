@@ -1,17 +1,18 @@
 import { mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { test, expect, type Page, type Route } from "@playwright/test";
-import { createApi } from "../../src/server/api";
+import { createApi, type ApiConfiguration } from "../../src/server/api";
 import { Repository } from "../../src/server/repository";
+import { PUBLIC_ASSET_POLICY, PUBLIC_EXECUTION_POLICY } from "../../src/lib/public-execution";
 
 const accessCode = "offline-only-access-code-not-a-production-secret";
 const origin = "http://127.0.0.1:4317";
 
-async function offlineApi(page: Page, directory: string) {
+async function offlineApi(page: Page, directory: string, configuration: Partial<ApiConfiguration> = {}) {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const repository = new Repository(directory);
   const handle = createApi({
-    repository, configuration: { origin, production: false, accessCode, allowDemoRuns: true },
+    repository, configuration: { origin, production: false, accessCode, allowDemoRuns: true, ...configuration },
     validateScope: async (scope) => scope,
   });
   let loseReply = false;
@@ -87,6 +88,61 @@ test("bootstrap rejects bad codes and preserves no access code in storage; publi
     await page.reload();
     await expect(page.getByLabel("Target mode")).toBeVisible();
     expect(fixture.owner).toBe(owner);
+  } finally { await fixture.close(); }
+});
+
+test("public opt-in stays unavailable without implementation readiness and explains separate policy limits", async ({ page }, info) => {
+  const fixture = await offlineApi(page, info.outputPath("api"), { allowPublicRuns: true });
+  try {
+    await unlock(page);
+    await page.getByLabel("Opt in to public read-only execution").check();
+    await expect(page.getByRole("button", { name: "Launch public read-only run" })).toBeDisabled();
+    await expect(page.getByRole("status").filter({ hasText: "disabled in this offline checkpoint" })).toBeVisible();
+    await expect(page.getByText("Assets never create an exception", { exact: false })).toBeVisible();
+    await expect(page.getByText("Fresh profiles only; no typing, forms, saved state or human takeover.", { exact: false })).toBeVisible();
+    await expect(page.getByText("not transparent browser-request replay", { exact: false })).not.toBeVisible();
+    await page.getByText("Public policy and unsupported features", { exact: true }).click();
+    await expect(page.getByText("not transparent browser-request replay", { exact: false })).toBeVisible();
+    await expect(page.getByText("Returning profiles and saving browser state are unsupported", { exact: false })).toBeVisible();
+    await expect(page.getByLabel("Allowed path prefixes (one per line)")).toBeVisible();
+    expect(fixture.repository.listRuns(fixture.owner, { after: 0, limit: 100 }).items).toEqual([]);
+  } finally { await fixture.close(); }
+});
+
+test("checkpoint blocks public opt-in even with injected readiness and operator enablement", async ({ page }, info) => {
+  const fixture = await offlineApi(page, info.outputPath("api"), {
+    allowPublicRuns: true, publicExecutionReady: true, publicSessionTimeoutSeconds: 80,
+  });
+  try {
+    await unlock(page);
+    await page.getByLabel("Opt in to public read-only execution").check();
+    await expect(page.getByRole("button", { name: "Launch public read-only run" })).toBeDisabled();
+    await expect(page.getByRole("status").filter({ hasText: "Operator flags and injected readiness cannot enable it" })).toBeVisible();
+    expect(fixture.repository.listRuns(fixture.owner, { after: 0, limit: 100 }).items).toEqual([]);
+  } finally { await fixture.close(); }
+});
+
+test("stored public snapshots retain wall/report surfaces without enabling admission or unsupported workflows", async ({ page }, info) => {
+  const fixture = await offlineApi(page, info.outputPath("api"), { allowPublicRuns: true, publicExecutionReady: true });
+  try {
+    await unlock(page);
+    const run = fixture.repository.createRun(fixture.owner, randomUUID(), {
+      authorizationAcknowledged: true, executionPolicy: PUBLIC_EXECUTION_POLICY, assetPolicy: PUBLIC_ASSET_POLICY,
+      scope: { targetUrl: "https://example.com/help", allowedSubdomains: [], pathPrefixes: ["/help"] },
+      assignments: [{ personaId: "careful-first-timer", goal: "Read the public help page", criteria: ["The help page explains delivery costs"] }],
+    }).run;
+    await page.goto(`/runs/${run.id}`);
+    await expect(page).toHaveURL(/\/runs\/[a-f0-9-]+$/);
+    expect(run).toMatchObject({ executionMode: "public-readonly", status: "queued", executionPolicy: PUBLIC_EXECUTION_POLICY, assetPolicy: PUBLIC_ASSET_POLICY });
+    expect(fixture.repository.attemptSummaries(fixture.owner, run.id)[0]).toMatchObject({ launchState: "not_launched", reservedSeconds: 0 });
+    await expect(page.getByText("Public read-only run ·", { exact: false })).toBeVisible();
+    await expect(page.getByText("Human takeover is unsupported", { exact: false })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Request human control" })).toHaveCount(0);
+    await page.getByRole("link", { name: "Reports", exact: true }).click();
+    await expect(page.getByLabel("Rerun unsupported")).toContainText("Public reruns are unsupported");
+    await expect(page.getByLabel("Rerun unsupported")).toContainText("Public run comparisons are unsupported");
+    await expect(page.getByLabel("Reproduction unsupported")).toContainText("Public reduction and reproduction are unsupported");
+    await expect(page.getByRole("button", { name: "Rerun selected attempts", exact: true })).toHaveCount(0);
   } finally { await fixture.close(); }
 });
 

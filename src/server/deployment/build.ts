@@ -1,23 +1,13 @@
 import { createHash } from "node:crypto";
 import { lstat, readdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { releaseSourceFiles } from "./source";
 
 export async function releaseSourceDigest(root = process.cwd()): Promise<string> {
   const hash = createHash("sha256");
-  const files = ["package.json", "package-lock.json", ".npmrc", "next.config.ts", "tsconfig.json"];
-  async function walk(directory: string) {
-    for (const entry of await readdir(join(root, directory), { withFileTypes: true })) {
-      const path = join(directory, entry.name);
-      if (entry.isDirectory()) await walk(path);
-      else if (entry.isFile() && /\.(ts|tsx|css)$/.test(entry.name) && !entry.name.endsWith(".test.ts")) files.push(path);
-      else if (entry.isSymbolicLink()) throw new Error("deployment_source_symlink");
-    }
+  for (const file of await releaseSourceFiles(root)) {
+    hash.update(file).update("\0").update(await readFile(join(root, file))).update("\0");
   }
-  await walk("src");
-  for (const entry of await readdir(join(root, "scripts"))) {
-    if (entry === "worker.ts" || /^deployment.*\.ts$/.test(entry)) files.push(join("scripts", entry));
-  }
-  for (const file of files.sort()) hash.update(file).update("\0").update(await readFile(join(root, file))).update("\0");
   return hash.digest("hex");
 }
 
@@ -64,7 +54,9 @@ export async function releaseBuildDigest(cwd = process.cwd()): Promise<string> {
   if (!(await lstat(join(next, "BUILD_ID"))).isFile()) throw new Error("deployment_build_missing");
   await walk(next, ".next", [await realpath(next)]);
   // External packages are loaded directly by Next, tsx and the normal worker;
-  // hash all installed bytes, not only dependencies linked from .next.
+  // hash all installed bytes, including Stagehand's input extension archive,
+  // not only dependencies linked from .next. Composed private archives are
+  // derived at runtime from these pinned inputs and the source-bound composer.
   await walk(modulesPath, "node_modules", [modules]);
   return hash.digest("hex");
 }

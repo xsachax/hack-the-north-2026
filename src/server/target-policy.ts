@@ -229,6 +229,15 @@ function admit(url: URL, rules: ReturnType<typeof policy>): void {
   )) {
     reject("out_of_scope_path");
   }
+
+}
+
+/** Synchronous scope policy only; connection-time DNS/IP/TLS checks remain mandatory. */
+export function admitPublicNavigation(raw: string, scope: TargetScope): URL {
+  const rules = policy(scope, {});
+  const url = parsePublicTargetUrl(raw);
+  admit(url, rules);
+  return url;
 }
 
 /** Validate admission and resolve every allowed host, failing closed on any answer. */

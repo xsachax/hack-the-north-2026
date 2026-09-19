@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { NativeResources, type NativeResource } from "./native-resources";
+import { isNativeSessionRetired, NativeResources, type NativeResource, type NativeSessionClosure } from "./native-resources";
 
 const extensionId = "00000000-0000-4000-8000-000000000001";
 const sessionId = "00000000-0000-4000-8000-000000000002";
@@ -34,12 +34,39 @@ describe("native extension lifecycle quarantine", () => {
     expect(records.every(Object.isFrozen)).toBe(true);
   });
 
-  it.each(["RUNNING", "PENDING", "ERROR", "TIMED_OUT", "unknown"])("does not delete on %s", async (status) => {
+  it.each(["RUNNING", "PENDING", "ERROR", "TIMED_OUT", "unknown"])("does not delete on %s without terminal proof", async (status) => {
     const { manager, provider, records } = setup();
     await manager.upload(); manager.allocationAttempted(); manager.sessionAllocated(sessionId);
     await expect(manager.close({ sessionId, status })).rejects.toThrow("native_extension_quarantined");
     expect(provider.delete).not.toHaveBeenCalled();
     expect(records.at(-1)).toMatchObject({ state: "quarantined", extensionId, sessionId });
+  });
+
+  it.each(["ERROR", "TIMED_OUT"])("retires independently confirmed %s resources without relabeling the failed session", async (status) => {
+    const { manager, provider } = setup();
+    await manager.upload(); manager.allocationAttempted(); manager.sessionAllocated(sessionId);
+    const readback = { sessionId, status, startedAt: "2025-01-01T00:00:00Z", endedAt: "2025-01-01T00:00:20Z" };
+    await manager.close({ ...readback, independent: { ...readback } });
+    expect(provider.delete).toHaveBeenCalledExactlyOnceWith(extensionId);
+    expect(manager.snapshot().state).toBe("deleted");
+    expect(readback.status).toBe(status);
+  });
+
+  it.each([
+    { independent: undefined },
+    { independent: { sessionId: extensionId, status: "ERROR", startedAt: "2025-01-01T00:00:00Z", endedAt: "2025-01-01T00:00:20Z" } },
+    { independent: { sessionId, status: "COMPLETED", startedAt: "2025-01-01T00:00:00Z", endedAt: "2025-01-01T00:00:20Z" } },
+    { endedAt: undefined },
+    { endedAt: "invalid" },
+    { endedAt: "2025-01-01T00:00:00" },
+    { endedAt: "2024-01-01T00:00:00Z" },
+    { endedAt: "2999-01-01T00:00:00Z" },
+    { startedAt: undefined },
+  ])("rejects incomplete, conflicting, or impossible operational retirement proof %#", (patch) => {
+    const readback = { sessionId, status: "ERROR", startedAt: "2025-01-01T00:00:00Z", endedAt: "2025-01-01T00:00:20Z" };
+    const remote: NativeSessionClosure = { ...readback, independent: { ...readback }, ...patch };
+    expect(isNativeSessionRetired(remote)).toBe(false);
+    if (!("independent" in patch)) expect(isNativeSessionRetired({ ...remote, independent: { ...remote } })).toBe(false);
   });
 
   it("quarantines an unknown allocation and cannot turn a later callback into clean closure", async () => {
@@ -56,6 +83,11 @@ describe("native extension lifecycle quarantine", () => {
     await manager.upload(); manager.allocationAttempted(); manager.sessionAllocated(sessionId);
     await expect(manager.close({ sessionId: extensionId, status: "COMPLETED" })).rejects.toThrow("native_extension_quarantined");
     expect(provider.delete).not.toHaveBeenCalled();
+  });
+  it("does not ignore contradictory independent evidence even for COMPLETED", () => {
+    expect(isNativeSessionRetired({
+      sessionId, status: "COMPLETED", independent: { sessionId, status: "RUNNING" },
+    })).toBe(false);
   });
 
   it("can delete a known uploaded extension only when allocation was never dispatched", async () => {

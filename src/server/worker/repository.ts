@@ -19,6 +19,14 @@ import type { CandidateResult } from "../workflows/reproduction-runner";
 import { REPRODUCTION_SETUP_STEPS, REPRODUCTION_SIGNATURE } from "../workflows/reproduction-runner";
 import { insertRerun } from "../workflows/rerun";
 import { ServiceError } from "../errors";
+import { PUBLIC_ASSET_POLICY, PUBLIC_EXECUTION_POLICY } from "../../lib/public-execution";
+import { nativeResourceSchema, type NativeResource } from "../execution/native-resources";
+import { mergeNativeResource } from "./native-journal";
+import { isRecoveredNativeSessionRetired, type CloudRecoveryResult } from "./cloud-recovery";
+import { PUBLIC_EXECUTION_IMPLEMENTATION_READY } from "../public-execution-readiness";
+
+/** Runtime gates can further restrict admission, never override the source-level checkpoint stop. */
+export type PublicWorkerAdmission = { enabled: boolean; implementationReady: boolean };
 
 export class LeaseLostError extends Error {
   constructor() { super("worker_lease_lost"); }
@@ -29,6 +37,9 @@ export type Claim = {
   scenario?: "fixed" | "second-coupon"; controlledSiteId?: "store" | "project-board";
   scope: TargetScope; recovery: boolean; sessionId?: string;
   reproductionCandidateId?: string;
+  executionMode: "controlled-fixture" | "public-readonly" | "website";
+  executionPolicy?: typeof PUBLIC_EXECUTION_POLICY;
+  assetPolicy?: typeof PUBLIC_ASSET_POLICY;
 };
 const json = (value: unknown): unknown => JSON.parse(z.string().parse(value));
 const terminalRemote = (status?: string) => !!status && ["COMPLETED", "ERROR", "TIMED_OUT"].includes(status);
@@ -61,15 +72,21 @@ export class WorkerRepository extends Repository {
     };
   }
 
-  claim(workerId: string): Claim | null {
+  claim(workerId: string, publicAdmission?: PublicWorkerAdmission): Claim | null {
     z.string().min(1).max(128).parse(workerId);
     return this.transaction(() => {
       // Recovery consumes an already occupied slot; never allocate a second browser.
       const expired = this.db.prepare(`SELECT j.id FROM jobs j JOIN launches l ON l.job_id=j.id
+        JOIN runs r ON r.id=j.run_id
         WHERE j.status='leased' AND j.lease_expires_at<=? AND l.state NOT IN ('settled','quarantined')
-        AND (l.recovery_after IS NULL OR l.recovery_after<=?) ORDER BY j.rowid LIMIT 1`).get(this.now(), this.now());
+        AND (l.recovery_after IS NULL OR l.recovery_after<=?)
+        AND (? OR (r.execution_mode='controlled-fixture'
+          AND NOT EXISTS (SELECT 1 FROM native_resources n WHERE n.job_id=j.id)
+          AND NOT EXISTS (SELECT 1 FROM native_resource_events n WHERE n.job_id=j.id)))
+        ORDER BY j.rowid LIMIT 1`).get(this.now(), this.now(), PUBLIC_EXECUTION_IMPLEMENTATION_READY ? 1 : 0);
       if (expired) return this.acquire(z.string().parse(expired.id), workerId, true);
-      const queued = this.db.prepare(`SELECT j.id,r.owner_id,r.execution_mode,r.controlled_site_id,r.scope,a.snapshot
+      const queued = this.db.prepare(`SELECT j.id,r.owner_id,r.execution_mode,r.controlled_site_id,r.scope,a.snapshot,
+        r.public_execution_policy,r.public_asset_policy,selection.attempt_id AS context_selection
         FROM jobs j JOIN runs r ON r.id=j.run_id JOIN attempts a ON a.id=j.attempt_id
         LEFT JOIN context_selections selection ON selection.attempt_id=a.id
         LEFT JOIN browser_contexts context ON context.id=selection.context_id
@@ -97,9 +114,16 @@ export class WorkerRepository extends Repository {
           this.endQueued(ownerId, jobId, attempt, "limit_reached", "budget_exhausted");
           continue;
         }
-        if (row.execution_mode !== "controlled-fixture" ||
+        const isPublic = row.execution_mode === "website" &&
+          row.public_execution_policy === PUBLIC_EXECUTION_POLICY && row.public_asset_policy === PUBLIC_ASSET_POLICY;
+        const publicAllowed = PUBLIC_EXECUTION_IMPLEMENTATION_READY && isPublic && publicAdmission?.enabled === true &&
+          publicAdmission.implementationReady === true && !row.context_selection && !reproduction &&
+          (!attempt.browserState || attempt.browserState.mode === "fresh") &&
+          !attempt.criteria.some(isLegacyCriterion);
+        if ((!publicAllowed && row.execution_mode !== "controlled-fixture") ||
+          (row.execution_mode === "controlled-fixture" && (
           (!row.controlled_site_id && !supportedDemoCriteria(attempt.criteria)) ||
-          (row.controlled_site_id === "project-board" && attempt.criteria.some(isLegacyCriterion))) {
+          (row.controlled_site_id === "project-board" && attempt.criteria.some(isLegacyCriterion))))) {
           this.endQueued(ownerId, jobId, attempt, "blocked",
             row.execution_mode !== "controlled-fixture" ? "blocked_unsupported" : "unsupported_criteria");
           continue;
@@ -120,7 +144,7 @@ export class WorkerRepository extends Repository {
           this.endQueued(ownerId, jobId, attempt, "limit_reached", "budget_exhausted");
           continue;
         }
-        const context = this.contexts.claim({
+        const context = publicAllowed ? undefined : this.contexts.claim({
           ownerId, jobId, attempt, scope: targetScopeSchema.parse(json(row.scope)),
         });
         if (context === "wait") continue;
@@ -146,15 +170,26 @@ export class WorkerRepository extends Repository {
     return this.transaction(() => {
       const row = this.db.prepare("SELECT job_id FROM launches WHERE job_id=? AND state='quarantined'").get(jobId);
       if (!row) throw new Error("job_not_quarantined");
+      if (!PUBLIC_EXECUTION_IMPLEMENTATION_READY && this.hasPublicRecoveryState(jobId)) {
+        throw new Error("public_recovery_checkpoint_disabled");
+      }
       this.db.prepare("UPDATE launches SET recovery_count=0,recovery_after=NULL WHERE job_id=?").run(jobId);
       return this.acquire(jobId, workerId, true);
     });
   }
 
+  hasPublicRecoveryState(jobId: string): boolean {
+    return !!this.db.prepare(`SELECT 1 FROM jobs j JOIN runs r ON r.id=j.run_id WHERE j.id=?
+      AND (r.execution_mode!='controlled-fixture'
+        OR EXISTS (SELECT 1 FROM native_resources n WHERE n.job_id=j.id)
+        OR EXISTS (SELECT 1 FROM native_resource_events n WHERE n.job_id=j.id))`).get(jobId);
+  }
+
   private acquire(jobId: string, workerId: string, recovery: boolean): Claim {
     this.db.prepare(`UPDATE jobs SET status='leased',lease_owner=?,lease_generation=lease_generation+1,lease_expires_at=?
       WHERE id=?`).run(workerId, new Date(this.clock() + this.policy.leaseMs).toISOString(), jobId);
-    const row = this.db.prepare(`SELECT j.*,r.owner_id,r.scenario,r.controlled_site_id,r.scope,a.snapshot,l.correlation_token,l.session_reference
+    const row = this.db.prepare(`SELECT j.*,r.owner_id,r.scenario,r.controlled_site_id,r.scope,r.execution_mode,
+      r.public_execution_policy,r.public_asset_policy,a.snapshot,l.correlation_token,l.session_reference
       FROM jobs j JOIN runs r ON r.id=j.run_id JOIN attempts a ON a.id=j.attempt_id JOIN launches l ON l.job_id=j.id
       WHERE j.id=?`).get(jobId)!;
     if (recovery) {
@@ -170,8 +205,43 @@ export class WorkerRepository extends Repository {
       ...(row.scenario ? { scenario: z.enum(["fixed", "second-coupon"]).parse(row.scenario) } : {}),
       ...(row.controlled_site_id ? { controlledSiteId: z.enum(["store", "project-board"]).parse(row.controlled_site_id) } : {}),
       scope: targetScopeSchema.parse(json(row.scope)), recovery, sessionId: ref?.sessionId,
+      executionMode: row.execution_mode === "controlled-fixture" ? "controlled-fixture" :
+        row.public_execution_policy === PUBLIC_EXECUTION_POLICY && row.public_asset_policy === PUBLIC_ASSET_POLICY
+          ? "public-readonly" : "website",
+      ...(row.public_execution_policy === PUBLIC_EXECUTION_POLICY ? { executionPolicy: PUBLIC_EXECUTION_POLICY } : {}),
+      ...(row.public_asset_policy === PUBLIC_ASSET_POLICY ? { assetPolicy: PUBLIC_ASSET_POLICY } : {}),
       ...(reproduction ? { reproductionCandidateId: z.string().parse(reproduction.candidate_id) } : {}),
     };
+  }
+
+  assertPublicClaim(claim: Claim, admission?: PublicWorkerAdmission): void {
+    this.assertLease(claim);
+    const row = this.db.prepare(`SELECT r.public_execution_policy,r.public_asset_policy,r.execution_mode
+      FROM jobs j JOIN runs r ON r.id=j.run_id
+      WHERE j.id=? AND j.run_id=? AND j.attempt_id=? AND r.owner_id=?`)
+      .get(claim.jobId, claim.runId, claim.attempt.id, claim.ownerId);
+    if (!PUBLIC_EXECUTION_IMPLEMENTATION_READY || !admission?.enabled || !admission.implementationReady || claim.executionMode !== "public-readonly" ||
+      claim.executionPolicy !== PUBLIC_EXECUTION_POLICY || claim.assetPolicy !== PUBLIC_ASSET_POLICY ||
+      row?.execution_mode !== "website" || row.public_execution_policy !== PUBLIC_EXECUTION_POLICY ||
+      row.public_asset_policy !== PUBLIC_ASSET_POLICY || claim.reproductionCandidateId ||
+      (claim.attempt.browserState && claim.attempt.browserState.mode !== "fresh") ||
+      claim.attempt.criteria.some(isLegacyCriterion) ||
+      this.db.prepare("SELECT 1 FROM context_selections WHERE attempt_id=?").get(claim.attempt.id)) {
+      throw new Error("blocked_unsupported");
+    }
+  }
+
+  blockUnsupported(claim: Claim): void {
+    this.transaction(() => {
+      this.assertLease(claim, true);
+      if (this.db.prepare("SELECT 1 FROM native_resources WHERE job_id=?").get(claim.jobId) ||
+        this.db.prepare("SELECT session_reference FROM launches WHERE job_id=?").get(claim.jobId)?.session_reference) {
+        throw new Error("allocation_already_started");
+      }
+      this.settle(claim, { allocationAttempted: false, reservedSeconds: this.policy.sessionSeconds,
+        elapsedSeconds: 0, actualBrowserSeconds: 0 }, true);
+      this.end(claim, "blocked", "blocked_unsupported");
+    });
   }
 
   assertLease(claim: Claim, allowCancelled = false): void {
@@ -302,10 +372,114 @@ export class WorkerRepository extends Repository {
       }
       const binding = this.db.prepare("SELECT job_id FROM browser_session_bindings WHERE session_id=?").get(reference.sessionId);
       if (binding && binding.job_id !== claim.jobId) throw new Error("launch_session_mismatch");
+      if (claim.executionMode === "public-readonly" &&
+        this.nativeResourceSnapshot(claim.jobId)?.sessionId !== reference.sessionId) {
+        throw new Error("native_resource_session_mismatch");
+      }
       this.db.prepare("INSERT OR IGNORE INTO browser_session_bindings VALUES(?,?)").run(reference.sessionId, claim.jobId);
       this.db.prepare("UPDATE launches SET session_reference=?,state='active' WHERE job_id=?")
         .run(JSON.stringify(reference), claim.jobId);
     });
+  }
+
+  nativeResource(claim: Claim, input: Readonly<NativeResource>): undefined {
+    const resource = nativeResourceSchema.parse(input);
+    try {
+      this.transaction(() => {
+        this.assertLease(claim, true);
+        this.assertNativeBinding(claim);
+        const previous = this.nativeResourceSnapshot(claim.jobId);
+        const next = previous ? mergeNativeResource(previous, resource) : resource;
+        if (!previous && (next.state !== "upload_intent" || next.extensionId ||
+          next.sessionId || next.sessionAllocationAttempted)) throw new Error("native_resource_missing_intent");
+        this.saveNativeResource(claim.jobId, next);
+      });
+    } catch (error) {
+      if (!(error instanceof LeaseLostError)) throw error;
+      // Discovery is deliberately append-only: stale holders cannot touch current
+      // snapshots, leases, launch state, accounting, or provider cleanup authority.
+      this.transaction(() => {
+        this.assertNativeBinding(claim);
+        let previous = this.nativeResourceSnapshot(claim.jobId);
+        if (!previous) return;
+        for (const row of this.db.prepare("SELECT resource FROM native_resource_events WHERE job_id=? ORDER BY sequence").all(claim.jobId)) {
+          const discovered = nativeResourceSchema.parse(json(row.resource));
+          if (discovered.extensionId || discovered.sessionId) previous = mergeNativeResource(previous, discovered, true);
+        }
+        const next = mergeNativeResource(previous, resource, true);
+        if ((!next.extensionId || previous.extensionId) && (!next.sessionId || previous.sessionId)) return;
+        this.db.prepare("INSERT INTO native_resource_events(job_id,resource,created_at) VALUES(?,?,?)")
+          .run(claim.jobId, JSON.stringify(next), this.now());
+      });
+      throw error;
+    }
+    return undefined;
+  }
+
+  private assertNativeBinding(claim: Claim): void {
+    const row = this.db.prepare(`SELECT j.lease_generation,j.lease_owner FROM jobs j JOIN runs r ON r.id=j.run_id
+      JOIN launches l ON l.job_id=j.id WHERE j.id=? AND j.run_id=? AND j.attempt_id=?
+      AND r.owner_id=? AND l.correlation_token=? AND r.public_execution_policy=?
+      AND r.public_asset_policy=?`).get(claim.jobId, claim.runId, claim.attempt.id, claim.ownerId,
+      claim.correlationToken, PUBLIC_EXECUTION_POLICY, PUBLIC_ASSET_POLICY);
+    if (!row || !Number.isInteger(claim.generation) || claim.generation < 1 ||
+      Number(row.lease_generation) < claim.generation ||
+      (row.lease_generation === claim.generation && row.lease_owner !== null && row.lease_owner !== claim.workerId)) {
+      throw new Error("native_resource_binding_mismatch");
+    }
+  }
+
+  private nativeResourceSnapshot(jobId: string): NativeResource | undefined {
+    const row = this.db.prepare("SELECT resource FROM native_resources WHERE job_id=?").get(jobId);
+    return row ? nativeResourceSchema.parse(json(row.resource)) : undefined;
+  }
+
+  private saveNativeResource(jobId: string, resource: NativeResource): void {
+    if (resource.extensionId) {
+      const other = this.db.prepare("SELECT job_id FROM native_resources WHERE extension_id=?").get(resource.extensionId);
+      if (other && other.job_id !== jobId) throw new Error("native_resource_extension_already_bound");
+    }
+    this.db.prepare(`INSERT INTO native_resources(job_id,extension_id,resource,updated_at) VALUES(?,?,?,?)
+      ON CONFLICT(job_id) DO UPDATE SET extension_id=excluded.extension_id,resource=excluded.resource,updated_at=excluded.updated_at`)
+      .run(jobId, resource.extensionId ?? null, JSON.stringify(resource), this.now());
+    this.db.prepare("INSERT INTO native_resource_events(job_id,resource,created_at) VALUES(?,?,?)")
+      .run(jobId, JSON.stringify(resource), this.now());
+  }
+
+  reconcileNativeResource(claim: Claim): NativeResource | undefined {
+    return this.transaction(() => {
+      this.assertLease(claim, true);
+      this.assertNativeBinding(claim);
+      let resource = this.nativeResourceSnapshot(claim.jobId);
+      if (!resource) return;
+      const initial = JSON.stringify(resource);
+      for (const event of this.db.prepare("SELECT resource FROM native_resource_events WHERE job_id=? ORDER BY sequence").all(claim.jobId)) {
+        const discovered = nativeResourceSchema.parse(json(event.resource));
+        // Journal history is not a state replay. Only newly discovered identities
+        // are folded into the current authoritative snapshot.
+        if ((discovered.extensionId && !resource.extensionId) || (discovered.sessionId && !resource.sessionId)) {
+          resource = mergeNativeResource(resource, discovered, true);
+        } else if ((discovered.extensionId && resource.extensionId !== discovered.extensionId) ||
+          (discovered.sessionId && resource.sessionId !== discovered.sessionId) ||
+          discovered.archiveSha256 !== resource.archiveSha256) throw new Error("native_resource_identity_changed");
+      }
+      if (JSON.stringify(resource) !== initial) this.saveNativeResource(claim.jobId, resource);
+      return resource;
+    });
+  }
+  nativePredispatchProof(claim: Claim): boolean {
+    this.assertLease(claim, true);
+    this.assertNativeBinding(claim);
+    const resource = this.nativeResourceSnapshot(claim.jobId);
+    if (!resource?.extensionId || resource.sessionAllocationAttempted || resource.sessionId) return false;
+    const events = this.db.prepare("SELECT resource FROM native_resource_events WHERE job_id=? ORDER BY sequence")
+      .all(claim.jobId).map((row) => nativeResourceSchema.parse(json(row.resource)));
+    // Every session dispatch requires the synchronous allocated record first.
+    // Never interpret an empty provider metadata list as predispatch evidence.
+    return events.length > 0 && events[0].state === "upload_intent" &&
+      events.every((event) => event.archiveSha256 === resource.archiveSha256 &&
+        !event.sessionAllocationAttempted && !event.sessionId) &&
+      events.some((event) => event.extensionId === resource.extensionId);
   }
 
   recordArtifact(claim: Claim, artifact: ArtifactReference, kind: "screenshot" | "observation" | "console"): string {
@@ -348,6 +522,7 @@ export class WorkerRepository extends Repository {
 
   finish(claim: Claim, result: ExecutionResult, usage: CloudUsage, reproductionResult?: CandidateResult): void {
     const parsed = resultSchema.parse(result);
+    const native = claim.executionMode === "public-readonly" ? this.reconcileNativeResource(claim) : undefined;
     this.transaction(() => {
       this.assertLease(claim, true);
       const launch = this.db.prepare(`SELECT l.session_reference,l.usage,u.consumed_seconds FROM launches l
@@ -360,7 +535,10 @@ export class WorkerRepository extends Repository {
         this.db.prepare("SELECT session_id FROM remote_usage_observations WHERE job_id=? LIMIT 1").get(claim.jobId))) {
         throw new Error("contradictory_allocation_evidence");
       }
-      const confirmed = neverAttempted || terminalRemote(usage.remoteStatus);
+      const nativeConfirmed = claim.executionMode !== "public-readonly" ||
+        (native ? ["deleted", "not_dispatched"].includes(native.state) : neverAttempted);
+      if (neverAttempted && native?.sessionAllocationAttempted) throw new Error("contradictory_allocation_evidence");
+      const confirmed = (neverAttempted || terminalRemote(usage.remoteStatus)) && nativeConfirmed;
       if (reproductionResult) {
         if (!claim.reproductionCandidateId) throw new Error("unexpected_reproduction_result");
         if (!launch.session_reference ||
@@ -395,7 +573,8 @@ export class WorkerRepository extends Repository {
     });
   }
 
-  recover(claim: Claim, outcome: { confirmed: boolean; sessions: { sessionId: string; status: string; actualBrowserSeconds?: number }[] }): void {
+  recover(claim: Claim, outcome: CloudRecoveryResult): void {
+    const native = claim.executionMode === "public-readonly" ? this.reconcileNativeResource(claim) : undefined;
     this.transaction(() => {
       this.assertLease(claim, true);
       for (const session of outcome.sessions) this.observeCharge(claim, session);
@@ -403,14 +582,25 @@ export class WorkerRepository extends Repository {
         sum(actual_seconds) AS actual, count(actual_seconds) AS measured, min(terminal) AS terminal
         FROM remote_usage_observations WHERE job_id=?`).get(claim.jobId)!;
       const charged = z.number().parse(observed.charged);
-      const confirmed = outcome.confirmed && outcome.sessions.length > 0 && observed.terminal === 1 &&
-        outcome.sessions.every((s) => terminalRemote(s.status));
+      const predispatch = claim.executionMode === "public-readonly" && outcome.allocationAttempted === false &&
+        outcome.nativeResourceConfirmed === true && !!native && !native.sessionAllocationAttempted &&
+        !native.sessionId && ["deleted", "not_dispatched"].includes(native.state) &&
+        outcome.sessions.length === 0 && observed.n === 0;
+      const nativeConfirmed = claim.executionMode !== "public-readonly" ||
+        outcome.nativeResourceConfirmed === true && !!native && ["deleted", "not_dispatched"].includes(native.state) &&
+        (predispatch || !!native.sessionId && outcome.sessions.some((session) =>
+          session.sessionId === native.sessionId && isRecoveredNativeSessionRetired(session)) &&
+          outcome.sessions.every(isRecoveredNativeSessionRetired));
+      const confirmed = outcome.confirmed && nativeConfirmed && (predispatch ||
+        outcome.sessions.length > 0 && observed.terminal === 1 &&
+        outcome.sessions.every((s) => terminalRemote(s.status)));
       this.contexts.settle(claim.jobId, {
-        confirmed, neverAllocated: false, clean: false, recovered: true,
+        confirmed, neverAllocated: predispatch, clean: false, recovered: true,
       });
       const usage: CloudUsage = {
         reservedSeconds: this.policy.sessionSeconds, elapsedSeconds: 0,
-        ...(confirmed ? { remoteStatus: outcome.sessions[0].status } : {}),
+        ...(confirmed && !predispatch ? { remoteStatus: outcome.sessions[0].status } : {}),
+        ...(predispatch ? { allocationAttempted: false, actualBrowserSeconds: 0 } : {}),
         ...(observed.n && observed.measured === observed.n ? { actualBrowserSeconds: z.number().parse(observed.actual) } : {}),
       };
       // Preserve model counters/startup details from the original process if available.
@@ -447,8 +637,12 @@ export class WorkerRepository extends Repository {
     this.db.prepare(`UPDATE usage_reservations SET consumed_seconds=max(consumed_seconds,?),
       released_seconds=CASE WHEN ? THEN max(0,reserved_seconds-max(consumed_seconds,?)) ELSE 0 END WHERE job_id=?`)
       .run(consumed, confirmed ? 1 : 0, consumed, claim.jobId);
+    const privateUsage: Record<string, unknown> = { ...usage };
+    delete privateUsage.nativeResource;
+    delete privateUsage.nativePolicy;
+    delete privateUsage.nativeObservedBrowserVersion;
     this.db.prepare("UPDATE launches SET usage=?,state=? WHERE job_id=?")
-      .run(JSON.stringify(sanitizeEvidence(JSON.parse(JSON.stringify(usage)))), confirmed ? "settled" : "recovering", claim.jobId);
+    .run(JSON.stringify(sanitizeEvidence(privateUsage)), confirmed ? "settled" : "recovering", claim.jobId);
   }
 
   private deferRecovery(claim: Claim): void {

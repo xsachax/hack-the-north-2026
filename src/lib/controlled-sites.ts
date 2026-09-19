@@ -31,12 +31,14 @@ export function controlledSite(id: ControlledSiteId): ControlledSite {
   return controlledSites[id];
 }
 
-export type NavigationScope = Readonly<{
+export type ControlledNavigationScope = Readonly<{
   allowedOrigins: readonly string[];
   navigationPaths: readonly string[];
 }>;
+export type NavigationScope = ControlledNavigationScope | Readonly<{ allows: (raw: string) => boolean }>;
 
 export function allowsNavigation(scope: NavigationScope, raw: string): boolean {
+  if ("allows" in scope) return scope.allows(raw);
   let url: URL;
   try { url = new URL(raw); } catch { return false; }
   return !url.username && !url.password && !url.hash && !url.search
@@ -44,7 +46,7 @@ export function allowsNavigation(scope: NavigationScope, raw: string): boolean {
 }
 
 /** User scope can only narrow the immutable controlled-site document allowlist. */
-export function controlledNavigationScope(site: ControlledSite, targetUrl: string, input?: TargetScope): NavigationScope {
+export function controlledNavigationScope(site: ControlledSite, targetUrl: string, input?: TargetScope): ControlledNavigationScope {
   let paths = site.navigationPaths;
   if (input) {
     const scope = targetScopeSchema.parse(input);

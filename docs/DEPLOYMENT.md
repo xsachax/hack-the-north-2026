@@ -170,6 +170,17 @@ source digest or `BUILD_ID`. The local receipt is not an external signature:
 rewriting it after a mutation creates a different fingerprint requiring new
 approval. Source-only legacy receipts are rejected and require a clean rebuild.
 
+The clean Node package and source receipt share one public-source allowlist.
+It includes all JS/JSON beneath
+`src/server/execution/native-policy-extension/` (including nested assets), as
+does the Docker context. Changing native policy JavaScript or its manifest
+invalidates the receipt even without a new `BUILD_ID`. Installed-byte hashing
+also binds the pinned Stagehand `dist/assets/stagehand-extension.zip` and its
+dependencies, rather than trusting package versions alone. A deterministic
+composed extension is bound by its source composer, public assets, and installed
+input archive; private/generated archives are not copied into the source package
+or added as approval inputs. Dotenv files remain excluded.
+
 The supervisor serves **loopback-only port 4322**, not a public health route:
 
 * `startup`: initialization and child startup completed.

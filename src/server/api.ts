@@ -20,12 +20,17 @@ import { takeoverCommandSchema } from "../lib/takeover-contracts";
 import { rerunRequestSchema } from "../lib/rerun-contracts";
 import { ComparisonService } from "./workflows/comparison";
 import { reproductionCreateSchema } from "../lib/reproduction-contracts";
+import { NATIVE_SHUTDOWN_RESERVE_SECONDS } from "../lib/public-execution";
+import { PUBLIC_EXECUTION_IMPLEMENTATION_READY } from "./public-execution-readiness";
 
 export type ApiConfiguration = {
   origin: string;
   production: boolean;
   accessCode?: string;
   allowDemoRuns?: boolean;
+  allowPublicRuns?: boolean;
+  publicExecutionReady?: boolean;
+  publicSessionTimeoutSeconds?: number;
   browserbaseKeyConfigured?: boolean;
   executionLimits?: Capabilities["executionLimits"];
   policy?: PolicyOptions;
@@ -62,6 +67,20 @@ export function validateApiConfiguration(configuration: ApiConfiguration): void 
     fail("unavailable", 503);
   }
   if (!["http:", "https:"].includes(origin.protocol)) fail("unavailable", 503);
+}
+
+export function publicExecutionCapability(configuration: ApiConfiguration, persistedSessionTimeoutSeconds: number | null = null) {
+  const configuredSeconds = configuration.publicSessionTimeoutSeconds ?? workerPolicySchema.parse({}).sessionSeconds;
+  const validTimeout = (seconds: number) => Number.isInteger(seconds) &&
+    seconds > NATIVE_SHUTDOWN_RESERVE_SECONDS && seconds <= 300;
+  const timeoutSupported = validTimeout(configuredSeconds) &&
+    (persistedSessionTimeoutSeconds === null || validTimeout(persistedSessionTimeoutSeconds));
+  const reason = !PUBLIC_EXECUTION_IMPLEMENTATION_READY ? "offline_checkpoint" :
+    configuration.publicExecutionReady !== true ? "implementation_not_ready" :
+    configuration.allowPublicRuns !== true ? "operator_disabled" :
+    !configuration.accessCode || configuration.accessCode.length < 32 ? "strong_access_code_required" :
+    !timeoutSupported ? "session_timeout_unsupported" : "ready";
+  return { publicExecutionEnabled: reason === "ready", publicExecutionReason: reason };
 }
 
 async function readBody(request: Request): Promise<Buffer> {
@@ -183,6 +202,7 @@ export function createApi({
           controlledRunsEnabled: configuration.allowDemoRuns === true && !!configuration.accessCode &&
             configuration.accessCode.length >= 32,
           websiteExecutionEnabled: false,
+          ...publicExecutionCapability(configuration, repository.persistedSessionTimeoutSeconds()),
           maxActiveViews: 3,
           accessCodeConfigured: !!configuration.accessCode,
           browserbaseKeyConfigured: configuration.browserbaseKeyConfigured === true,
@@ -302,6 +322,13 @@ export function createApi({
         if (path.length === 1 && request.method === "POST") {
           const key = parseInput(idempotencyKeySchema, request.headers.get("idempotency-key"));
           const input = parseInput(createRunSchema, await readJson(request));
+          if (input.executionPolicy) {
+            const capability = publicExecutionCapability(configuration, repository.persistedSessionTimeoutSeconds());
+            if (!capability.publicExecutionEnabled) {
+              fail(capability.publicExecutionReason === "offline_checkpoint" ? "public_execution_checkpoint_disabled" :
+                capability.publicExecutionReason === "session_timeout_unsupported" ? "public_session_timeout_unsupported" : "unavailable", 503);
+            }
+          }
           const scope = await validateScope(input.scope, configuration.policy);
           const result = repository.createRun(owner, key, { ...input, scope });
           return respond(result.run, result.created ? 201 : 200);
@@ -309,6 +336,7 @@ export function createApi({
         if (path.length >= 2) {
           const id = parseInput(idSchema, path[1]);
           if (path.length === 3 && path[2] === "reproductions" && request.method === "POST") {
+            if (repository.getRun(owner, id).executionMode === "public-readonly") fail("public_reproduction_unsupported", 400);
             if (configuration.allowDemoRuns !== true || !configuration.accessCode || configuration.accessCode.length < 32) {
               fail("demo_disabled", 503);
             }
@@ -316,6 +344,7 @@ export function createApi({
             return respond(repository.reproductionService().prepare(owner, id, input.attemptId));
           }
           if (path.length === 3 && path[2] === "reruns" && request.method === "POST") {
+            if (repository.getRun(owner, id).executionMode === "public-readonly") fail("public_rerun_unsupported", 400);
             if (configuration.allowDemoRuns !== true || !configuration.accessCode || configuration.accessCode.length < 32) {
               fail("demo_disabled", 503);
             }

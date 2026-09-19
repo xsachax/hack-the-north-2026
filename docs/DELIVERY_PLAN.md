@@ -14,6 +14,41 @@ Done means a fresh checkout can run the application and worker, create a real mu
 
 Not a promise: testing every possible browser behavior, detecting every vulnerability, predicting conversion, or proving globally shortest reproductions. Feature support must be explicit. Infrastructure errors, inaccessible targets and budget exhaustion are not target-site bugs or success.
 
+### Remaining #8 offline checkpoint; public execution deferred
+
+The native-policy baseline (#22) and bounded public HTTP broker (#23,
+`eb0ac1b31a554f99f5615a40f25bbb5467b2b2eb`) are merged prerequisites, not public
+product acceptance. At the user's direction, one checkpoint PR preserves the
+offline factory/transport prototypes, durable worker contracts, explicit immutable
+API opt-in, UI capability gates and private resource reconciliation, then the
+public-browser-facing work is replanned separately. Public execution is
+source-level hard-disabled, including when `ENABLE_PUBLIC_RUNS=true` or a caller
+supplies a readiness configuration. API, worker, direct factories and paid public
+CLI paths cannot activate the unresolved SDK lifecycle.
+Unversioned historical website requests never become executable retroactively.
+
+The initial public surface is fresh-profile, read-only HTTP navigation/assets,
+not every website channel or the controlled advanced workflows. Native policy
+is the deny boundary; interception supplies only supported functionality.
+Checkpoint completion requires consolidated unit/build/API/worker/browser/Linux/
+container regressions and focused review. A genuine external objective, hosted
+native conformance, correct usage and independently confirmed closure remain
+requirements of the **future public-execution plan**, not claims of this merge.
+Native-only or synthetic routing success cannot close #8. Metadata-only connection
+and SDK socket-monitor prototypes are preserved but not integrated into the
+native factory; branded Stagehand browser cleanup remains unresolved/unreachable.
+The coordinator alone reviews/merges; #1/#8/#16 stay open until their actual
+acceptance requirements are met.
+
+No provider operations are authorized for this checkpoint. A future plan would
+require fresh source/package/harness/archive/ledger-bound approval; credentials
+and operator flags are not approval. The prior provisional shared public-egress reservation ceiling was 1800
+browser-seconds for the whole effort, not per child or invocation; failed attempts
+spend it and refunds do not renew it. Planning baseline is 1346 external seconds
+(historical actual 1345.293 seconds, 32 closed sessions, three deleted contexts).
+Default proof concurrency is one, maximum two, TTL <=300 seconds. Possession of
+credentials, offline conformance or this plan is not provider authorization.
+
 ## 2. Architecture and invariants
 
 | Layer | Responsibility | Invariants |

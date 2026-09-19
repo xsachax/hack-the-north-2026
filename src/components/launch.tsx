@@ -18,6 +18,7 @@ import { PersonaEditor } from "./persona-editor";
 import { CriterionEditor } from "./criterion-editor";
 import { ContextPicker } from "./context-picker";
 import type { BrowserState } from "@/lib/context-contracts";
+import { PUBLIC_ASSET_POLICY, PUBLIC_EXECUTION_POLICY, PUBLIC_EXECUTION_LIMITS, publicExecutionReason } from "@/lib/public-execution";
 
 type AssignmentDraft = { goal?: string; criteria?: string; maxSteps?: number; maxModelCalls?: number; maxDurationMs?: number; browserState?: BrowserState };
 const initialCriterion: Exclude<Criterion, string> = {
@@ -48,6 +49,7 @@ export function Launch() {
   const [selected, setSelected] = useState(["careful-first-timer"]);
   const [drafts, setDrafts] = useState<Record<string, AssignmentDraft>>({});
   const [acknowledged, setAcknowledged] = useState(false);
+  const [publicOptIn, setPublicOptIn] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<PendingLaunch | null>(null);
   const [storageError, setStorageError] = useState("");
@@ -131,6 +133,7 @@ export function Launch() {
   function submit(event: React.FormEvent) {
     event.preventDefault();
     if (pending || busy || !ownerId || !capabilities || storageError) return;
+    if (mode === "website" && publicOptIn && !capabilities.publicExecutionEnabled) return;
     try {
       const assignments = selected.map((personaId) => {
         const draft = drafts[personaId];
@@ -154,6 +157,7 @@ export function Launch() {
         void send({ ownerId, key: crypto.randomUUID(), path: "/controlled-runs", body });
       } else {
         const body = createRunSchema.parse({
+          ...(publicOptIn ? { executionPolicy: PUBLIC_EXECUTION_POLICY, assetPolicy: PUBLIC_ASSET_POLICY } : {}),
           authorizationAcknowledged: acknowledged, scope: {
             targetUrl: url, allowedSubdomains: subdomains ? subdomains.split("\n") : [],
             pathPrefixes: websitePrefixes.split("\n"),
@@ -195,14 +199,24 @@ export function Launch() {
         </label>
         {mode === "website" ? <>
           <label>Website URL<input type="url" required placeholder="https://your-site.com/shop" value={url} onChange={(event) => setUrl(event.target.value)} /></label>
-          <p className="notice"><strong>Website execution is not enabled.</strong> You can save this intended scoped request, but the worker will mark it blocked without opening a browser. Public-site isolation is still a release blocker. Controlled demos are separate.</p>
+          {!publicOptIn && <p className="notice"><strong>Website execution is not enabled.</strong> Without explicit public opt-in, this intended scoped request stays blocked without opening a browser, even if public execution is later enabled. Controlled demos are separate.</p>}
+          <label className="acknowledgement"><input type="checkbox" checked={publicOptIn} onChange={(event) => setPublicOptIn(event.target.checked)} /><span>Opt in to public read-only execution and the separate public HTTP asset policy.</span></label>
+          <p role="status">{capabilities ? publicExecutionReason[capabilities.publicExecutionReason] : "Checking public execution readiness…"}</p>
+          <p>Read-only navigation, scoped link following (captured URL navigation; no physical click handlers), back, scroll and wait. Fresh profiles only; no typing, forms, saved state or human takeover.</p>
+          <p>Navigation and child documents stay within authorized origins and path prefixes. Third-party/CDN assets may load separately over public HTTP(S), through bodyless GET/HEAD/OPTIONS. Assets never create an exception for navigation or child documents.</p>
+          <details className="configuration">
+            <summary>Public policy and unsupported features</summary>
+            <p>Typing, selecting options, key presses, button and checkbox clicks are unsupported. Unsupported custom/preflight headers, methods and channels fail visibly.</p>
+            <p>Missing browser metadata (User-Agent, Sec-Fetch-*, Sec-CH-* and Upgrade-Insecure-Requests) uses explicit bounded translation, not transparent browser-request replay. Sites depending on unsupported request semantics may fail.</p>
+            <p>{PUBLIC_EXECUTION_LIMITS.context} {PUBLIC_EXECUTION_LIMITS.takeover} {PUBLIC_EXECUTION_LIMITS.rerun} {PUBLIC_EXECUTION_LIMITS.comparison} {PUBLIC_EXECUTION_LIMITS.reproduction}</p>
+          </details>
         </> : <>
           <label>Controlled site<select value={site} onChange={(event) => chooseSite(event.target.value === "store" ? "store" : "project-board")}><option value="project-board">Project board</option><option value="store">Gift store (fixed)</option></select></label>
           <p className="muted">A real cloud browser on our registered, isolated demo. Never a substitute for your website.</p>
           <p className="muted">Queues work for a separate worker. Configuration readiness is not a worker heartbeat.</p>
           {capabilities && !capabilities.controlledRunsEnabled && <p className="notice">Controlled runs are disabled by this deployment. Ask the operator to enable admission and start the separate worker.</p>}
         </>}
-        <details className="configuration">
+        <details className="configuration" open={mode === "website"}>
           <summary>Configure scope & success criteria <span>{criteria.length} criteria</span></summary>
           <p className="muted">A small, authorized task, not an entire-site crawl. These defaults apply to every selected persona; individual overrides are below.</p>
           {mode === "controlled" ? <div className="field-row">
@@ -248,21 +262,21 @@ export function Launch() {
                 {!isPreset(id) && <button type="button" disabled={!!deleting} onClick={() => void deletePersona(persona)}>{deleting === id ? "Deleting..." : `Delete ${persona.name}`}</button>}</div>
             </details>;
           })}
-          <p className="muted">Fresh sessions by default; private returning state is explicit per assignment. Phone is a viewport, not device emulation. Throttling, uploads, tabs and subframes remain unsupported.</p>
+          <p className="muted">Fresh sessions only for public runs; private returning state is available only in controlled runs. Phone is a viewport, not device emulation. Throttling, uploads, tabs and subframes remain unsupported.</p>
           <details className="configuration">
             <summary>Supported testing and known limits</summary>
             <p>Agents use DOM plus viewport screenshots, not screenshot-only human perception. Structural checks use observed controls and text; semantic verdicts and confidence are heuristic, not proof or calibrated probabilities.</p>
-            <p>Keyboard actions are supported, but there is no general accessibility or WCAG scanner. Only the planted second-coupon defect has verified autonomous discovery and automatic regression export; fixture tests do not mean agents found every planted problem.</p>
+            <p>Keyboard actions are supported, but there is no general accessibility or WCAG scanner. These actions apply only to controlled runs, not public read-only runs. Only the planted second-coupon defect has verified autonomous discovery and automatic regression export; fixture tests do not mean agents found every planted problem.</p>
             <p>Returning state requires explicit consent and a later observed check; eligibility is not provider confirmation that storage finished saving. Takeover is exclusive inside this app, not revocation of external provider control links.</p>
             <p>Comparisons need matching criteria and confirming tested coverage; a missing finding alone is not a fix. Reduction reports the shortest supported path found, not a globally shortest reproduction.</p>
-            <p>Screenshots and recordings are private, sensitive pixels, not redacted media. Arbitrary authorized websites remain blocked until connection-level network isolation is proven.</p>
+            <p>Screenshots and recordings are private, sensitive pixels, not redacted media. Public execution requires explicit policy opt-in, deployment enablement and integrated native browser/broker readiness; configuration is not proof a worker is running.</p>
           </details>
         </section>
         <label className="acknowledgement"><input type="checkbox" required checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} /><span>I am authorized to test this scope and will use only non-destructive tasks.</span></label>
-        <button className="primary launch-button" type="submit" disabled={!capabilities || !selected.length || (mode === "controlled" && !capabilities.controlledRunsEnabled)}>
-          {busy ? "Submitting..." : mode === "controlled" ? `Launch ${selected.length} ${selected.length === 1 ? "persona" : "personas"}` : "Save website request (execution blocked)"}
+        <button className="primary launch-button" type="submit" disabled={!capabilities || !selected.length || (mode === "controlled" && !capabilities.controlledRunsEnabled) || (mode === "website" && publicOptIn && !capabilities.publicExecutionEnabled)}>
+          {busy ? "Submitting..." : mode === "controlled" ? `Launch ${selected.length} ${selected.length === 1 ? "persona" : "personas"}` : publicOptIn ? "Launch public read-only run" : "Save website request (execution blocked)"}
         </button>
-        <p className="muted center">{mode === "controlled" ? "Uses browser and model credits when the worker starts. Up to 3 live viewers." : "No paid public-site browser will be launched."}</p>
+        <p className="muted center">{mode === "controlled" || (publicOptIn && capabilities?.publicExecutionEnabled) ? "Uses browser and model credits when the worker starts. Up to 3 live viewers." : "No paid public-site browser will be launched."}</p>
       </fieldset>
     </form>
     {error && <div className="error" role="alert"><p>{error}</p><div className="button-row"><button type="button" onClick={() => void load()}>Reload workspace data</button><button type="button" onClick={retrySession}>Refresh owner session</button></div></div>}

@@ -1,21 +1,14 @@
 import type { BrowserContext, Worker } from "playwright-core";
 import { z } from "zod";
-import { sha256 } from "./composed-extension";
 import { verifyNativeWebRtcPreferences } from "./native-policy-attestation";
 import { verifyNativeProxyRefusal } from "./native-proxy-attestation";
+import { connectNativeWorkerControl, type NativeWorkerControl } from "./native-worker-control";
 
 export const PROVED_CHROMIUM_VERSION = "145.0.7632.6";
 const stateSchema = z.strictObject({
   ready: z.literal(true), fault: z.null(), proxyErrors: z.int().min(0).max(1000),
   phase: z.literal("active"),
 });
-type NativeControl = typeof globalThis & {
-  flashFloodNativePolicy: {
-    activate(): Promise<void>;
-    verify(): Promise<unknown>;
-    snapshot(): unknown;
-  };
-};
 
 export function assertTrustedBootstrap(context: BrowserContext, extensionOrigin: string): void {
   const allowed = new Set([
@@ -33,22 +26,9 @@ export function assertNativePolicyState(value: unknown): void {
 }
 
 export async function verifyComposedExtension(
-  worker: Worker, files: ReadonlyMap<string, Buffer>,
+  control: NativeWorkerControl, files: ReadonlyMap<string, Buffer>,
 ): Promise<void> {
-  const expected = [...files].map(([name, bytes]) => ({ name, digest: sha256(bytes) }));
-  const matched = await worker.evaluate(async (entries) => {
-    for (const { name, digest } of entries) {
-      const response = await fetch(new URL(name, self.location.href));
-      if (!response.ok) return false;
-      const bytes = await response.arrayBuffer();
-      if (bytes.byteLength > 4 * 1024 * 1024) return false;
-      const actual = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)))
-        .map((byte) => byte.toString(16).padStart(2, "0")).join("");
-      if (actual !== digest) return false;
-    }
-    return true;
-  }, expected);
-  if (matched !== true) throw new Error("native_extension_bytes_rejected");
+  await control.verifyFiles(files);
 }
 
 /** Must run after trusted SDK initialization, before interception or untrusted navigation. */
@@ -57,6 +37,7 @@ export async function establishNativePolicy(options: {
   worker: Worker;
   files: ReadonlyMap<string, Buffer>;
   assertActive: () => void;
+  onLost?: () => void;
 }) {
   const { context, worker, files, assertActive } = options;
   const version = context.browser()?.version();
@@ -67,21 +48,27 @@ export async function establishNativePolicy(options: {
   const extensionOrigin = worker.url().slice(0, -"/service-worker.js".length);
   assertActive();
   assertTrustedBootstrap(context, extensionOrigin);
-  await verifyComposedExtension(worker, files);
-  assertActive();
-  assertTrustedBootstrap(context, extensionOrigin);
-  await worker.evaluate(() => (globalThis as NativeControl).flashFloodNativePolicy.activate());
-  assertActive();
-  const verify = async () => {
+  const control = await connectNativeWorkerControl({ context, workerUrl: worker.url(), assertActive, onLost: options.onLost });
+  try {
+    await verifyComposedExtension(control, files);
     assertActive();
-    assertNativePolicyState(await worker.evaluate(() => (globalThis as NativeControl).flashFloodNativePolicy.verify()));
+    assertTrustedBootstrap(context, extensionOrigin);
+    await control.activate();
     assertActive();
-  };
-  await verify();
-  await verifyNativeWebRtcPreferences(context);
-  assertActive();
-  await verifyNativeProxyRefusal(context, assertActive);
-  await verify();
-  assertTrustedBootstrap(context, extensionOrigin);
-  return { extensionOrigin, version, verify };
+    const verify = async () => {
+      assertActive();
+      assertNativePolicyState(await control.verify());
+      assertActive();
+    };
+    await verify();
+    await verifyNativeWebRtcPreferences(context);
+    assertActive();
+    await verifyNativeProxyRefusal(context, assertActive);
+    await verify();
+    assertTrustedBootstrap(context, extensionOrigin);
+    return { extensionOrigin, version, verify, close: control.close };
+  } catch (error) {
+    await control.close();
+    throw error;
+  }
 }

@@ -54,7 +54,10 @@ function readRun(row: Row): Run {
     id: row.id, cursor: row.cursor, status: row.status, authorizationAcknowledged: true,
     scope: parseJson(row.scope), createdAt: row.created_at, updatedAt: row.updated_at,
     cancelRequestedAt: row.cancel_requested_at,
-    executionMode: row.execution_mode,
+    executionMode: row.public_execution_policy !== null ? "public-readonly" : row.execution_mode,
+    ...(row.public_execution_policy !== null ? {
+      executionPolicy: row.public_execution_policy, assetPolicy: row.public_asset_policy,
+    } : {}),
     ...(row.controlled_site_id ? { controlledSiteId: row.controlled_site_id } : {}),
   });
 }
@@ -114,8 +117,15 @@ export class Repository {
   close(): void { this.db.close(); }
   reproductionService() { return createReproductionService(this.db, this, this.clock); }
   persistedExecutionLimits() {
+    const policy = this.persistedWorkerPolicy();
+    return policy ? workerExecutionLimits(policy) : null;
+  }
+  persistedSessionTimeoutSeconds(): number | null {
+    return this.persistedWorkerPolicy()?.sessionSeconds ?? null;
+  }
+  private persistedWorkerPolicy() {
     const row = this.db.prepare("SELECT configuration FROM worker_policy WHERE singleton=1").get();
-    return row ? workerExecutionLimits(workerPolicySchema.parse(parseJson(row.configuration))) : null;
+    return row ? workerPolicySchema.parse(parseJson(row.configuration)) : null;
   }
   protected now(): string { return new Date(this.clock()).toISOString(); }
   protected transaction<T>(work: () => T): T {
@@ -199,6 +209,7 @@ export class Repository {
   }
 
   createRerun(owner: string, key: string, parentRunId: string, input: RerunRequest): { run: Run; created: boolean } {
+    if (this.getRun(owner, parentRunId).executionMode === "public-readonly") throw new ServiceError("public_rerun_unsupported", 400);
     return this.transaction(() => {
       const result = insertRerun(this.db, this, owner, key, parentRunId, input, this.now());
       if (result.created) this.append(result.run.id, null, "run.created", { status: "queued" });
@@ -263,9 +274,10 @@ export class Repository {
       });
       const id = randomUUID();
       const time = this.now();
-      this.db.prepare(`INSERT INTO runs(id, owner_id, idempotency_key, request_hash, status, scope, created_at, updated_at, execution_mode, scenario, controlled_site_id)
-        VALUES(?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)`).run(id, owner, key, hash, JSON.stringify(request.scope), time, time,
-          controlled ? "controlled-fixture" : "website", controlled?.scenario ?? null, controlled?.controlledSiteId ?? null);
+      this.db.prepare(`INSERT INTO runs(id, owner_id, idempotency_key, request_hash, status, scope, created_at, updated_at, execution_mode, scenario, controlled_site_id, public_execution_policy, public_asset_policy)
+        VALUES(?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, owner, key, hash, JSON.stringify(request.scope), time, time,
+          controlled ? "controlled-fixture" : "website", controlled?.scenario ?? null, controlled?.controlledSiteId ?? null,
+          request.executionPolicy ?? null, request.assetPolicy ?? null);
       for (const { assignment, persona } of snapshots) {
         const attempt = attemptSchema.parse({
           id: randomUUID(), runId: id, persona, goal: assignment.goal, criteria: assignment.criteria,

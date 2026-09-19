@@ -4,18 +4,52 @@ This reference covers the typed execution engine, the legacy fixture integration
 and layer04b's reusable controlled-site execution. Layer04 integrates it with a separate
 [durable worker](WORKER.md), protected demo admission, private artifact mapping
 and owner SSE. The standalone layer03 command remains a separate manual ledger.
-Arbitrary website execution is disabled (release blocker #8). Passing a public target to the cloud
-factory fails before a browser is launched. This is a release blocker, not a
+Public website admission is **hard-disabled in this offline checkpoint** (release
+blocker #8), even with `ENABLE_PUBLIC_RUNS=true`. The source-level
+`PUBLIC_EXECUTION_IMPLEMENTATION_READY=false` stop applies to API admission,
+worker execution and both direct public/native factories. Paid public CLI modes
+reject before provider operations; there is no approval-file or environment
+override. The legacy controlled factory rejects public targets. This is a release blocker, not a
 claim that the final product no longer needs authorized arbitrary websites.
+
+## Offline checkpoint and deferred public execution
+
+The user requested a mergeable checkpoint followed by a new public-browser plan.
+This preserves implemented immutable admission contracts, historical idempotency,
+resource journals, native composition, scoped CDP routing, bounded HTTP/Gateway
+transports, source binding and offline regression coverage. Controlled execution
+remains available under its existing gates. Public activation is not part of this
+checkpoint, and #1, #8 and #16 remain open.
+
+Native factory lifecycle code is an **unreachable prototype**, not approved hosted
+cleanup: pinned Stagehand 4.1's branded browser `close()` can issue independently
+retried provider releases, including late connection results. Do not enable it.
+The separate metadata-only loopback adapter and SDK transport monitor are offline
+prototypes and are not wired into that factory. A successful SDK extraction test
+with synthetic Gateway responses does not establish production WSS startup,
+failure cleanup or a genuine external objective.
+
+Local composed probes have also exhibited intermittent, fail-closed
+`native_proxy_endpoint_unconfirmed` startup failures; their cause is unresolved.
+Passing offline reruns are not hosted startup-reliability proof. The checkpoint
+does not relax refusal evidence, widen its deadlines or add automatic retries.
+
+Deferred work includes a reviewed supported SDK connection/termination lifecycle,
+settlement of inner HTTP retries before recycling metadata ports, actual hosted
+version/profile/native-policy conformance, and a separately approved external-goal
+proof with independently verified accounting and closure. Timer expiry is never
+retirement evidence. No provider reads, uploads, allocations or model calls were
+authorized by this checkpoint. A new plan and source changes are required before
+reconsidering public activation.
 
 ## Public HTTP transport library (offline, not enabled)
 
-`src/server/execution/public-transport.ts` is a **server-only, unconnected**
-component for future interception. It does not install browser routes, allocate
-resources, add an endpoint, enable admission or alter controlled-fixture transport.
-Public jobs remain blocked. Interception provides functionality, **not the security
-boundary**: a separately proven native policy must block every missed request and
-all direct fallback before a public factory can use this library. Combined real
+`src/server/execution/public-transport.ts` is a **server-only** component used by
+the combined factory's direct CDP interception adapter. The library itself does
+not allocate resources, enable admission or alter controlled-fixture transport.
+Public admission remains blocked pending combined verification. Interception
+provides functionality, **not the security boundary**: the separately attested
+native policy blocks missed requests and direct fallback. Combined real
 browser/transport evidence is still required for #8; library tests do not close it.
 
 `createPublicTransport({authorize, authorizeBrowserHeaders?, assertActive, signal,
@@ -507,8 +541,22 @@ unsafe opt-out. Until these inputs and real positive/negative proofs exist,
 The offline integration adds `composed-extension.ts`, `native-browser.ts`,
 `native-policy-session.ts`, `native-proxy-attestation.ts` and
 `native-resources.ts`. These are not public API admission or hosted acceptance.
-The public integration CLI currently accepts **only** `--offline-preflight`
-from a clean verified deployment package; paid modes fail before allocation.
+The maintained public integration CLI accepts only offline modes. Its
+`--offline-preflight` checks a clean verified deployment package;
+`--offline-native-probe` executes the actual TSX entry path with a local composed
+browser, real SDK initialization, native attestation and read-only driver/CDP
+mechanics against explicitly synthetic owned responses. It uses no provider
+configuration or inference and is not public-site acceptance. Paid modes fail
+before allocation.
+
+The deployable package source fingerprint is not the proof-harness fingerprint:
+release packaging intentionally omits manual integration scripts and test sources.
+The separate `publicHarnessDigest` binds the existing whole-source advanced
+digest plus native/public browser runner configurations and the five public
+execution contracts. Any paid approval must bind both digests, the package and
+composed archive digests, and the persistent ledger digest. Changing a CLI,
+test/configuration, policy byte or contract invalidates that approval even if
+`BUILD_ID` is unchanged.
 
 The composer accepts only the audited Stagehand 4.1.0 archive with SHA-256
 `8efc7d171a625cca95c02d02d369b59435fae776cae6c7dd2f6fe72eb19785c0`.
@@ -531,6 +579,20 @@ the actual profile's empty WebRTC per-origin override list. Unknown versions,
 shapes, conflicts, restart/lost-worker state and drift fail closed. No code
 clears or restores the policy while a remote browser may remain alive.
 
+Native control uses an owned raw CDP target session for the original registered
+worker, not Playwright worker-list membership as readiness. It acknowledges only
+that session's startup wait with `Runtime.runIfWaitingForDebugger` after
+`Runtime.enable`; this is not `Debugger.resume` and does not stop another
+debugger or trace. Fresh-worker diagnostics established that a `starting/new`
+worker can answer primitive evaluations while extension bindings are unavailable.
+Admission therefore requires the actual matching target, worker-origin execution
+context, unique context identity, extension runtime ID, initialized SDK/native
+objects and installed-byte proofs. A bounded, pure binding-readiness query precedes
+the full location/runtime identity guard; invoking native getters before that
+readiness point can itself stall startup. Lost/replaced contexts latch failure. Only
+fixed programs and JSON-encoded trusted inputs cross this control surface.
+File URLs are resolved against the verified native target URL, not a page value.
+
 Proxy refusal is not inferred merely from `ERR_PROXY_CONNECTION_FAILED`.
 A short **caller-owned** CDP NetLog trace must also contain complete paired
 `TCP_CONNECT` and `TCP_CONNECT_ATTEMPT` records for exactly
@@ -549,23 +611,96 @@ upload/allocation. It records archive identity, known extension/session IDs,
 unknown upload outcomes and late callbacks. Upload/session creation is never
 automatically retried. Cleanup drains Gateway work and reads metrics, requests
 remote release while attachments and policy remain installed, and checks the
-exact correlated session. An extension may be deleted only after matching
-`COMPLETED` readback, or trusted proof no session allocation was dispatched.
-Deletion itself requires exact-ID not-found confirmation. Unknown or other
-remote states quarantine the resource; they are not reported as clean closure.
+exact correlated session. An extension may be deleted after matching `COMPLETED`
+readback, or trusted proof no session allocation was dispatched. Operational
+retirement also permits `ERROR`/`TIMED_OUT` only when two independent reads match
+the exact session, project, correlation token, terminal status, start and end
+timestamps; valid timestamps must satisfy start <= end <= now. This follows the
+provider's [session termination contract](https://docs.browserbase.com/platform/browser/getting-started/manage-browser-session)
+and terminal states used by worker accounting. These outcomes remain failed:
+they never become clean `COMPLETED` live acceptance. Missing, conflicting or
+unknown closure proof quarantines the extension. Deletion itself requires
+authenticated exact-ID not-found confirmation.
+
+The absolute execution deadline starts immediately before session-create
+dispatch, not after native bootstrap. It reserves 80 seconds before the provider
+TTL for the bounded Gateway drain, metrics, release and readback path. The worker
+must reduce its loop duration to the remaining absolute deadline. Public native
+sessions with TTL <=80 seconds are rejected before any provider operation;
+TTL remains capped at 300 seconds. No browser retry renews the budget.
 
 This composition does not remove any remaining remote-policy, broker,
 end-to-end public-objective or accounting proof requirement below.
 
-The independent read-only driver option permits scoped link clicks, navigation,
+The independent read-only driver option permits scoped link following, navigation,
 back, scrolling and bounded waits. It rejects button/input/select/key actions,
 downloads and new-tab links before dispatch, including a previously observed link
-replaced with a button. The normal controlled driver is unchanged. Actual
+replaced with a button. A link `click` action navigates to its freshly validated
+captured URL; it does not dispatch a physical click or run page click handlers.
+Replacing the element after validation cannot retarget the action. The normal
+controlled driver's physical clicks are unchanged. Actual
 read-only driver regressions use an explicitly synthetic owned document; they
 are not public-site execution evidence. Observations retain real control state:
 controls are not falsely marked disabled or removed to force a model verdict.
 The Gateway receives the finite action capability in its instructions, while the
 driver remains the action guard and criterion/citation rules stay unchanged.
+
+#### Combined HTTP routing surface
+
+`public-cloud.ts` composes the native lifecycle, `public-network.ts`, the real
+Node broker and the existing criterion engine. Main-document navigation uses the
+immutable origin/subdomain/path scope; `public-http-readonly-v1` separately
+permits bounded public HTTP(S) assets, including cross-origin CDNs and paths
+outside the document prefix. Child documents do not receive an asset exception.
+The supported HTTP verbs are not a guarantee that an arbitrary site's GET
+handler is free of application side effects; the owner must authorize the target
+and objective.
+
+Direct, owned CDP Fetch target sessions pause and authorize every redirect hop.
+No public-page request is continued to the browser's network. Fulfillment
+preserves duplicate response headers, cookies, CSP, CORS, original URL and browser
+redirect semantics. Header permits bind actual paused browser request provenance
+to its exact destination/method/kind, including anonymous site cookies, Origin and
+Referer. They never copy application/provider headers or a previous hop's values.
+Authorization, unknown custom headers and unsupported preflight fields fail.
+The adapter deliberately omits browser UA, enumerated Sec-Fetch/Sec-CH metadata,
+priority and Upgrade-Insecure-Requests; metadata-dependent sites are unsupported,
+not faithfully replayed. Compression, streaming, frames, workers, popups,
+downloads, WebSocket/WebTransport and arbitrary writes remain unsupported.
+Native policy, not interception, blocks the missed channels.
+
+The sole trusted Gateway exception uses the actual registered root extension
+worker or exact installed offscreen target, fixed HTTPS endpoint and POST. Page
+URLs, missing frame identifiers and forged headers never grant it. Full POST
+bytes come from the correlated CDP Network request, not potentially truncated
+Fetch event data. Actual Chromium fixture regressions hash >512 KiB Unicode DOM
+plus base64-screenshot JSON at an owned upstream from both worker and offscreen
+targets, preserving body bytes and authorization/content-type headers. These
+offline mechanics tests neither contact the provider nor prove remote Gateway
+compatibility. Public routing and native failures are unsupported/infrastructure
+diagnostics, never confirmed site defects.
+
+An additional actual-SDK offline test connects the pinned Browserbase adapter to
+owned Chromium through a synthetic local metadata record, then calls
+`Stagehand.extract` against an owned Gateway-response fixture. Both extraction
+and auxiliary metadata requests retain the supplied session attribution and
+one-key credentials; the first request contains the actual visible heading, and
+SDK token metrics include both calls. Replies are synthetic, not paid inference
+or public-objective acceptance. Public wire accounting charges every additional
+SDK request, including auxiliary metadata calls, against the existing `retry`
+budget bucket rather than counting one SDK operation as one inference.
+
+Gateway forwarding uses a fixed-endpoint Node HTTPS streaming transport, never the
+public browser's shared cookie jar. It enforces 8 MiB request/4 MiB streamed response,
+16 KiB headers, 64 requests, concurrency two, 64 MiB aggregate retained header/body
+bytes and 30-second request deadlines, plus job cancellation. It rejects redirects,
+compressed responses, interim responses and trailers; it does not retry or use an
+environment proxy. Captured browser Cookie/Cookie2 headers are omitted
+from this control request; Gateway Set-Cookie is never fulfilled into Chrome.
+Public-target response cookies keep their normal browser semantics. Actual
+worker/offscreen `credentials: include` regressions prove both directions using
+seeded browser cookies and owned upstream Set-Cookie responses. The Browserbase
+and Stagehand API control hosts are not public target/asset destinations.
 
 An external hosted proxy is **not assumed to be the only possible solution**.
 `src/server/execution/native-policy-extension/` is a maintained, isolated MV3

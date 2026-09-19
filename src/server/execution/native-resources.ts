@@ -9,6 +9,28 @@ export const nativeResourceSchema = z.strictObject({
   sessionId: z.uuid().optional(),
 });
 export type NativeResource = z.infer<typeof nativeResourceSchema>;
+export type NativeSessionReadback = Readonly<{
+  sessionId: string;
+  status: string;
+  startedAt?: string;
+  endedAt?: string;
+}>;
+export type NativeSessionClosure = NativeSessionReadback & Readonly<{ independent?: NativeSessionReadback }>;
+const timestamp = z.iso.datetime({ offset: true });
+
+/** Operational retirement is distinct from clean COMPLETED-only acceptance. */
+export function isNativeSessionRetired(remote: NativeSessionClosure | undefined): boolean {
+  if (!remote || !z.uuid().safeParse(remote.sessionId).success) return false;
+  if (remote.independent && (remote.independent.sessionId !== remote.sessionId
+    || remote.independent.status !== remote.status || remote.independent.startedAt !== remote.startedAt
+    || remote.independent.endedAt !== remote.endedAt)) return false;
+  if (remote.status === "COMPLETED") return true;
+  if (!["ERROR", "TIMED_OUT"].includes(remote.status) || !remote.independent
+    || !timestamp.safeParse(remote.startedAt).success || !timestamp.safeParse(remote.endedAt).success) return false;
+  const start = Date.parse(remote.startedAt!);
+  const end = Date.parse(remote.endedAt!);
+  return Number.isFinite(start) && Number.isFinite(end) && start > 0 && end >= start && end <= Date.now();
+}
 type Provider = {
   upload(): Promise<{ id: string }>;
   delete(id: string): Promise<void>;
@@ -90,7 +112,7 @@ export class NativeResources {
   }
 
   /** Never delete a native extension while a possibly-live remote browser uses it. */
-  close(remote?: { sessionId: string; status: string }): Promise<void> {
+  close(remote?: NativeSessionClosure): Promise<void> {
     return this.cleanup ??= (async () => {
       if (!this.uploadDispatched) {
         if (this.uploadStarted && !this.journalFailed) this.record({ state: "not_dispatched" });
@@ -98,7 +120,7 @@ export class NativeResources {
       }
       const id = this.resource.extensionId;
       if (this.journalFailed || !id || (this.resource.sessionAllocationAttempted
-        && (!this.resource.sessionId || remote?.sessionId !== this.resource.sessionId || remote.status !== "COMPLETED"))) {
+        && (!this.resource.sessionId || remote?.sessionId !== this.resource.sessionId || !isNativeSessionRetired(remote)))) {
         this.record({ state: "quarantined" });
         throw new Error("native_extension_quarantined");
       }

@@ -5,6 +5,8 @@ import { api } from "@/lib/client-api";
 import { reproductionViewSchema, type ReproductionView } from "@/lib/reproduction-contracts";
 import { useOwnerSession } from "./owner-session";
 import "./reproduction-panel.css";
+import { runSchema } from "@/lib/contracts";
+import { PUBLIC_EXECUTION_LIMITS } from "@/lib/public-execution";
 
 export function ReproductionPanel({ runId, attemptId, sourceReady = false }: {
   runId: string; attemptId: string; sourceReady?: boolean;
@@ -15,9 +17,24 @@ export function ReproductionPanel({ runId, attemptId, sourceReady = false }: {
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
   const [authorizationAcknowledged, setAuthorizationAcknowledged] = useState(false);
+  const [publicReadonly, setPublicReadonly] = useState(false);
+  const [reproductionSupported, setReproductionSupported] = useState(false);
   const pending = useRef(false);
   const active = job?.status === "queued" || job?.status === "running";
   const jobId = job?.id;
+  useEffect(() => {
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const run = runSchema.parse(await api(`/runs/${encodeURIComponent(runId)}`, { signal: controller.signal }));
+        if (!controller.signal.aborted && run.id === runId) {
+          setPublicReadonly(run.executionMode === "public-readonly");
+          setReproductionSupported(run.executionMode === "controlled-fixture" && (!run.controlledSiteId || run.controlledSiteId === "store"));
+        }
+      } catch { /* Unavailable metadata cannot authorize paid reproduction. */ }
+    })();
+    return () => controller.abort();
+  }, [runId]);
   useEffect(() => {
     if (!active || !jobId) return;
     const controller = new AbortController();
@@ -41,7 +58,7 @@ export function ReproductionPanel({ runId, attemptId, sourceReady = false }: {
   }, [active, jobId, runId, attemptId, refresh]);
 
   async function command(cancel = false) {
-    if (!csrfToken || pending.current || (!cancel && (!authorizationAcknowledged || !sourceReady))) return;
+    if (!reproductionSupported || !csrfToken || pending.current || (!cancel && (!authorizationAcknowledged || !sourceReady))) return;
     pending.current = true;
     setBusy(true);
     setError("");
@@ -58,10 +75,14 @@ export function ReproductionPanel({ runId, attemptId, sourceReady = false }: {
       setError("Reproduction workflow unavailable. No browser was confirmed started or stopped by this response.");
     } finally { pending.current = false; setBusy(false); }
   }
+  if (publicReadonly) return <section className="reproduction-panel" aria-label="Reproduction unsupported">
+    <p>{PUBLIC_EXECUTION_LIMITS.reproduction}</p>
+  </section>;
   return <section className="reproduction-panel" aria-label="Bounded reproduction">
     <h3>Reproduce &amp; reduce</h3>
     <p>Controlled-store second-coupon failures only. Recorded safe actions, a fresh seeded cart per candidate,
       and an exact failure predicate. No credentials, purchases, public targets, or model calls.</p>
+    {!reproductionSupported && <p>Reproduction requires verified controlled-store metadata.</p>}
     {!job && !sourceReady && <p>Available after this attempt finishes as a target failure and browser cleanup is confirmed.</p>}
     {!job && sourceReady && <>
       <p>Production maximum: 3 candidate browsers, each reserving the operator&apos;s session limit
@@ -72,7 +93,7 @@ export function ReproductionPanel({ runId, attemptId, sourceReady = false }: {
           onChange={(event) => setAuthorizationAcknowledged(event.target.checked)} />
         I authorize these bounded paid browser sessions against the trusted controlled fixture.
       </label>
-      <button type="button" disabled={busy || !csrfToken || !authorizationAcknowledged} onClick={() => void command()}>
+      <button type="button" disabled={!reproductionSupported || busy || !csrfToken || !authorizationAcknowledged} onClick={() => void command()}>
         {busy ? "Preparing…" : "Start or resume bounded reproduction"}
       </button>
     </>}

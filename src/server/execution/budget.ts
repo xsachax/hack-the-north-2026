@@ -20,10 +20,14 @@ export class ModelBudget {
   snapshot(): ModelOperations { return { ...this.counts }; }
   close(): void { this.closed = true; }
 
-  charge(operation: ModelOperation, signal: AbortSignal): void {
+  assertActive(signal: AbortSignal): void {
     this.signal.throwIfAborted();
     signal.throwIfAborted();
     if (this.closed) throw new ExecutionError("infra", "Model budget closed");
+  }
+
+  charge(operation: ModelOperation, signal: AbortSignal): void {
+    this.assertActive(signal);
     if (!this.remaining) throw new ExecutionError("limit", "Model-call budget exhausted");
     this.counts[operation]++;
     this.counts.total++;

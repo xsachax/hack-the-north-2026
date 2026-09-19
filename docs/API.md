@@ -5,9 +5,33 @@ explicit demo/controlled-site admission queues paid work for a separately runnin
 The operator dashboard consumes these owner-scoped endpoints; mock preview data
 is separate from durable worker execution.
 
-The offline [native egress policy candidate](EXECUTION.md#native-browser-policy-candidate-offline-phase-a)
-does not enable an API capability. Public `/runs` requests still terminate as
-`blocked_unsupported` without allocation; `/capabilities` remains truthful.
+The combined [native/public execution path](EXECUTION.md#native-browser-policy-candidate-offline-phase-a)
+remains disabled pending integrated acceptance. Unversioned website `/runs`
+requests retain `blocked_unsupported` without allocation. New public opt-in is a
+distinct immutable contract; `/capabilities` must report its actual readiness.
+
+### Explicit public opt-in (not enabled by default)
+
+A new authorized scoped `/runs` request must include both additional fields:
+
+```json
+{"executionPolicy":"native-public-v1","assetPolicy":"public-http-readonly-v1"}
+```
+
+The server derives canonical `executionMode: "public-readonly"`; clients do not
+select a different executor. Admission requires operator `ENABLE_PUBLIC_RUNS`
+(default `false`) and implementation readiness. Neither bypasses per-session
+native attestation. Missing/mismatched policies, unavailable execution and
+unsupported advanced workflows fail explicitly.
+
+Policies, target scope, objectives, criteria and personas are immutable snapshots.
+Old saved/queued website requests and their idempotency keys never upgrade into
+paid public jobs when flags change. New read-only execution uses fresh profiles,
+scoped document navigation and a separately disclosed public HTTP asset policy;
+it does not silently substitute a fixture or saved context. Returning/persisted
+contexts, takeover, public reruns/comparisons and reproduction/reduction are not
+part of this initial capability. Existing owner-cookie, CSRF, exact-Origin,
+access-code, quota and owner-scoped evidence/SSE protections are unchanged.
 
 ## Deployment and identity
 

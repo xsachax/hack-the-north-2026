@@ -13,17 +13,28 @@ import { publicPageUrl } from "../public-page-url";
 import { createContextProvider, type ContextProvider } from "../workflows/context-provider";
 import { runCouponWithWorkerDriver } from "../workflows/reproduction-runner";
 import { fixtureNavigationMarker } from "../workflows/reproduction-grounding";
+import type { PublicExecutionOptions } from "../execution/public-cloud";
+import type { NativeCloudUsage } from "../execution/native-browser";
+import type { NativeResource } from "../execution/native-resources";
+import { PUBLIC_EXECUTION_IMPLEMENTATION_READY } from "../public-execution-readiness";
+import { PUBLIC_ASSET_POLICY, PUBLIC_EXECUTION_POLICY } from "../../lib/public-execution";
 
 export type WorkerDependencies = {
   launch: (options: FixtureExecutionOptions) => Promise<{ driver: BrowserDriver; brain: Brain; usage: CloudUsage }>;
+  launchPublic?: (options: PublicExecutionOptions) => Promise<{
+    driver: BrowserDriver; brain: Brain; usage: NativeCloudUsage;
+    signal?: AbortSignal; executionDeadlineMs?: number;
+  }>;
+  publicEnabled?: boolean;
+  publicImplementationReady?: boolean;
   recover: ReturnType<typeof createCloudRecovery>["recover"];
   artifacts: (runId: string, attemptId: string) => ArtifactSinks;
   execute?: typeof executePersona;
-  diagnostic?: (code: "worker_attempt_failed" | "worker_lease_lost" | "worker_recovery_failed") => void;
+  diagnostic?: (code: "worker_attempt_failed" | "worker_lease_lost" | "worker_recovery_failed" |
+    "worker_public_recovery_checkpoint_disabled") => void;
   knownSecrets?: readonly string[];
   contextProvider?: ContextProvider;
 };
-
 function failedResult(cancelled: boolean, cleanup: ExecutionResult["cleanup"]): ExecutionResult {
   const status = cancelled && cleanup.status === "closed" ? "cancelled" : "infrastructure_failed";
   const reason = status === "cancelled" ? "Execution cancelled during startup" : "Worker execution failed";
@@ -44,6 +55,14 @@ export class DurableWorker {
     private readonly fixturePort: number,
   ) {}
 
+  private publicAdmission() {
+    return {
+      enabled: this.dependencies.publicEnabled === true,
+      implementationReady: PUBLIC_EXECUTION_IMPLEMENTATION_READY &&
+        this.dependencies.publicImplementationReady === true && !!this.dependencies.launchPublic,
+    };
+  }
+
   async run(signal: AbortSignal): Promise<void> {
     const stop = new AbortController();
     const combined = AbortSignal.any([signal, stop.signal]);
@@ -53,7 +72,7 @@ export class DurableWorker {
         this.repository.pumpReproductions();
         let claim: Claim | null;
         while (!combined.aborted && this.active.size < this.repository.policy.globalConcurrency &&
-          (claim = this.repository.claim(this.id))) {
+          (claim = this.repository.claim(this.id, this.publicAdmission()))) {
           const task = this.executeClaim(claim, combined);
           this.active.add(task);
           void task.then(() => this.active.delete(task), () => {
@@ -73,7 +92,18 @@ export class DurableWorker {
   }
 
   async executeClaim(claim: Claim, shutdown: AbortSignal): Promise<void> {
+    if (claim.recovery && !PUBLIC_EXECUTION_IMPLEMENTATION_READY &&
+      (claim.executionMode !== "controlled-fixture" || this.repository.hasPublicRecoveryState(claim.jobId))) {
+      (this.dependencies.diagnostic ?? console.error)("worker_public_recovery_checkpoint_disabled");
+      return;
+    }
     const controller = new AbortController();
+    let activeSignal = controller.signal;
+    let nativeInterrupted = false;
+    let nativeCleanupStarted = false;
+    let removeNativeAbortListener: (() => void) | undefined;
+    let nativeDeadlineExpired = false;
+    let nativeDeadlineMs: number | undefined;
     let leaseLost = false;
     const diagnostic = this.dependencies.diagnostic ?? ((code) => console.error(code));
     const abort = () => controller.abort();
@@ -87,8 +117,25 @@ export class DurableWorker {
         throw error;
       }
     };
-    const control = claim.reproductionCandidateId ? undefined : this.repository.takeoverControl(claim, assertLease);
-    const assertActive = () => { controller.signal.throwIfAborted(); assertLease(); };
+    const recordNative = (resource: Readonly<NativeResource>): undefined => {
+      try { return this.repository.nativeResource(claim, resource); }
+      catch (error) {
+        if (error instanceof LeaseLostError) {
+          leaseLost = true;
+          controller.abort();
+        }
+        throw error;
+      }
+    };
+    const control = claim.reproductionCandidateId || claim.executionMode !== "controlled-fixture"
+      ? undefined : this.repository.takeoverControl(claim, assertLease);
+    const assertActive = () => { activeSignal.throwIfAborted(); assertLease(); };
+    const beginNativeCleanup = () => {
+      if (!controller.signal.aborted && nativeDeadlineMs !== undefined && Date.now() >= nativeDeadlineMs) {
+        nativeDeadlineExpired = true;
+      }
+      nativeCleanupStarted = true;
+    };
     const heartbeat = setInterval(() => {
       try { if (this.repository.heartbeat(claim)) controller.abort(); }
       catch {
@@ -108,6 +155,12 @@ export class DurableWorker {
           // Cancellation/shutdown must not prevent reconciliation of a paid orphan.
           const outcome = await this.dependencies.recover({
             correlationToken: claim.correlationToken, sessionId: claim.sessionId,
+            ...(claim.executionMode === "public-readonly" ? { native: {
+              resource: this.repository.reconcileNativeResource(claim),
+              predispatchProven: this.repository.nativePredispatchProof(claim),
+              assertActive: () => assertLease(true),
+              onResource: recordNative,
+            } } : {}),
           });
           this.repository.recover(claim, outcome);
         } catch (error) {
@@ -116,6 +169,20 @@ export class DurableWorker {
           this.repository.recover(claim, { confirmed: false, sessions: [] });
         }
         return;
+      }
+      if (claim.executionMode !== "controlled-fixture") {
+        assertActive();
+        try {
+          if (!PUBLIC_EXECUTION_IMPLEMENTATION_READY) throw new Error("blocked_unsupported");
+          this.repository.assertPublicClaim(claim, this.publicAdmission());
+        }
+        catch (error) {
+          if (error instanceof Error && error.message === "blocked_unsupported") {
+            this.repository.blockUnsupported(claim);
+            return;
+          }
+          throw error;
+        }
       }
       const raw = this.dependencies.artifacts(claim.runId, claim.attempt.id);
       const evidenceIds = new Map<string, string>();
@@ -133,32 +200,66 @@ export class DurableWorker {
         telemetry: (record) => save(() => raw.telemetry(record), "console"),
       };
       assertActive();
-      const contextReference = await this.repository.prepareContext(claim, this.dependencies.contextProvider);
+      const contextReference = claim.executionMode === "controlled-fixture"
+        ? await this.repository.prepareContext(claim, this.dependencies.contextProvider) : undefined;
       assertActive();
       launchInvoked = true;
-      const execution = await this.dependencies.launch({
-        mode: "controlled-fixture", runId: claim.runId, personaId: claim.attempt.persona.id,
-        correlationToken: claim.correlationToken,
-        assertActive: () => { assertActive(); if (launched) control?.assertDispatch(); }, targetUrl: claim.scope.targetUrl,
-        scope: claim.scope, controlledSiteId: claim.controlledSiteId,
-        ...(contextReference ? { contextReference } : {}),
-        criteria: claim.attempt.criteria, fixturePort: this.fixturePort,
-        ...(claim.controlledSiteId === "project-board" ? {} : {
-          fixtures: { ...fixedFixtures, secondCoupon: claim.scenario === "second-coupon" },
-        }),
+      const common = {
+        runId: claim.runId, personaId: claim.attempt.persona.id, correlationToken: claim.correlationToken,
+        assertActive: () => { assertActive(); if (launched) control?.assertDispatch(); },
+        targetUrl: claim.scope.targetUrl, scope: claim.scope, criteria: claim.attempt.criteria,
         viewport: claim.attempt.persona.device === "phone" ? { width: 390, height: 844 } : { width: 1280, height: 900 },
         artifacts, signal: controller.signal,
-        cleanupJson: async (value) => {
+        cleanupJson: async (value: unknown) => {
           this.repository.assertLease(claim, true);
           const artifact = await raw.json(value);
           this.repository.assertLease(claim, true);
           this.repository.recordCleanupArtifact(claim, artifact);
           return artifact;
         },
-        onSession: async (reference) => { this.repository.sessionReference(claim, reference); },
-      });
+        onSession: async (reference: Parameters<WorkerRepository["sessionReference"]>[1]) => {
+          this.repository.sessionReference(claim, reference);
+        },
+      };
+      let publicExecution: Awaited<ReturnType<NonNullable<WorkerDependencies["launchPublic"]>>> | undefined;
+      const execution = claim.executionMode === "public-readonly"
+        ? publicExecution = await this.dependencies.launchPublic!({
+          ...common, mode: "public-readonly", executionPolicy: PUBLIC_EXECUTION_POLICY, assetPolicy: PUBLIC_ASSET_POLICY,
+          onResource: recordNative,
+        })
+        : await this.dependencies.launch({
+          ...common, mode: "controlled-fixture", controlledSiteId: claim.controlledSiteId,
+          ...(contextReference ? { contextReference } : {}),
+          fixturePort: this.fixturePort,
+          ...(claim.controlledSiteId === "project-board" ? {} : {
+            fixtures: { ...fixedFixtures, secondCoupon: claim.scenario === "second-coupon" },
+          }),
+        });
       launched = execution;
       usage = execution.usage;
+      const limits = workerExecutionLimits(this.repository.policy, claim.attempt.limits);
+      if (publicExecution) {
+        const nativeSignal = publicExecution.signal;
+        if (nativeSignal) {
+          activeSignal = AbortSignal.any([controller.signal, nativeSignal]);
+          const nativeAborted = () => {
+            if (!nativeCleanupStarted && !controller.signal.aborted) nativeInterrupted = true;
+          };
+          nativeSignal.addEventListener("abort", nativeAborted, { once: true });
+          removeNativeAbortListener = () => nativeSignal.removeEventListener("abort", nativeAborted);
+          if (nativeSignal.aborted) nativeAborted();
+        }
+        nativeDeadlineMs = publicExecution.executionDeadlineMs;
+        if (nativeDeadlineMs !== undefined) {
+          if (!Number.isSafeInteger(nativeDeadlineMs)) throw new Error("invalid_native_execution_deadline");
+          const remaining = nativeDeadlineMs - Date.now();
+          if (remaining <= 0) {
+            nativeDeadlineExpired = true;
+            throw new Error("native_execution_deadline");
+          }
+          limits.maxDurationMs = Math.min(limits.maxDurationMs, remaining);
+        }
+      }
       let pageUrl: string | undefined;
       let lastChecks: ExecutionResult["checks"] = [];
       let recordedSteps = 0;
@@ -176,7 +277,8 @@ export class DurableWorker {
         }
         if (event.kind === "action") recordedSteps = event.steps;
         const navigation = event.kind === "action" && event.action.action === "navigate" &&
-          claim.controlledSiteId !== "project-board" ? fixtureNavigationMarker(event.action.value) : null;
+          claim.executionMode === "controlled-fixture" && claim.controlledSiteId !== "project-board"
+          ? fixtureNavigationMarker(event.action.value) : null;
         const stored = await artifacts.json(navigation ? { ...event, fixtureNavigation: navigation } : event);
         const evidenceId = evidenceIds.get(stored.key)!;
         this.repository.recordStep(claim, event.kind, evidenceId, {
@@ -218,14 +320,20 @@ export class DurableWorker {
       }
       result = await (this.dependencies.execute ?? executePersona)({
         persona: claim.attempt.persona, goal: claim.attempt.goal, criteria: claim.attempt.criteria,
-        signal: controller.signal,
-        limits: workerExecutionLimits(this.repository.policy, claim.attempt.limits),
+        signal: activeSignal,
+        limits,
       }, {
         control,
         driver: {
           observe: async (signal) => { assertActive(); control?.assertDispatch(); return execution.driver.observe(signal); },
           act: async (action, signal) => { assertActive(); control?.assertDispatch(); return execution.driver.act(action, signal); },
-          close: () => execution.driver.close(),
+          close: () => {
+            if (claim.executionMode === "public-readonly") {
+              assertLease(true);
+              beginNativeCleanup();
+            }
+            return execution.driver.close();
+          },
         },
         brain: {
           managesModelBudget: execution.brain.managesModelBudget,
@@ -252,11 +360,22 @@ export class DurableWorker {
         },
         onEvent,
       });
+      if (nativeInterrupted || nativeDeadlineExpired) {
+        const reason = nativeDeadlineExpired ? "Public execution deadline expired" : "Public execution interrupted by infrastructure";
+        result = { ...result, status: "infrastructure_failed", reason,
+          originalTerminal: { status: "infrastructure_failed", reason }, errors: [...result.errors, reason] };
+      }
       this.repository.finish(claim, result, usage);
     } catch (error) {
       let unexpectedCleanup: ExecutionResult["cleanup"] = { status: "failed", errors: ["Worker failure; release requires reconciliation"] };
       if (launched) {
-        try { unexpectedCleanup = await launched.driver.close(); }
+        try {
+          if (claim.executionMode === "public-readonly") {
+            assertLease(true);
+            beginNativeCleanup();
+          }
+          unexpectedCleanup = await launched.driver.close();
+        }
         catch { diagnostic("worker_attempt_failed"); }
       }
       if (leaseLost || error instanceof LeaseLostError) {
@@ -266,13 +385,13 @@ export class DurableWorker {
       diagnostic("worker_attempt_failed");
       if (error instanceof CloudStartupError) {
         usage = error.usage;
-        result = failedResult(controller.signal.aborted, error.cleanup);
+        result = failedResult(controller.signal.aborted && !nativeInterrupted && !nativeDeadlineExpired, error.cleanup);
       } else {
         if (!launchInvoked) {
           usage.allocationAttempted = false;
           unexpectedCleanup = { status: "closed", errors: [] };
         }
-        result = failedResult(controller.signal.aborted, unexpectedCleanup);
+        result = failedResult(controller.signal.aborted && !nativeInterrupted && !nativeDeadlineExpired, unexpectedCleanup);
       }
       try { control?.finish(); this.repository.finish(claim, result, usage); }
       catch (finishError) {
@@ -280,6 +399,7 @@ export class DurableWorker {
         diagnostic(finishError instanceof LeaseLostError ? "worker_lease_lost" : "worker_attempt_failed");
       }
     } finally {
+      removeNativeAbortListener?.();
       clearInterval(heartbeat);
       shutdown.removeEventListener("abort", abort);
       controller.abort();
@@ -291,6 +411,12 @@ export function productionDependencies(config: AppConfig): WorkerDependencies {
   const writer = new ArtifactWriter({ dataDir: config.DATA_DIR, knownSecrets: [config.BROWSERBASE_API_KEY] });
   return {
     launch: (options) => createFixtureExecution(config, options),
+    launchPublic: async (options) => {
+      const { createPublicExecution } = await import("../execution/public-cloud");
+      return createPublicExecution(config, options);
+    },
+    publicEnabled: config.ENABLE_PUBLIC_RUNS,
+    publicImplementationReady: PUBLIC_EXECUTION_IMPLEMENTATION_READY,
     recover: createCloudRecovery(config).recover,
     artifacts: (runId, attemptId) => writer.createSinks(runId, attemptId),
     knownSecrets: [config.BROWSERBASE_API_KEY],

@@ -1,3 +1,5 @@
+import { PUBLIC_EXECUTION_LIMITS, publicExecutionReason } from "./public-execution";
+
 export class ApiError extends Error {
   constructor(public status: number, public code: string) {
     super(code);
@@ -35,6 +37,12 @@ export function errorMessage(error: unknown): string {
   if (error.status === 409) return "This request conflicts with an existing request or state. No new run was created by this reply.";
   if (error.status === 429) return "The request or usage limit was reached. Wait at least a minute before trying again.";
   if (error.code === "demo_disabled") return "Controlled runs are disabled by the operator. No browser was started.";
+  if (error.code === "public_execution_checkpoint_disabled") return publicExecutionReason.offline_checkpoint;
+  if (error.code === "public_session_timeout_unsupported") return publicExecutionReason.session_timeout_unsupported;
+  if (error.code === "public_takeover_unsupported") return PUBLIC_EXECUTION_LIMITS.takeover;
+  if (error.code === "public_rerun_unsupported") return PUBLIC_EXECUTION_LIMITS.rerun;
+  if (error.code === "public_comparison_unsupported") return PUBLIC_EXECUTION_LIMITS.comparison;
+  if (error.code === "public_reproduction_unsupported") return PUBLIC_EXECUTION_LIMITS.reproduction;
   if (error.status === 400) return "The server rejected this configuration. Check the scope, criteria and persona selection.";
   return "The service is unavailable. Your input is still here; retry when it is available.";
 }

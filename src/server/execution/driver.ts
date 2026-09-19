@@ -69,7 +69,7 @@ export class ScopedBrowserDriver implements BrowserDriver {
       if (error.message === "FLASH_FLOOD_UNSUPPORTED_TABS") this.unsupported = "tabs_unsupported";
       const confirmed = options.classifyFunctionalError?.(error);
       this.record("pageerror", confirmed ?? "PAGE_ERROR");
-      this.signals.push({
+      this.addSignal({
         kind: confirmed ? "functional_failure" : "console",
         message: confirmed ?? "PAGE_ERROR",
         evidence: `page-main/${this.actionId}`,
@@ -84,7 +84,7 @@ export class ScopedBrowserDriver implements BrowserDriver {
       if (response.status() >= 400) {
         const pending = this.requests.get(response.request());
         this.record("http_error", "HTTP_ERROR", { url: response.url(), status: response.status(), actionId: pending?.actionId });
-        this.signals.push({ kind: "http", message: "HTTP_ERROR", status: response.status() });
+        this.addSignal({ kind: "http", message: "HTTP_ERROR", status: response.status() });
       }
     });
     this.page.on("requestfinished", (request) => {
@@ -100,8 +100,13 @@ export class ScopedBrowserDriver implements BrowserDriver {
     this.record("policy_block", "POLICY_BLOCK", { url });
   }
 
+  private addSignal(signal: TelemetrySignal): void {
+    if (this.signals.length < 256) this.signals.push(signal);
+    else if (!this.errors.length) this.errors.push("telemetry_limit");
+  }
+
   private record(kind: TelemetryRecord["kind"], code: string, extra: Partial<TelemetryRecord> = {}): void {
-    if (this.telemetry.length >= 256) { this.errors.push("telemetry_limit"); return; }
+    if (this.telemetry.length >= 256) { if (!this.errors.length) this.errors.push("telemetry_limit"); return; }
     this.telemetry.push(sanitizeTelemetry({
       timestamp: new Date().toISOString(), pageId: "page-main", actionId: extra.actionId ?? this.actionId,
       kind, code, url: extra.url ?? this.page.url(), status: extra.status, durationMs: extra.durationMs,
@@ -276,10 +281,18 @@ export class ScopedBrowserDriver implements BrowserDriver {
     switch (action.action) {
       case "click":
         if (this.options.keyboardOnly) throw new ExecutionError("unsupported", "pointer_disabled");
-        if (this.options.readOnly && !await locator!.evaluate((element) =>
-          element instanceof HTMLAnchorElement && !element.hasAttribute("download")
-          && ["", "_self"].includes(element.getAttribute("target") ?? ""))) {
-          throw new ExecutionError("unsupported", "read_only_link_required");
+        if (this.options.readOnly) {
+          const href = await locator!.evaluate((element) => {
+            if (!(element instanceof HTMLAnchorElement) || !element.isConnected
+              || element.hasAttribute("download") || !["", "_self"].includes(element.getAttribute("target") ?? "")) return null;
+            return element.hasAttribute("href") ? element.href : null;
+          });
+          if (href === null) throw new ExecutionError("unsupported", "read_only_link_required");
+          if (!href || !allowsNavigation(this.options.scope, href)) throw new ExecutionError("block", "link_out_of_scope");
+          this.guard(signal);
+          // Follow the captured URL, never re-resolve or dispatch a page-controlled click handler.
+          await this.page.goto(href, { waitUntil: "domcontentloaded" });
+          break;
         }
         if (candidate?.kind === "link") {
           const href = await locator!.getAttribute("href");

@@ -94,3 +94,31 @@ test("read-only link checks the current element and controlled actions remain un
   expect(await page.evaluate(() => Reflect.get(window, "dispatches"))).toBe(1);
   await controlled.close();
 });
+
+test("read-only link following cannot retarget a replacement during the validation-to-action gap", async ({ page }) => {
+  const driver = await setup(page);
+  const observed = await driver.observe(signal);
+  const next = observed.candidates.find((item) => item.label === "Next page")!;
+  const dispatches: string[] = [];
+  await page.exposeFunction("recordMutation", (kind: string) => { dispatches.push(kind); });
+  await page.locator(`[data-ff-candidate="${next.id}"]`).evaluate((element) => {
+    element.addEventListener("click", () => { Reflect.get(window, "recordMutation")("anchor"); });
+    const getAttribute = element.getAttribute.bind(element);
+    Object.defineProperty(element, "getAttribute", {
+      value(name: string) {
+        if (name === "target") queueMicrotask(() => {
+          const replacement = document.createElement("button");
+          replacement.textContent = "Replacement";
+          for (const attribute of element.attributes) replacement.setAttribute(attribute.name, attribute.value);
+          replacement.onclick = () => { Reflect.get(window, "recordMutation")("replacement"); };
+          element.replaceWith(replacement);
+        });
+        return getAttribute(name);
+      },
+    });
+  });
+  await driver.act(action("click", next.id), signal);
+  expect(page.url()).toBe(`${origin}/next`);
+  expect(dispatches).toEqual([]);
+  await driver.close();
+});

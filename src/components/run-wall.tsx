@@ -13,6 +13,7 @@ import {
 import { useOwnerSession } from "./owner-session";
 import { PersonaAvatar } from "./persona-avatar";
 import "./run-wall.css";
+import { PUBLIC_EXECUTION_LIMITS } from "@/lib/public-execution";
 
 const label = (value: string) => value.replaceAll("_", " ").replaceAll(".", " · ");
 const time = (value: string) => new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -121,10 +122,11 @@ function TakeoverViewer({ attempt, viewer, controllerId }: { attempt: Attempt; v
   </section>;
 }
 
-function AttemptCard({ attempt, events, summary, viewer, canView, atCapacity, stopping, finalizing, toggle, onEvidence }: {
+function AttemptCard({ attempt, events, summary, viewer, canView, atCapacity, stopping, finalizing, toggle, onEvidence, publicReadonly }: {
   attempt: Attempt; events: RunEvent[]; summary?: AttemptSummary;
   viewer: string | null; canView: boolean; atCapacity: boolean; stopping: boolean;
   finalizing: boolean; toggle: () => void; onEvidence: (id: string) => void;
+  publicReadonly: boolean;
 }) {
   const { revision } = useOwnerSession();
   const [controllerId] = useState(() => crypto.randomUUID());
@@ -165,7 +167,12 @@ function AttemptCard({ attempt, events, summary, viewer, canView, atCapacity, st
         {viewer ? "Hide viewer" : `Show viewer for ${attempt.persona.name}`}
       </button>
     </div>
-    {viewer && !quiet && <TakeoverViewer key={revision} attempt={attempt} viewer={viewer} controllerId={controllerId} />}
+    {publicReadonly && <p className="wall-muted">{PUBLIC_EXECUTION_LIMITS.takeover}</p>}
+    {viewer && !quiet && (publicReadonly ? <div inert className="wall-viewer-readonly">
+      <iframe className={`wall-browser wall-browser-${attempt.persona.device}`} src={takeoverViewerUrl(viewer)}
+        title={`Live browser for ${attempt.persona.name}`} loading="lazy" referrerPolicy="no-referrer"
+        tabIndex={-1} sandbox="allow-scripts allow-same-origin" />
+    </div> : <TakeoverViewer key={revision} attempt={attempt} viewer={viewer} controllerId={controllerId} />)}
     <details className="wall-results" open={isTerminal(attempt.status)}>
       <summary>Criteria & evidence · {attempt.criteria.length}</summary>
       <ul>{attempt.criteria.map((criterion) => {
@@ -272,6 +279,11 @@ export function RunWall({ runId }: { runId: string }) {
       </div>
     </section>
     {wall.error && <div className="wall-alert" role="alert">{wall.error} <button onClick={() => void controller.current?.refresh()}>Retry run data</button></div>}
+    {wall.run?.executionMode === "public-readonly" && <div className="wall-notice">
+      Public read-only run · {wall.run.executionPolicy} · {wall.run.assetPolicy}.
+      Navigation and child documents stay in scope; public HTTP(S) assets use a separate bodyless read-only policy.
+      {PUBLIC_EXECUTION_LIMITS.context} {PUBLIC_EXECUTION_LIMITS.rerun} {PUBLIC_EXECUTION_LIMITS.comparison} {PUBLIC_EXECUTION_LIMITS.reproduction}
+    </div>}
     {mutationError && <div className="wall-alert" role="alert">{mutationError} <button onClick={() => void cancel()}>Retry cancellation</button></div>}
     {stopping && <div className="wall-notice" role="status">Cancellation requested. Live viewers are hidden. This is intent to stop, not confirmation that remote browsers are closed.</div>}
     {wall.finalizing && <div className="wall-notice" role="status">Terminal event received. Refreshing final results and cleanup accounting…</div>}
@@ -288,6 +300,7 @@ export function RunWall({ runId }: { runId: string }) {
       {wall.attempts.map((attempt) => {
         const session = wall.sessions.find((item) => item.attemptId === attempt.id);
         return <AttemptCard key={attempt.id} attempt={attempt}
+          publicReadonly={wall.run?.executionMode === "public-readonly"}
           events={wall.events.filter((event) => event.attemptId === attempt.id && event.sequence <= wall.cursor)}
           summary={wall.summaries.find((item) => item.attemptId === attempt.id)}
           viewer={visible.includes(attempt.id) ? session?.liveViewUrl ?? null : null}

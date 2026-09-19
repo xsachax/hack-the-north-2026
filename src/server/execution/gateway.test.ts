@@ -22,17 +22,74 @@ function input(): BrainInput {
     history: [],
   };
 }
-function fixture(data: unknown = decision, readOnly = false) {
+function fixture(data: unknown = decision, readOnly = false, wireBudget = false) {
   const extract = vi.fn<
     (prompt: string, schema: typeof decisionSchema, options: StagehandClientExtractOptions) => Promise<{ data: unknown }>
   >(async () => ({ data }));
   // SDK classes contain private transport fields; this boundary only needs extract and page identity.
   const stagehand = { extract } as unknown as Stagehand;
   const page = { id: "bound-fixture-page" } as unknown as Page;
-  return { extract, page, brain: new GatewayBrain(stagehand, page, { readOnly }) };
+  return { extract, page, brain: new GatewayBrain(stagehand, page, { readOnly, wireBudget }) };
 }
 
 describe("Stagehand gateway brain", () => {
+  it("charges additional public Gateway wire attempts against the shared retry budget before dispatch", async () => {
+    const f = fixture(decision, true, true);
+    let finish!: (value: { data: unknown }) => void;
+    f.extract.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const signal = new AbortController().signal;
+    const budget = new ModelBudget(2, signal);
+    expect(() => f.brain.authorizeGatewayRequest()).toThrow("gateway_operation_unavailable");
+    const deciding = f.brain.decide(input(), signal, budget);
+    f.brain.authorizeGatewayRequest();
+    expect(budget.snapshot()).toEqual({ decision: 1, evaluation: 0, retry: 0, total: 1 });
+    f.brain.authorizeGatewayRequest();
+    expect(budget.snapshot()).toEqual({ decision: 1, evaluation: 0, retry: 1, total: 2 });
+    expect(() => f.brain.authorizeGatewayRequest()).toThrow("Model-call budget exhausted");
+    finish({ data: decision });
+    await expect(deciding).rejects.toThrow("Model-call budget exhausted");
+    expect(() => f.brain.authorizeGatewayRequest()).toThrow("gateway_operation_unavailable");
+  });
+
+  it.each(["abort", "budget-close", "drain"])("revokes even the first precharged public wire attempt on %s", async (mode) => {
+    const f = fixture(decision, true, true);
+    let finish!: (value: { data: unknown }) => void;
+    f.extract.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const controller = new AbortController();
+    const budget = new ModelBudget(1, controller.signal);
+    const deciding = f.brain.decide(input(), controller.signal, budget);
+    let draining: Promise<void> | undefined;
+    if (mode === "abort") controller.abort();
+    if (mode === "budget-close") budget.close();
+    if (mode === "drain") draining = f.brain.drain();
+    expect(() => f.brain.authorizeGatewayRequest()).toThrow();
+    finish({ data: decision });
+    await expect(deciding).rejects.toThrow();
+    await draining;
+    expect(budget.total).toBe(1);
+  });
+
+  it("requires an explicit public budget and rejects overlapping operations without an extra charge", async () => {
+    const f = fixture(decision, true, true);
+    const signal = new AbortController().signal;
+    await expect(f.brain.decide(input(), signal)).rejects.toThrow("gateway_operation_unavailable");
+    expect(f.extract).not.toHaveBeenCalled();
+    let finish!: (value: { data: unknown }) => void;
+    f.extract.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const budget = new ModelBudget(2, signal);
+    const first = f.brain.decide(input(), signal, budget);
+    await expect(f.brain.decide(input(), signal, budget)).rejects.toThrow("gateway_operation_unavailable");
+    expect(budget.total).toBe(1);
+    f.brain.authorizeGatewayRequest();
+    finish({ data: decision });
+    await expect(first).resolves.toEqual(decision);
+  });
+  it("does not treat an unwitnessed public SDK result as an accounted Gateway inference", async () => {
+    const f = fixture(decision, true, true);
+    const signal = new AbortController().signal;
+    await expect(f.brain.decide(input(), signal, new ModelBudget(1, signal))).rejects.toThrow("gateway_dispatch_unobserved");
+  });
+
   it("discloses finite read-only actions without altering the observed control evidence or model accounting", async () => {
     const f = fixture({ ...decision, action: "give_up", candidateId: null }, true);
     const signal = new AbortController().signal;

@@ -18,9 +18,10 @@ function pageIdentity(value?: string): string | null {
   } catch { return null; }
 }
 function scopeIdentity(source: ReportSource): string {
-  const { scope, executionMode, controlledSiteId } = source.run;
+  const { scope, executionMode, controlledSiteId, executionPolicy, assetPolicy } = source.run;
   return canonical({
     executionMode, controlledSiteId: executionMode === "controlled-fixture" ? controlledSiteId ?? "store" : null,
+    executionPolicy: executionPolicy ?? null, assetPolicy: assetPolicy ?? null,
     scope: { ...scope, allowedSubdomains: [...scope.allowedSubdomains].sort(), pathPrefixes: [...scope.pathPrefixes].sort() },
   });
 }
@@ -94,7 +95,9 @@ type Pair = {
 export function compareReports(before: ComparisonSource, after: ComparisonSource, lineage: readonly RerunPair[]): RunComparison {
   const versionsMatch = [before.report, after.report].every((report) =>
     report.version === "report-v1" && report.signatureVersion === "finding-v2");
-  const scopeMatches = versionsMatch && scopeIdentity(before.source) === scopeIdentity(after.source);
+  const scopeMatches = versionsMatch &&
+    before.source.run.executionMode !== "public-readonly" && after.source.run.executionMode !== "public-readonly" &&
+    scopeIdentity(before.source) === scopeIdentity(after.source);
   const pairs: Pair[] = lineage.map((ids) => {
     const parent = before.report.agents.find((agent) => agent.attemptId === ids.parentAttemptId);
     const child = after.report.agents.find((agent) => agent.attemptId === ids.childAttemptId);
@@ -174,7 +177,7 @@ export function compareReports(before: ComparisonSource, after: ComparisonSource
       state = "not_comparable";
       explanation = humanAssisted
         ? "This selected cohort includes durable human intervention. Its observations are not evidence of an agent-only fix or pure persona improvement."
-        : "Definition, assignment, navigation scope or known page coverage is incompatible. Unknown pages are attempt-specific, not cross-run identities.";
+        : "Definition, assignment, execution policy, navigation scope or known page coverage is incompatible or unsupported. Unknown pages are attempt-specific, not cross-run identities.";
     } else if (childCounts.affected) {
       state = parentCounts.affected ? "persists" : "new";
       explanation = state === "persists" ? "The same versioned finding was observed in the selected immutable cohort." :
@@ -214,6 +217,11 @@ export class ComparisonService {
   ) {}
 
   compare(owner: string, parentRunId: string, childRunId: string): RunComparison {
+    const parent = this.repository.getRun(owner, parentRunId);
+    const child = this.repository.getRun(owner, childRunId);
+    if (parent.executionMode === "public-readonly" || child.executionMode === "public-readonly") {
+      throw new ServiceError("public_comparison_unsupported", 400);
+    }
     const lineage = this.repository.rerunLineage(owner, parentRunId, childRunId);
     const read = (runId: string): ComparisonSource => {
       const source = this.repository.reportSource(owner, runId);
