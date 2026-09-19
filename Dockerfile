@@ -12,7 +12,7 @@ RUN node --import tsx scripts/deployment-build.ts
 FROM ${NODE_IMAGE} AS runtime
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 DATA_DIR=/data/private \
-    TSX_DISABLE_CACHE=1 DEPLOYMENT_BIND_HOST=0.0.0.0
+    TSX_DISABLE_CACHE=1 DEPLOYMENT_BIND_HOST=0.0.0.0 TMPDIR=/tmp
 # tsx is intentionally retained: the worker and supervisor execute the same source
 # and lockfile used by the Next build, not a separately installed worker artifact.
 COPY --from=build /app/package.json /app/package-lock.json /app/.npmrc /app/next.config.ts /app/tsconfig.json ./

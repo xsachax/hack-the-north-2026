@@ -161,6 +161,8 @@ try {
     console.log('nonroot_private_volume_migrations_fixture_pass');
   `]);
   check(!docker(["top", container]).includes("deployment-worker.ts"), "paid_worker_started_offline");
+  docker(["exec", container, "node", "--import", "tsx", "scripts/deployment-cdp-check.ts"]);
+  console.log("offline_real_playwright_cdp_scratch_pass");
   console.log("offline_nonroot_volume_migrations_health_pass");
   compose(["stop", "--timeout", "90", "app"]);
   inspectExit(container);
@@ -168,8 +170,13 @@ try {
     "--import", "tsx", "scripts/deployment-backup.ts", "--confirm-stopped", "/data/backups/offline"]);
   const backupReadback = `
     import {DatabaseSync} from 'node:sqlite';
-    import {validateDatabase} from './src/server/deployment/database.ts';
+    import {validateDatabase,assertPaidDataNotRestored} from './src/server/deployment/database.ts';
     validateDatabase('/data/backups/offline',true);
+    assertPaidDataNotRestored('/data/backups/offline',false);
+    let blocked=false;
+    try { assertPaidDataNotRestored('/data/backups/offline',true); }
+    catch(error) { if(error.message!=='deployment_restored_snapshot_paid_restart_forbidden') throw error; blocked=true; }
+    if(!blocked) throw Error('restored_snapshot_paid_restart_not_blocked');
     const db=new DatabaseSync('/data/backups/offline/flash-flood.sqlite',{readOnly:true});
     if(db.prepare('SELECT value FROM deployment_validation').get()?.value!=='persisted') throw Error('backup_data_missing');
     db.close(); console.log('quiescent_backup_readback_pass');
@@ -181,7 +188,7 @@ try {
   await waitReady(restoreName);
   docker(["stop", "--time", "90", restoreName]);
   inspectExit(restoreName);
-  console.log("offline_sigterm_backup_restore_pass");
+  console.log("offline_sigterm_backup_restore_web_only_pass_no_historical_budget_claim");
   success = true;
 } catch (error) {
   // Never print subprocess buffers: Docker/Next errors can include environment.

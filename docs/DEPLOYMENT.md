@@ -75,7 +75,13 @@ curl --fail http://127.0.0.1:3000/demo/category/home -o /dev/null
 Compose initializes `/data/private` and `/data/backups` as UID/GID 1000, mode
 0700, using a network-disabled, one-shot root initializer. The serving processes
 run as 1000:1000, with all capabilities dropped, a read-only image and a private
-128 MiB Next cache tmpfs. Database and sidecars are private; process umask is 077.
+128 MiB Next cache tmpfs and a separate 128 MiB UID1000-owned mode0700
+`/tmp` tmpfs (`noexec,nosuid,nodev`). `TMPDIR=/tmp` is configured in the image
+before Playwright imports. Even remote `chromium.connectOverCDP` creates a local
+temporary artifact directory; disabling tsx caching alone does not support this
+path. The hosted offline gate exercises the actual pinned CDP client against a
+local rejection stub and verifies cleanup, without allocating a browser.
+Database and sidecars are private; process umask is 077.
 The runtime image sets `TSX_DISABLE_CACHE=1` for the supervisor, worker, probes
 and maintenance commands, preventing the pinned tsx loader from trying to create
 its disk cache under the read-only `/tmp`. Compose explicitly sets the container
@@ -224,6 +230,11 @@ services stopped; preserve and inspect partial copies, do not count them as a
 backup. Keep the exported backup on operator-controlled **local** protected
 storage, separate from the volume, preferably on encrypted media. This does not
 upload data or arrange a cloud backup. Test restoring a copy before relying on it.
+Every backup includes a private `deployment-backup.json` quarantine marker with
+the snapshot's reserved seconds, `paidRestartAllowed:false` and
+`postSnapshotHistoryPreserved:false`. The supervisor and deployed worker reject
+paid startup whenever this marker is present, regardless of its contents.
+An intact snapshot is not evidence that later spending/resources never existed.
 
 Record the image ID, source revision, lockfile, runtime policy and SQLite schema
 version with the backup (never secret values). Build the new release, run the
@@ -234,10 +245,20 @@ must refuse a database newer than its migrations.
 
 If rollback is needed, stop everything again. Prefer a forward fix. Otherwise
 restore the **entire pre-upgrade snapshot with its matching old image**, retaining
-the failed state for investigation. This discards post-backup local changes;
-reconcile any remote sessions/contexts created since the backup first so stale
-accounting cannot fund new launches. Example, after independently verifying the
-chosen snapshot and with app stopped:
+the failed state for investigation. This discards post-backup local changes, including historical reservations.
+**Both paid flags must remain false after any restore predating allocations.**
+Remote closure/reconciliation does not preserve missing reservation history:
+a 3,480-second snapshot followed by another 120 seconds has exhausted a
+3,600-second lifetime cap, but restoring that snapshot loses those 120 seconds.
+Never replenish the budget this way. Preserve the newer database, all historical
+reservations (including failures/refunds), and unresolved resource identities.
+Paid restart requires separately reviewed, schema-compatible preservation and
+reconciliation of **all** of that history; otherwise use a forward fix.
+There is no automated reconciliation or quarantine-clear command here.
+Do not delete the marker merely to enable paid mode. Older images may lack the
+marker guard, so the explicit web-only flags below remain mandatory.
+
+Example, after independently verifying the snapshot and stopping app/worker:
 
 ```sh
 # Root is used only for offline volume-directory replacement, never serving.
@@ -247,10 +268,17 @@ docker compose run --rm --no-deps --user 0:0 \
   'test -d /data/backups/pre-upgrade-20260919; test ! -e /data/failed-upgrade-20260919; mv /data/private /data/failed-upgrade-20260919; cp -a /data/backups/pre-upgrade-20260919 /data/private; chown 1000:1000 /data/private; chmod 0700 /data/private'
 # Set RELEASE_TAG to the recorded pre-upgrade image tag, without rebuilding it.
 docker compose run --rm --no-deps --entrypoint node app --import tsx scripts/deployment-migrate.ts
-docker compose up -d app
-docker compose exec app node --import tsx scripts/deployment-health.ts readiness
+# Temporary WEB-ONLY recovery: explicit overrides apply even if runtime.env was paid.
+# Use an unused container name. The normal app service remains stopped.
+docker compose run --detach --no-deps --service-ports \
+  --name flash-flood-recovery-web-only \
+  -e ENABLE_DEMO_RUNS=false -e DEPLOYMENT_CONFIRM_PAID=false app
+docker exec flash-flood-recovery-web-only node --import tsx scripts/deployment-health.ts readiness
 ```
 
+This restores web availability only, not historical budget completeness or
+permission to allocate. Stop this named recovery container before a reviewed
+forward deployment. Never substitute a paid `docker compose up` after restore.
 Do not use `docker compose down -v`, volume pruning, resets or a reduced
 `PRAGMA user_version` as a migration rollback.
 

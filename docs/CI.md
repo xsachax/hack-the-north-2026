@@ -54,7 +54,12 @@ Docker available. It builds the actual image and an isolated context-audit image
 checks that private sentinel files never enter either, then exercises the
 read-only nonroot container, private volume initialization, startup/readiness,
 SIGTERM shutdown, persistent database row, quiescent backup and restored
-readiness. Its random project owns only its own images, containers and volumes;
+web-only readiness. It also invokes the real pinned Playwright CDP client
+against a local 503 stub inside the read-only container, proving its required
+private temporary-directory path works without a provider allocation.
+Restored backup markers must block paid startup; the gate does not claim a
+snapshot contains later reservations or unresolved resource identities.
+Its random project owns only its own images, containers and volumes;
 there is no broad Docker pruning or daemon repair. It receives no provider
 credentials and uploads no evidence. The local shared Docker daemon returned
 HTTP 500, so local Node results must not be described as container execution;
@@ -250,6 +255,7 @@ contributors finish. No in-flight test count is used as release acceptance.
 | Deployment fail-closed config, durable migration, shutdown (**new release regression**) | `src/server/deployment/deployment.test.ts` in the normal suite: unsafe release input rejection, future-schema rollback refusal, graceful SIGTERM and forced-shutdown failure | Final consolidated validation pending. Local Node/SQLite and packaging assertions; not a built-image Docker runtime proof. |
 | Release reservation plan and queue/cancel preflight (**new release regression**) | `src/server/worker/release-proof.test.ts`, `scripts/release-integration.ts --offline-preflight` | Actual SQLite policy/queued cancellation and source-bound receipt only; not HTTPS, model or provider acceptance. |
 | Clean packaged supervisor and HTTPS owner restart (**new release regression**) | `npm run release:package`, `npm run release:package-check`; `src/server/worker/release-runtime.test.ts` | Fresh install/build and actual web-only supervisor, same-owner HTTPS restart, graceful process shutdown, no provider key/calls; does not itself prove paid worker cleanup. |
+| Restored-snapshot budget loss (**new release regression**) | `src/server/deployment/deployment.test.ts`: actual 3,480-second snapshot followed by 120 more seconds exhausts the 3,600-second live ledger; restored snapshot cannot pass the deployed paid guard | Remote closure cannot restore missing historical reservations. Backups are quarantined for web-only recovery; paid restart requires separately reviewed compatible preservation of all history and unresolved identities. |
 | Honest health endpoint (**new release regression**) | `src/app/api/health/route.test.ts`: “reports uncached process liveness without claiming worker or provider readiness” | Final consolidated validation pending. Process liveness only, not database, worker or provider readiness. |
 
 Outstanding release evidence must be stated separately: configured environment

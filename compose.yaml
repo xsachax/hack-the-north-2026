@@ -29,6 +29,7 @@ services:
       NEXT_TELEMETRY_DISABLED: "1"
       DEPLOYMENT_BIND_HOST: "0.0.0.0"
       NODE_OPTIONS: --max-old-space-size=768
+      TMPDIR: /tmp
       DATA_DIR: /data/private
       FIXTURE_PORT: "4321"
       FLASH_FLOOD_ACCESS_CODE_FILE: /run/secrets/access_code
@@ -39,6 +40,7 @@ services:
     read_only: true
     tmpfs:
       - /app/.next/cache:uid=1000,gid=1000,mode=0700,size=134217728
+      - /tmp:uid=1000,gid=1000,mode=0700,size=134217728,noexec,nosuid,nodev
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     cpus: 2

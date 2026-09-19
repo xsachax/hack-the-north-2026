@@ -1,15 +1,19 @@
 import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { deploymentConfig } from "./config";
-import { migrateDatabase, validateDatabase } from "./database";
+import { assertPaidDataNotRestored, backupMarker, migrateDatabase, validateDatabase } from "./database";
 import { deploymentHealthBody, nextServerCommand, stopChild } from "./supervisor";
 import { readWorkerPolicy } from "../worker/config";
 import { migrations } from "../migrations";
 import { assertReleaseBuild, releaseBuildDigest, releaseSourceDigest, writeReleaseBuildReceipt } from "./build";
 import { isolatedValidationCompose, offlineReadinessPassed } from "./docker-validation";
+import { WorkerRepository } from "../worker/repository";
+import { personas } from "../../lib/personas";
+import { demoCriteria } from "../../lib/demo-run";
 
 const roots: string[] = [];
 function directory() {
@@ -78,6 +82,62 @@ describe("deployment configuration", () => {
 });
 
 describe("deployment migrations and persistent policy", () => {
+  it("blocks restored 3480-second history after the live ledger exhausts the 3600-second lifetime cap", () => {
+    const root = directory(), source = join(root, "live"), backup = join(root, "snapshot");
+    const policy = readWorkerPolicy({
+      NODE_ENV: "test", SESSION_TIMEOUT_SECONDS: "120", LIFETIME_RESERVATION_LIMIT_SECONDS: "3600",
+    });
+    function reserveAndSettle(count: number) {
+      const repository = new WorkerRepository(source, policy);
+      try {
+        const owner = repository.createSession().ownerId;
+        for (let i = 0; i < count; i++) {
+          repository.createDemoRun(owner, randomUUID(), {
+            authorizationAcknowledged: true, scenario: "fixed",
+            assignments: [{ personaId: personas[0].id, goal: "Inspect the mug", criteria: [...demoCriteria] }],
+          });
+          const claim = repository.claim("offline-budget-test");
+          if (!claim) throw new Error("expected_reserved_claim");
+          repository.finish(claim, {
+            status: "cancelled", reason: "offline", checks: [], steps: 0, modelCalls: 0, durationMs: 0,
+            cleanup: { status: "closed", errors: [] }, originalTerminal: { status: "cancelled", reason: "offline" }, errors: [],
+          }, { reservedSeconds: 120, elapsedSeconds: 0, remoteStatus: "COMPLETED", actualBrowserSeconds: 0 });
+        }
+        return repository.accounting().reservedSeconds;
+      } finally { repository.close(); }
+    }
+    expect(reserveAndSettle(29)).toBe(3480);
+    const result = spawnSync(process.execPath, ["--import", "tsx", "scripts/deployment-backup.ts", "--confirm-stopped", backup], {
+      env: { NODE_ENV: "test", PATH: process.env.PATH, DATA_DIR: source, TSX_DISABLE_CACHE: "1" }, encoding: "utf8",
+    });
+    expect(result.status).toBe(0);
+    expect(reserveAndSettle(1)).toBe(3600);
+    const restored = new WorkerRepository(backup, policy);
+    try { expect(restored.accounting().reservedSeconds).toBe(3480); } finally { restored.close(); }
+    expect(() => assertPaidDataNotRestored(backup, false)).not.toThrow();
+    expect(() => assertPaidDataNotRestored(backup, true)).toThrow("restored_snapshot_paid_restart_forbidden");
+  });
+
+  it("marks actual backups as web-only and never treats a snapshot as complete spending history", () => {
+    const root = directory(), source = join(root, "live"), backup = join(root, "snapshot");
+    mkdirSync(source, { mode: 0o700 });
+    migrateDatabase(source, readWorkerPolicy({ NODE_ENV: "production" }));
+    const result = spawnSync(process.execPath, ["--import", "tsx", "scripts/deployment-backup.ts",
+      "--confirm-stopped", backup], {
+      env: { NODE_ENV: "test", PATH: process.env.PATH, DATA_DIR: source, TSX_DISABLE_CACHE: "1" }, encoding: "utf8",
+    });
+    expect(result.status).toBe(0);
+    expect(JSON.parse(readFileSync(join(backup, backupMarker), "utf8"))).toMatchObject({
+      snapshotReservedSeconds: 0, paidRestartAllowed: false, postSnapshotHistoryPreserved: false,
+    });
+    expect(statSync(join(backup, backupMarker)).mode & 0o777).toBe(0o600);
+    expect(() => assertPaidDataNotRestored(source, true)).not.toThrow();
+    expect(() => assertPaidDataNotRestored(backup, false)).not.toThrow();
+    expect(() => assertPaidDataNotRestored(backup, true)).toThrow("restored_snapshot_paid_restart_forbidden");
+    // Neither an empty/settled snapshot nor a forged assertion can clear quarantine.
+    writeFileSync(join(backup, backupMarker), '{"paidRestartAllowed":true}');
+    expect(() => assertPaidDataNotRestored(backup, true)).toThrow("restored_snapshot_paid_restart_forbidden");
+  });
   it("initializes private WAL schema, persists data and rejects a mismatched policy", () => {
     const root = directory();
     migrateDatabase(root, readWorkerPolicy({ NODE_ENV: "production" }));
@@ -300,6 +360,16 @@ it("keeps packaging context allowlisted, runtime nonroot and host-bound", () => 
   const compose = readFileSync("compose.yaml", "utf8");
   expect(compose).toContain('127.0.0.1:3000:4321');
   expect(compose).toContain("stop_grace_period: 90s");
+  expect(compose).toContain("/tmp:uid=1000,gid=1000,mode=0700,size=134217728,noexec,nosuid,nodev");
+  expect(readFileSync("Dockerfile", "utf8")).toContain("TMPDIR=/tmp");
+});
+
+it("exercises the actual pinned Playwright CDP scratch path before reaching a local rejection stub", () => {
+  const result = spawnSync(process.execPath, ["--import", "tsx", "scripts/deployment-cdp-check.ts"], {
+    env: { NODE_ENV: "test", PATH: process.env.PATH, TMPDIR: directory(), TSX_DISABLE_CACHE: "1" }, encoding: "utf8",
+  });
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toContain("offline_real_playwright_cdp_scratch_pass");
 });
 
 describe("hosted offline Docker validation", () => {

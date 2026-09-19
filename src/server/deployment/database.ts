@@ -5,6 +5,19 @@ import { migrations } from "../migrations";
 import { WorkerRepository } from "../worker/repository";
 import type { WorkerPolicy } from "../worker/config";
 
+export const backupMarker = "deployment-backup.json";
+
+export function assertPaidDataNotRestored(dataDir: string, paid: boolean): void {
+  if (!paid) return;
+  try {
+    lstatSync(join(dataDir, backupMarker));
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
+    throw error;
+  }
+  throw new Error("deployment_restored_snapshot_paid_restart_forbidden");
+}
+
 export function validateDatabase(dataDir: string, full = false): void {
   const dir = lstatSync(dataDir);
   const file = join(dataDir, "flash-flood.sqlite");

@@ -1,7 +1,7 @@
-import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { validateDatabase } from "../src/server/deployment/database";
+import { backupMarker, validateDatabase } from "../src/server/deployment/database";
 
 process.umask(0o077);
 try {
@@ -14,10 +14,12 @@ try {
   }
   validateDatabase(source, true);
   const db = new DatabaseSync(join(source, "flash-flood.sqlite"));
+  let snapshotReservedSeconds: number;
   try {
     db.exec("PRAGMA busy_timeout=1000; PRAGMA synchronous=FULL");
     const checkpoint = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get();
     if (checkpoint?.busy !== 0) throw new Error("deployment_database_not_quiescent");
+    snapshotReservedSeconds = Number(db.prepare("SELECT coalesce(sum(reserved_seconds),0) total FROM usage_reservations").get()?.total);
   } finally { db.close(); }
   const checkTree = (path: string) => {
     const stat = lstatSync(path);
@@ -28,6 +30,10 @@ try {
   mkdirSync(destination, { mode: 0o700 });
   cpSync(source, destination, { recursive: true, errorOnExist: true, force: false });
   chmodSync(destination, 0o700);
+  writeFileSync(join(destination, backupMarker), JSON.stringify({
+    version: 1, createdAt: Date.now(), snapshotReservedSeconds,
+    paidRestartAllowed: false, postSnapshotHistoryPreserved: false,
+  }), { mode: 0o600 });
   validateDatabase(destination, true);
   console.log("deployment_local_backup_valid");
 } catch {
