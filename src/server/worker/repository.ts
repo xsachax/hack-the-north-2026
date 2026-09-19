@@ -8,11 +8,17 @@ import type { ArtifactReference } from "../execution/artifacts";
 import { sanitizeEvidence } from "../execution/artifacts";
 import type { CloudUsage, PrivateSessionReference } from "../execution/cloud";
 import type { ExecutionResult } from "../execution/types";
-import { workerPolicySchema, type WorkerPolicy } from "./config";
+import { workerExecutionLimits, workerPolicySchema, type WorkerPolicy } from "./config";
 import { referenceSchema } from "./session-reference";
 import { resultSchema } from "./result";
 import { targetScopeSchema, type TargetScope } from "../../lib/target-scope";
 import { publicPageUrl } from "../public-page-url";
+import type { ContextProvider } from "../workflows/context-provider";
+import type { ReproductionDispatch } from "../workflows/reproduction";
+import type { CandidateResult } from "../workflows/reproduction-runner";
+import { REPRODUCTION_SETUP_STEPS, REPRODUCTION_SIGNATURE } from "../workflows/reproduction-runner";
+import { insertRerun } from "../workflows/rerun";
+import { ServiceError } from "../errors";
 
 export class LeaseLostError extends Error {
   constructor() { super("worker_lease_lost"); }
@@ -22,6 +28,7 @@ export type Claim = {
   runId: string; attempt: Attempt; correlationToken: string;
   scenario?: "fixed" | "second-coupon"; controlledSiteId?: "store" | "project-board";
   scope: TargetScope; recovery: boolean; sessionId?: string;
+  reproductionCandidateId?: string;
 };
 const json = (value: unknown): unknown => JSON.parse(z.string().parse(value));
 const terminalRemote = (status?: string) => !!status && ["COMPLETED", "ERROR", "TIMED_OUT"].includes(status);
@@ -62,18 +69,34 @@ export class WorkerRepository extends Repository {
         WHERE j.status='leased' AND j.lease_expires_at<=? AND l.state NOT IN ('settled','quarantined')
         AND (l.recovery_after IS NULL OR l.recovery_after<=?) ORDER BY j.rowid LIMIT 1`).get(this.now(), this.now());
       if (expired) return this.acquire(z.string().parse(expired.id), workerId, true);
-      const queued = this.db.prepare(`SELECT j.id,r.owner_id,r.execution_mode,r.controlled_site_id,a.snapshot
+      const queued = this.db.prepare(`SELECT j.id,r.owner_id,r.execution_mode,r.controlled_site_id,r.scope,a.snapshot
         FROM jobs j JOIN runs r ON r.id=j.run_id JOIN attempts a ON a.id=j.attempt_id
+        LEFT JOIN context_selections selection ON selection.attempt_id=a.id
+        LEFT JOIN browser_contexts context ON context.id=selection.context_id
         WHERE j.status='queued' AND j.cancel_requested_at IS NULL
+        AND (context.id IS NULL OR context.revoked=1 OR context.expires_at<=?
+          OR (context.held_job IS NULL AND
+            (context.status!='persisting' OR context.available_after<=?)))
         AND (r.execution_mode!='controlled-fixture' OR
           (SELECT count(*) FROM launches occupied JOIN jobs held ON held.id=occupied.job_id
            JOIN runs owned ON owned.id=held.run_id
            WHERE occupied.state!='settled' AND owned.owner_id=r.owner_id) < ?)
-        ORDER BY j.rowid LIMIT 100`).all(this.policy.ownerConcurrency);
+        ORDER BY j.rowid LIMIT 100`).all(this.clock(), this.clock(), this.policy.ownerConcurrency);
       for (const row of queued) {
         const attempt = attemptSchema.parse(json(row.snapshot));
         const jobId = z.string().parse(row.id);
         const ownerId = z.string().parse(row.owner_id);
+        const reproduction = this.db.prepare("SELECT candidate_id FROM reproduction_worker_jobs WHERE job_id=?").get(jobId);
+        const candidate = reproduction ? this.reproductionService().candidateDispatch(z.string().parse(reproduction.candidate_id)) : null;
+        if (reproduction && !candidate) {
+          this.endQueued(ownerId, jobId, attempt, "cancelled", "reproduction_stopped");
+          continue;
+        }
+        if (candidate && candidate.steps.length + REPRODUCTION_SETUP_STEPS > workerExecutionLimits(this.policy, attempt.limits).maxSteps) {
+          this.stopUnallocatedReproduction(candidate.candidateId);
+          this.endQueued(ownerId, jobId, attempt, "limit_reached", "budget_exhausted");
+          continue;
+        }
         if (row.execution_mode !== "controlled-fixture" ||
           (!row.controlled_site_id && !supportedDemoCriteria(attempt.criteria)) ||
           (row.controlled_site_id === "project-board" && attempt.criteria.some(isLegacyCriterion))) {
@@ -93,7 +116,16 @@ export class WorkerRepository extends Repository {
         if (global.committedSeconds + global.baselineSeconds + reserve > this.policy.developmentBudgetSeconds ||
           owned.committedSeconds + reserve > this.policy.ownerBudgetSeconds ||
           global.reservedSeconds + reserve > this.policy.lifetimeReservationLimitSeconds) {
+          if (reproduction) this.stopUnallocatedReproduction(z.string().parse(reproduction.candidate_id));
           this.endQueued(ownerId, jobId, attempt, "limit_reached", "budget_exhausted");
+          continue;
+        }
+        const context = this.contexts.claim({
+          ownerId, jobId, attempt, scope: targetScopeSchema.parse(json(row.scope)),
+        });
+        if (context === "wait") continue;
+        if (context === "invalid") {
+          this.endQueued(ownerId, jobId, attempt, "blocked", "context_unavailable");
           continue;
         }
         this.db.prepare("UPDATE usage_reservations SET reserved_seconds=? WHERE job_id=?").run(reserve, jobId);
@@ -130,6 +162,7 @@ export class WorkerRepository extends Repository {
       this.append(z.string().parse(row.run_id), z.string().parse(row.attempt_id), "attempt.recovering", { reason: "worker_recovery" });
     }
     const ref = row.session_reference ? referenceSchema.parse(json(row.session_reference)) : undefined;
+    const reproduction = this.db.prepare("SELECT candidate_id FROM reproduction_worker_jobs WHERE job_id=?").get(jobId);
     return {
       jobId, ownerId: z.string().parse(row.owner_id), workerId,
       generation: z.number().parse(row.lease_generation), runId: z.string().parse(row.run_id),
@@ -137,6 +170,7 @@ export class WorkerRepository extends Repository {
       ...(row.scenario ? { scenario: z.enum(["fixed", "second-coupon"]).parse(row.scenario) } : {}),
       ...(row.controlled_site_id ? { controlledSiteId: z.enum(["store", "project-board"]).parse(row.controlled_site_id) } : {}),
       scope: targetScopeSchema.parse(json(row.scope)), recovery, sessionId: ref?.sessionId,
+      ...(reproduction ? { reproductionCandidateId: z.string().parse(reproduction.candidate_id) } : {}),
     };
   }
 
@@ -146,6 +180,103 @@ export class WorkerRepository extends Repository {
       .get(claim.jobId, claim.workerId, claim.generation, this.now());
     if (!row) throw new LeaseLostError();
     if (!allowCancelled && row.cancel_requested_at) throw new DOMException("cancel_requested", "AbortError");
+    if (!allowCancelled) this.contexts.assertActive(claim);
+    if (!allowCancelled && claim.reproductionCandidateId && !this.reproductionService().candidateDispatch(claim.reproductionCandidateId)) {
+      throw new DOMException("reproduction_stopped", "AbortError");
+    }
+  }
+
+  prepareContext(claim: Claim, provider?: ContextProvider) {
+    return this.contexts.prepare(claim, () => this.assertLease(claim), provider);
+  }
+
+  retireContext(provider?: ContextProvider): Promise<void> {
+    return this.contexts.retireOne(provider);
+  }
+
+  takeoverControl(
+    claim: Claim,
+    assertLease = (allowCancelled = false) => this.assertLease(claim, allowCancelled),
+  ) {
+    return this.takeovers.executionControl(claim, assertLease);
+  }
+
+  reproductionDispatch(claim: Claim): ReproductionDispatch | undefined {
+    this.assertLease(claim);
+    if (!claim.reproductionCandidateId) return undefined;
+    const dispatch = this.reproductionService().candidateDispatch(claim.reproductionCandidateId);
+    if (!dispatch || dispatch.ownerId !== claim.ownerId) throw new DOMException("reproduction_stopped", "AbortError");
+    const remaining = Math.min(dispatch.maxDurationMs, dispatch.deadline - this.clock() - 5000);
+    if (remaining <= 0) throw new DOMException("reproduction_deadline", "AbortError");
+    return { ...dispatch, maxDurationMs: remaining };
+  }
+
+  pumpReproductions(): void {
+    const service = this.reproductionService();
+    service.recoverExpired();
+    const rows = this.db.prepare(`SELECT w.candidate_id,w.result_json,j.status,l.state
+      FROM reproduction_worker_jobs w JOIN jobs j ON j.id=w.job_id
+      JOIN reproduction_candidates c ON c.id=w.candidate_id JOIN reproductions r ON r.id=c.reproduction_id
+      LEFT JOIN launches l ON l.job_id=j.id
+      WHERE r.status='running' AND r.active_candidate=c.id LIMIT 100`).all();
+    for (const row of rows) {
+      const candidateId = z.string().parse(row.candidate_id);
+      const unknown: CandidateResult = {
+        outcome: "unknown", signature: null, cleanup: row.state ? "unknown" : "confirmed",
+        environment: "uncertain", sessionIdentity: "",
+      };
+      if (row.result_json && row.state === "settled") {
+        const result = z.strictObject({
+          outcome: z.enum(["reproduced", "not_reproduced", "unknown"]),
+          signature: z.literal(REPRODUCTION_SIGNATURE).nullable(),
+          cleanup: z.enum(["confirmed", "unknown"]), environment: z.enum(["trusted_fixture", "uncertain"]),
+          sessionIdentity: z.string().max(4096),
+        }).parse(json(row.result_json));
+        service.completeCandidate(candidateId, result, row.status === "cancelled");
+      } else if (["recovering", "quarantined"].includes(String(row.state)) ||
+        ["completed", "cancelled"].includes(String(row.status))) {
+        service.completeCandidate(candidateId, unknown, row.status === "cancelled");
+      }
+    }
+    const next = service.dispatchNext();
+    const pending = service.pendingCandidates();
+    if (next && !pending.some((candidate) => candidate.candidateId === next.candidateId)) pending.push(next);
+    for (const dispatch of pending) {
+      try { this.transaction(() => {
+        if (this.db.prepare("SELECT job_id FROM reproduction_worker_jobs WHERE candidate_id=?").get(dispatch.candidateId) ||
+          !service.candidateDispatch(dispatch.candidateId)) return;
+        if (dispatch.reservationSeconds !== this.policy.sessionSeconds) throw new Error("reproduction_reservation_mismatch");
+        const cloned = insertRerun(this.db, this, dispatch.ownerId, `reproduction_${dispatch.candidateId}`, dispatch.sourceRunId, {
+          authorizationAcknowledged: true, attemptIds: [dispatch.sourceAttemptId],
+        }, this.now());
+        if (cloned.created) this.append(cloned.run.id, null, "run.created", {
+          status: "queued", reason: "reproduction_candidate",
+          commentary: "Deterministic controlled-fixture replay; no persona inference.",
+        });
+        const attempt = this.attempts(dispatch.ownerId, cloned.run.id)[0];
+        const jobId = z.string().parse(this.db.prepare("SELECT id FROM jobs WHERE attempt_id=? AND run_id=?")
+          .get(attempt.id, cloned.run.id)?.id);
+        this.db.prepare("INSERT INTO reproduction_worker_jobs(candidate_id,job_id) VALUES(?,?)").run(dispatch.candidateId, jobId);
+        this.db.prepare(`INSERT INTO takeover_controls(attempt_id,phase,lease_generation)
+          VALUES(?,'closed',0)`).run(attempt.id);
+      }); } catch (error) {
+        if (!(error instanceof ServiceError && error.code === "rate_limited")) throw error;
+        this.transaction(() => this.stopUnallocatedReproduction(dispatch.candidateId));
+      }
+    }
+  }
+
+  /** Called within claim/outbox transactions, before any browser allocation. Charges are retained. */
+  private stopUnallocatedReproduction(candidateId: string): void {
+    if (this.db.prepare(`SELECT 1 FROM reproduction_worker_jobs w JOIN launches l ON l.job_id=w.job_id
+      WHERE w.candidate_id=?`).get(candidateId)) throw new Error("reproduction_already_allocated");
+    const row = this.db.prepare(`SELECT r.id FROM reproductions r JOIN reproduction_candidates c ON c.reproduction_id=r.id
+      WHERE c.id=? AND r.active_candidate=c.id AND r.status='running'`).get(candidateId);
+    if (!row) return;
+    this.db.prepare(`UPDATE reproduction_candidates SET status='not_started',cleanup='confirmed',finished_at=? WHERE id=?`)
+      .run(this.clock(), candidateId);
+    this.db.prepare(`UPDATE reproductions SET status='limit_reached',reason='budget_exhausted',
+      active_candidate=NULL,deadline=NULL,updated_at=? WHERE id=?`).run(this.clock(), row.id);
   }
 
   heartbeat(claim: Claim): boolean {
@@ -153,6 +284,9 @@ export class WorkerRepository extends Repository {
       this.assertLease(claim, true);
       this.db.prepare("UPDATE jobs SET lease_expires_at=? WHERE id=?")
         .run(new Date(this.clock() + this.policy.leaseMs).toISOString(), claim.jobId);
+      if (claim.reproductionCandidateId && !this.reproductionService().candidateDispatch(claim.reproductionCandidateId)) {
+        this.db.prepare("UPDATE jobs SET cancel_requested_at=COALESCE(cancel_requested_at,?) WHERE id=?").run(this.now(), claim.jobId);
+      }
       return !!this.db.prepare("SELECT cancel_requested_at FROM jobs WHERE id=?").get(claim.jobId)?.cancel_requested_at;
     });
   }
@@ -212,7 +346,7 @@ export class WorkerRepository extends Repository {
     });
   }
 
-  finish(claim: Claim, result: ExecutionResult, usage: CloudUsage): void {
+  finish(claim: Claim, result: ExecutionResult, usage: CloudUsage, reproductionResult?: CandidateResult): void {
     const parsed = resultSchema.parse(result);
     this.transaction(() => {
       this.assertLease(claim, true);
@@ -227,6 +361,23 @@ export class WorkerRepository extends Repository {
         throw new Error("contradictory_allocation_evidence");
       }
       const confirmed = neverAttempted || terminalRemote(usage.remoteStatus);
+      if (reproductionResult) {
+        if (!claim.reproductionCandidateId) throw new Error("unexpected_reproduction_result");
+        if (!launch.session_reference ||
+          referenceSchema.parse(json(launch.session_reference)).sessionId !== reproductionResult.sessionIdentity) {
+          throw new Error("reproduction_session_mismatch");
+        }
+        const stored = this.db.prepare("UPDATE reproduction_worker_jobs SET result_json=? WHERE job_id=? AND candidate_id=?")
+          .run(JSON.stringify({
+            ...reproductionResult,
+            cleanup: confirmed && parsed.cleanup.status === "closed" ? reproductionResult.cleanup : "unknown",
+          }), claim.jobId, claim.reproductionCandidateId);
+        if (stored.changes !== 1) throw new Error("reproduction_job_mismatch");
+      }
+      this.contexts.settle(claim.jobId, {
+        confirmed, neverAllocated: neverAttempted,
+        clean: parsed.cleanup.status === "closed" && parsed.cleanup.errors.length === 0,
+      });
       if (launch.session_reference && (usage.actualBrowserSeconds !== undefined || confirmed)) {
         this.observeCharge(claim, {
           sessionId: referenceSchema.parse(json(launch.session_reference)).sessionId,
@@ -254,6 +405,9 @@ export class WorkerRepository extends Repository {
       const charged = z.number().parse(observed.charged);
       const confirmed = outcome.confirmed && outcome.sessions.length > 0 && observed.terminal === 1 &&
         outcome.sessions.every((s) => terminalRemote(s.status));
+      this.contexts.settle(claim.jobId, {
+        confirmed, neverAllocated: false, clean: false, recovered: true,
+      });
       const usage: CloudUsage = {
         reservedSeconds: this.policy.sessionSeconds, elapsedSeconds: 0,
         ...(confirmed ? { remoteStatus: outcome.sessions[0].status } : {}),
@@ -313,7 +467,9 @@ export class WorkerRepository extends Repository {
     const run = this.getRun(claim.ownerId, claim.runId);
     const existing = this.attempts(claim.ownerId, claim.runId).find((attempt) => attempt.id === claim.attempt.id)!;
     const alreadyTerminal = !["queued", "running"].includes(existing.status);
-    const status = alreadyTerminal ? existing.status : run.cancelRequestedAt && outcome !== "infrastructure_failed" ? "cancelled" : outcome;
+    const jobCancelled = this.db.prepare("SELECT cancel_requested_at FROM jobs WHERE id=?").get(claim.jobId)?.cancel_requested_at;
+    const status = alreadyTerminal ? existing.status :
+      (run.cancelRequestedAt || jobCancelled) && outcome !== "infrastructure_failed" ? "cancelled" : outcome;
     this.saveAttempt({ ...claim.attempt, status, updatedAt: this.now() });
     this.db.prepare("UPDATE jobs SET status=?,lease_owner=NULL,lease_expires_at=NULL WHERE id=?")
       .run(status === "cancelled" ? "cancelled" : "completed", claim.jobId);

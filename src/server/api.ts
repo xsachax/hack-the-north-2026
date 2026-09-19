@@ -16,6 +16,10 @@ import { exportReport } from "./reports/exports";
 import { ArtifactReader, artifactDownloadResponse, getRawArtifactJson } from "./reports/artifacts";
 import { ReplayError, type createReplayAdapter, type AuthorizedReplayAssociation } from "./reports/replay";
 import type { ReplayReport } from "../lib/replay-contracts";
+import { takeoverCommandSchema } from "../lib/takeover-contracts";
+import { rerunRequestSchema } from "../lib/rerun-contracts";
+import { ComparisonService } from "./workflows/comparison";
+import { reproductionCreateSchema } from "../lib/reproduction-contracts";
 
 export type ApiConfiguration = {
   origin: string;
@@ -135,6 +139,7 @@ export function createApi({
     };
   });
   const reports = new ReportService(repository, loadEvidence, reportSecrets);
+  const comparisons = new ComparisonService(repository, loadEvidence, reportSecrets);
   const content = evidenceContent ?? ((owner: string, id: string, request: Request) => {
     const stored = repository.storedEvidence(owner, id);
     if (stored.metadata.kind === "screenshot") return artifactDownloadResponse(reader.read({
@@ -207,6 +212,56 @@ export function createApi({
       const owner = session.ownerId;
       if (mutation && url.search) fail("invalid_request", 400);
 
+      if (path[0] === "reproductions" && path.length >= 2) {
+        const reproductionId = parseInput(idSchema, path[1]);
+        const reproductions = repository.reproductionService();
+        if (path.length === 2 && request.method === "GET") {
+          if (url.search) fail("invalid_request", 400);
+          return respond(reproductions.status(owner, reproductionId));
+        }
+        if (path.length === 3 && path[2] === "cancel" && request.method === "POST") {
+          parseInput(z.strictObject({}), await readJson(request));
+          return respond(reproductions.cancel(owner, reproductionId));
+        }
+        if (path.length === 3 && path[2] === "export" && request.method === "GET") {
+          if (url.search) fail("invalid_request", 400);
+          return new Response(reproductions.export(owner, reproductionId), { headers: {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Content-Disposition": 'attachment; filename="coupon-regression.spec.ts"',
+            "Cache-Control": "private, no-store", "Vary": "Cookie, Origin",
+            "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": "sandbox; default-src 'none'",
+          } });
+        }
+      }
+      if (path.length >= 3 && path[0] === "attempts" && path[2] === "takeover") {
+        const attemptId = parseInput(idSchema, path[1]);
+        if (path.length === 3 && request.method === "GET") {
+          const parameters = [...url.searchParams.entries()];
+          if (parameters.length > 1 || parameters.some(([key]) => key !== "controllerId")) fail("invalid_request", 400);
+          const controllerId = url.searchParams.has("controllerId")
+            ? parseInput(idSchema, url.searchParams.get("controllerId")) : undefined;
+          return respond(repository.takeovers.status(owner, attemptId, controllerId));
+        }
+        if (path.length === 3 && request.method === "POST") {
+          const key = parseInput(idempotencyKeySchema, request.headers.get("idempotency-key"));
+          return respond(repository.takeovers.command(owner, attemptId, key, parseInput(takeoverCommandSchema, await readJson(request))));
+        }
+        if (path.length === 4 && path[3] === "intervals" && request.method === "GET") {
+          if (url.search) fail("invalid_request", 400);
+          return respond({ items: repository.takeovers.intervals(owner, attemptId) });
+        }
+      }
+      if (path[0] === "contexts") {
+        if (path.length === 1 && request.method === "GET") {
+          if (url.search) fail("invalid_request", 400);
+          return respond({ items: repository.contexts.list(owner) });
+        }
+        if (path.length === 2 && request.method === "DELETE") {
+          if ((await readBody(request)).length) fail("invalid_request", 400);
+          return respond(repository.contexts.revoke(owner, parseInput(idSchema, path[1])));
+        }
+      }
       if (path.length === 1 && path[0] === "controlled-runs" && request.method === "POST") {
         if (configuration.allowDemoRuns !== true || !configuration.accessCode || configuration.accessCode.length < 32) {
           fail("demo_disabled", 503);
@@ -253,6 +308,26 @@ export function createApi({
         }
         if (path.length >= 2) {
           const id = parseInput(idSchema, path[1]);
+          if (path.length === 3 && path[2] === "reproductions" && request.method === "POST") {
+            if (configuration.allowDemoRuns !== true || !configuration.accessCode || configuration.accessCode.length < 32) {
+              fail("demo_disabled", 503);
+            }
+            const input = parseInput(reproductionCreateSchema, await readJson(request));
+            return respond(repository.reproductionService().prepare(owner, id, input.attemptId));
+          }
+          if (path.length === 3 && path[2] === "reruns" && request.method === "POST") {
+            if (configuration.allowDemoRuns !== true || !configuration.accessCode || configuration.accessCode.length < 32) {
+              fail("demo_disabled", 503);
+            }
+            const key = parseInput(idempotencyKeySchema, request.headers.get("idempotency-key"));
+            const input = parseInput(rerunRequestSchema, await readJson(request));
+            const result = repository.createRerun(owner, key, id, input);
+            return respond(result, result.created ? 201 : 200);
+          }
+          if (path.length === 4 && path[2] === "comparisons" && request.method === "GET") {
+            if (url.search) fail("invalid_request", 400);
+            return respond(comparisons.compare(owner, id, parseInput(idSchema, path[3])));
+          }
           if (path.length >= 5 && path[2] === "attempts" && path[4] === "replay") {
             if (url.search) fail("invalid_request", 400);
             const attemptId = parseInput(idSchema, path[3]);

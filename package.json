@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1",
-    "build": "next build",
+    "build": "tsx scripts/verified-build.ts",
     "start": "next start --hostname 127.0.0.1",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "next typegen && tsc --noEmit",
@@ -24,7 +24,8 @@
     "worker:integration": "tsx scripts/worker-integration.ts",
     "controlled:integration": "tsx scripts/controlled-integration.ts",
     "ui:integration": "tsx scripts/ui-integration.ts",
-    "report:integration": "tsx scripts/report-integration.ts"
+    "report:integration": "tsx scripts/report-integration.ts",
+    "advanced:integration": "tsx scripts/advanced-integration.ts"
   },
   "dependencies": {
     "@browserbasehq/sdk": "2.20.0",

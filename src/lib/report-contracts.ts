@@ -75,7 +75,7 @@ export const reportTimelineSchema = z.strictObject({
   sequence: z.int().positive(),
   timestamp: timestampSchema,
   kind: z.string(),
-  actor: z.literal("agent").nullable(),
+  actor: z.enum(["agent", "human", "system"]).nullable(),
   step: z.int().nonnegative().nullable(),
   action: z.string().nullable(),
   commentary: z.string().nullable(),

@@ -33,6 +33,25 @@ function fixture(data: unknown = decision) {
 }
 
 describe("Stagehand gateway brain", () => {
+  it("quiesces the actual inflight RPC without closing the gateway or refunding attempted calls", async () => {
+    const f = fixture();
+    let finish!: (value: { data: unknown }) => void;
+    f.extract.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const signal = new AbortController().signal;
+    const budget = new ModelBudget(2, signal);
+    const deciding = f.brain.decide(input(), signal, budget);
+    let quiet = false;
+    const quiescing = f.brain.quiesce().then(() => { quiet = true; });
+    await Promise.resolve();
+    expect(quiet).toBe(false);
+    expect(budget.total).toBe(1);
+    finish({ data: decision });
+    await Promise.all([deciding, quiescing]);
+    expect(quiet).toBe(true);
+    await expect(f.brain.decide(input(), signal, budget)).resolves.toEqual(decision);
+    expect(budget.total).toBe(2);
+  });
+
   it("uses the installed SDK's page-bound screenshot extraction and strict decision schema", async () => {
     const f = fixture();
     expect(await f.brain.decide(input(), new AbortController().signal)).toEqual(decision);

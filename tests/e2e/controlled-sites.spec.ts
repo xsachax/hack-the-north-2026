@@ -203,6 +203,11 @@ test("exact text criteria use viewport rendered blocks, including inline heading
     <h2 class="offscreen">Offscreen success</h2><button class="offscreen">Offscreen action</button>
     <div style="height:4px;overflow:hidden"><h2 style="margin:0">Partial glyph success</h2></div>
     <div style="height:10px;overflow:hidden"><button style="height:30px">Partially visible action</button></div>
+    <details><summary>Visible disclosure</summary>Direct disclosure success<p>Disclosed success</p>
+      <button>Disclosed action</button><input aria-label="Disclosed input" value="Disclosed input secret">
+      <details open><summary>Nested summary</summary><p>Nested hidden success</p></details>
+    </details>
+    <div style="content-visibility:hidden">Direct skipped success<p>Skipped rendering success</p><button>Skipped rendering action</button></div>
     <script type="application/json">{"textBlocks":["Script success"],"checks":[{"passed":true}]}</script>
     <div style="height:2000px"></div><h2>Below fold success</h2>`;
   const network = await installControlledNetwork(page.context(), page, async () => ({
@@ -218,14 +223,19 @@ test("exact text criteria use viewport rendered blocks, including inline heading
     id: "exact", kind: "visible_text", description: "Exact rendered text", semantics: "current", text, match: "exact",
   });
   const invisible = ["Hidden success", "Transparent success", "Clipped success", "Offscreen success",
-    "Below fold success", "Script success", "Partial glyph success", "Transparent input secret"];
+    "Below fold success", "Script success", "Partial glyph success", "Transparent input secret",
+    "Disclosed success", "Direct disclosure success", "Disclosed input secret", "Nested hidden success",
+    "Skipped rendering success", "Direct skipped success"];
   for (const text of invisible) {
     expect(observation.text, text).not.toContain(text);
+    expect(boundedObservation(observation).textBlocks?.join(" "), text).not.toContain(text);
+    expect(deterministicCheck(exact(text), observation), text).toMatchObject({ passed: false, status: "not_met" });
     expect(deterministicCheck({
       id: "contains", kind: "visible_text", description: "Rendered text only", semantics: "current", text, match: "contains",
     }, observation), text).toMatchObject({ passed: false, status: "not_met" });
   }
-  for (const label of ["Transparent action", "Transparent input", "Clipped action", "Offscreen action"]) {
+  for (const label of ["Transparent action", "Transparent input", "Clipped action", "Offscreen action",
+    "Disclosed action", "Disclosed input", "Nested summary", "Skipped rendering action"]) {
     expect(observation.candidates.some((candidate) => candidate.label === label), label).toBe(false);
   }
   expect(observation.candidates.some((candidate) => candidate.label === "Partially visible action")).toBe(true);
@@ -234,6 +244,22 @@ test("exact text criteria use viewport rendered blocks, including inline heading
     "Your projects", "Visible project summary.", "Payment failed", "Wrapped heading", "Stilltogether",
   ]));
   expect(boundedObservation(observation).textBlocks).toEqual(observation.textBlocks);
+  const disclosure = observation.candidates.find((candidate) => candidate.label === "Visible disclosure");
+  expect(disclosure).toBeDefined();
+  await driver.act({ action: "click", candidateId: disclosure!.id, value: null, commentary: "", actor: "agent" }, signal());
+  await page.getByText("Disclosed success", { exact: true }).scrollIntoViewIfNeeded();
+  const opened = await driver.observe(signal());
+  expect(deterministicCheck(exact("Disclosed success"), opened)).toMatchObject({ passed: true, status: "met" });
+  expect(deterministicCheck(exact("Direct disclosure success"), opened)).toMatchObject({ passed: true, status: "met" });
+  expect(opened.candidates.some((candidate) => candidate.label === "Disclosed action")).toBe(true);
+  await page.getByText("Visible disclosure", { exact: true }).click();
+  const closedAgain = await driver.observe(signal());
+  expect(deterministicCheck(exact("Disclosed success"), closedAgain)).toMatchObject({ passed: false, status: "not_met" });
+  expect(closedAgain.text).not.toContain("Direct disclosure success");
+  expect(closedAgain.textBlocks?.join(" ")).not.toContain("Direct disclosure success");
+  expect(boundedObservation(closedAgain).textBlocks?.join(" ")).not.toContain("Direct disclosure success");
+  expect(deterministicCheck(exact("Direct disclosure success"), closedAgain)).toMatchObject({ passed: false, status: "not_met" });
+  expect(closedAgain.candidates.some((candidate) => candidate.label === "Disclosed action")).toBe(false);
   for (const text of ["Your projects", "Visible project summary.", "Payment failed", "Wrapped heading", "Stilltogether"]) {
     expect(deterministicCheck(exact(text), observation)).toMatchObject({ passed: true, status: "met" });
   }

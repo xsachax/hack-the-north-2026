@@ -2,12 +2,14 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { api, ApiError } from "@/lib/client-api";
-import { idSchema } from "@/lib/contracts";
+import { api, ApiError, errorMessage } from "@/lib/client-api";
+import { idSchema, idempotencyKeySchema, runSchema } from "@/lib/contracts";
 import { evidenceDetailSchema, runReportSchema, type AgentReport, type EvidenceDetail, type ReportGroup, type RunReport } from "@/lib/report-contracts";
+import { rerunRequestSchema, rerunResponseSchema, runComparisonSchema, type RerunRequest, type RunComparison } from "@/lib/rerun-contracts";
 import { useOwnerSession } from "./owner-session";
 import { PersonaAvatar } from "./persona-avatar";
 import { RecordingEvidence } from "./recording-evidence";
+import { ReproductionPanel } from "./reproduction-panel";
 import "./run-report.css";
 
 const REFRESH_MS = 5000;
@@ -28,6 +30,188 @@ const finalityText = {
   uncertain: "Finality is uncertain. Unknown cleanup is not confirmation that a browser is closed.",
   final: "Persisted reporting is final. Review each agent’s cleanup status separately.",
 };
+
+type PendingRerun = { key: string; request: RerunRequest };
+function savedRerun(storageKey: string): PendingRerun | null {
+  try {
+    const value = JSON.parse(sessionStorage.getItem(storageKey) ?? "null") as PendingRerun | null;
+    return value ? { key: idempotencyKeySchema.parse(value.key), request: rerunRequestSchema.parse(value.request) } : null;
+  } catch { return null; }
+}
+function RerunControls({ report }: { report: RunReport }) {
+  const { ownerId, csrfToken, retry: retryOwner } = useOwnerSession();
+  const storageKey = `ff:rerun:${ownerId}:${report.runId}`;
+  const [pending, setPending] = useState<PendingRerun | null>(() => savedRerun(storageKey));
+  const [selected, setSelected] = useState<string[]>(() => pending?.request.attemptIds ?? []);
+  const [acknowledged, setAcknowledged] = useState(() => !!pending);
+  const [scenario, setScenario] = useState<"" | "fixed" | "second-coupon">(() => pending?.request.scenario ?? "");
+  const [isControlledStore, setIsControlledStore] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [createdId, setCreatedId] = useState("");
+  const [childInput, setChildInput] = useState(() => {
+    try { return sessionStorage.getItem(`${storageKey}:child`) ?? ""; } catch { return ""; }
+  });
+  const [childId, setChildId] = useState(() => idSchema.safeParse(childInput).success ? childInput : "");
+  const [comparison, setComparison] = useState<RunComparison | null>(null);
+  const [comparisonError, setComparisonError] = useState("");
+  const [refresh, setRefresh] = useState(0);
+  const inFlight = useRef(false);
+  const ownerRetry = useRef(retryOwner);
+  useEffect(() => { ownerRetry.current = retryOwner; }, [retryOwner]);
+  useEffect(() => {
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const run = runSchema.parse(await api(`/runs/${encodeURIComponent(report.runId)}`, { signal: controller.signal }));
+        if (!controller.signal.aborted && run.id === report.runId) {
+          setIsControlledStore(run.executionMode === "controlled-fixture" && (!run.controlledSiteId || run.controlledSiteId === "store"));
+        }
+      } catch {
+        // Without authoritative site metadata, only unchanged-scenario admission is offered.
+      }
+    })();
+    return () => controller.abort();
+  }, [report.runId]);
+  useEffect(() => {
+    if (!childId) return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let reads = 0;
+    async function read() {
+      reads++;
+      try {
+        const next = runComparisonSchema.parse(await api(
+          `/runs/${encodeURIComponent(report.runId)}/comparisons/${encodeURIComponent(childId)}`, { signal: controller.signal },
+        ));
+        if (next.parentRunId !== report.runId || next.childRunId !== childId) throw new ApiError(404, "not_found");
+        if (controller.signal.aborted) return;
+        setComparison(next);
+        setComparisonError("");
+        if ((next.childFinality !== "final" || next.parentFinality !== "final") && reads < MAX_REFRESHES) {
+          timer = setTimeout(() => void read(), REFRESH_MS);
+        }
+      } catch (failure) {
+        if (controller.signal.aborted) return;
+        setComparison(null);
+        setComparisonError(failureMessage(failure, "Comparison"));
+        if (failure instanceof ApiError && [401, 403].includes(failure.status)) ownerRetry.current();
+      }
+    }
+    void read();
+    return () => { controller.abort(); if (timer) clearTimeout(timer); };
+  }, [childId, refresh, report.runId]);
+  async function rerun() {
+    if (inFlight.current || !csrfToken) return;
+    inFlight.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      const next = pending ?? {
+        key: crypto.randomUUID(),
+        request: rerunRequestSchema.parse({
+          authorizationAcknowledged: acknowledged, attemptIds: selected, ...(isControlledStore && scenario ? { scenario } : {}),
+        }),
+      };
+      // Persist before POST so an interrupted reply or refresh retries the same durable admission.
+      sessionStorage.setItem(storageKey, JSON.stringify(next));
+      setPending(next);
+      const result = rerunResponseSchema.parse(await api(`/runs/${encodeURIComponent(report.runId)}/reruns`, {
+        method: "POST", body: next.request, csrfToken, idempotencyKey: next.key,
+      }));
+      setCreatedId(result.run.id);
+      setChildInput(result.run.id);
+      setChildId(result.run.id);
+      sessionStorage.setItem(`${storageKey}:child`, result.run.id);
+    } catch (failure) {
+      setError(errorMessage(failure));
+      if (failure instanceof ApiError && [400, 404].includes(failure.status)) {
+        try {
+          sessionStorage.removeItem(storageKey);
+          setPending(null);
+          setScenario("");
+          setAcknowledged(false);
+        } catch {
+          setError("The selection was rejected, but its saved request could not be cleared. Enable browser storage before correcting it.");
+        }
+      }
+      if (failure instanceof ApiError && [401, 403].includes(failure.status)) retryOwner();
+    } finally { inFlight.current = false; setBusy(false); }
+  }
+  return <section className="report-panel report-rerun" aria-labelledby="rerun-title">
+    <p className="report-kicker">IMMUTABLE SCOPED RERUN</p>
+    <h2 id="rerun-title">Rerun selected attempts</h2>
+    <p>Controlled runs only. Copies the original persona snapshots, goals, criteria, limits and navigation scope.
+      Starts fresh browser state; no live session, cookies or provider references are copied. The parent stays unchanged.</p>
+    <fieldset disabled={busy || !!pending}>
+      <legend>Select original assignments</legend>
+      {report.agents.map((agent) => <label key={agent.attemptId} className="report-rerun-choice">
+        <input type="checkbox" checked={selected.includes(agent.attemptId)} onChange={(event) => setSelected((ids) =>
+          event.target.checked ? [...ids, agent.attemptId] : ids.filter((id) => id !== agent.attemptId))} />
+        {agent.persona.name} · {agent.goal}
+      </label>)}
+      {isControlledStore ? <>
+        <label htmlFor="rerun-scenario">Controlled store scenario</label>
+        <select id="rerun-scenario" value={scenario} onChange={(event) => setScenario(event.target.value as typeof scenario)}>
+          <option value="">Keep the parent scenario</option>
+          <option value="fixed">Explicitly test the fixed store variant</option>
+          <option value="second-coupon">Explicitly test the second-coupon failure variant</option>
+        </select>
+        <p>Scenario changes are supported only for the controlled store, never another site or a wider scope.</p>
+      </> : <p>The parent scenario will be kept unchanged. Store variants are offered only for a verified controlled store.</p>}
+      <label className="report-rerun-choice"><input type="checkbox" checked={acknowledged}
+        onChange={(event) => setAcknowledged(event.target.checked)} />I authorize this fresh scoped rerun.</label>
+    </fieldset>
+    <button disabled={busy || !!createdId || !selected.length || !acknowledged || !csrfToken} onClick={() => void rerun()}>
+      {busy ? "Creating scoped rerun…" : pending ? "Retry same rerun" : "Rerun selected attempts"}
+    </button>
+    {error && <p role="alert">{error} {pending
+      ? "Retry keeps the same request key; it does not intentionally create a duplicate."
+      : "Correct the selection and authorize a new request. The rejected request key will not be reused."}</p>}
+    {pending && !createdId && <p>The pending selection is locked so retries use the exact same request, including after refresh.</p>}
+    {createdId && <p role="status">Scoped rerun created. <Link href={`/runs/${createdId}`}>Open rerun live wall</Link>
+      {" · "}<Link href={reportHref(createdId)}>Open rerun report</Link></p>}
+    {createdId && <button onClick={() => {
+      sessionStorage.removeItem(storageKey); setPending(null); setCreatedId(""); setAcknowledged(false);
+    }}>Start another rerun selection</button>}
+    <form className="report-comparison-form" onSubmit={(event) => {
+      event.preventDefault();
+      if (!idSchema.safeParse(childInput).success) { setComparisonError("Enter a valid rerun ID."); return; }
+      setComparison(null); setComparisonError(""); setChildId(childInput); setRefresh((value) => value + 1);
+      try { sessionStorage.setItem(`${storageKey}:child`, childInput); } catch { /* Comparison reads need no durable mutation key. */ }
+    }}>
+      <label>Compare a scoped rerun ID<input value={childInput} onChange={(event) => setChildInput(event.target.value)} maxLength={36} /></label>
+      <button type="submit">Refresh comparison</button>
+    </form>
+    {comparisonError && <p role="alert">{comparisonError}</p>}
+    {childId && !comparison && !comparisonError && <p role="status">Loading scoped comparison…</p>}
+    {comparison && !comparisonError && comparison.childRunId === childId && <section aria-labelledby="comparison-title">
+      <h3 id="comparison-title">Selected cohort comparison</h3>
+      <p>Fresh context · parent {comparison.parentFinality} · rerun {comparison.childFinality} · {comparison.comparable ? "Exact immutable assignments and scope" : "Not comparable"}</p>
+      <p>Comparison checks ongoing runs every 5 seconds for up to two minutes. Refresh comparison to check again.</p>
+      {comparison.notices.map((notice) => <p className="report-muted" key={notice}>{notice}</p>)}
+      {!comparison.groups.length && <p>No grouped findings in this selected comparison. This is not proof of a fix.</p>}
+      <ul className="report-comparison-groups">{comparison.groups.map((group) => <li key={group.signature}>
+        <strong>{group.title}</strong><p>{group.category} · {group.state}</p><p>{group.explanation}</p>
+        <p>Parent: {group.before.affected} affected / {group.before.tested} tested / {group.before.eligible} eligible · {group.before.notTested} not tested</p>
+        <p>Rerun: {group.after.affected} affected / {group.after.tested} tested / {group.after.eligible} eligible · {group.after.notTested} not tested · {group.after.confirmed} positively confirmed</p>
+      </li>)}</ul>
+      {comparison.pairs.map((pair) => <div key={pair.childAttemptId}>
+        <p><Link href={reportHref(report.runId, { attempt: pair.parentAttemptId })}>Original attempt</Link>
+          {" → "}<Link href={reportHref(childId, { attempt: pair.childAttemptId })}>Rerun attempt</Link></p>
+        {(pair.parentHumanAssisted || pair.childHumanAssisted) && <p className="report-warning">
+          Human-assisted: {pair.parentHumanAssisted ? "original attempt" : ""}{pair.parentHumanAssisted && pair.childHumanAssisted ? " and " : ""}
+          {pair.childHumanAssisted ? "rerun attempt" : ""}. Not an agent-only improvement or reproducibility claim.
+        </p>}
+        <ul>{pair.criteria.map((criterion) => <li key={criterion.definitionSignature}>
+          {criterion.semantics}: {criterion.before} → {criterion.after ?? "definition mismatch"} ·
+          {" "}{!criterion.comparable ? "not comparable" : criterion.tested ? "tested" : "not tested"}
+          {criterion.confirmedMet ? " · positively confirmed met" : ""}
+        </li>)}</ul>
+      </div>)}
+    </section>}
+  </section>;
+}
 
 function EvidenceRef({ runId, id, attemptId, state }: { runId: string; id: string; attemptId?: string; state?: string | null }) {
   return <Link className="report-evidence-link" href={reportHref(runId, { attempt: attemptId, evidence: id })}>
@@ -204,6 +388,8 @@ function AgentDetail({ agent, runId }: { agent: AgentReport; runId: string }) {
       <ul>{agent.evidence.map((item) => <li key={item.id}><EvidenceRef runId={runId} id={item.id} attemptId={agent.attemptId} state={item.state} /> · {item.kind} · {item.sensitivity}</li>)}</ul>
     </section>
     <RecordingEvidence runId={runId} attemptId={agent.attemptId} />
+    <ReproductionPanel key={`${runId}:${agent.attemptId}`} runId={runId} attemptId={agent.attemptId}
+      sourceReady={agent.status === "target_failed" && agent.finality === "final" && agent.cleanup === "closed"} />
   </section>;
 }
 
@@ -278,6 +464,7 @@ export function RunReportView({ runId, selection }: { runId: string; selection: 
         <a href={`/api/v1/runs/${encodeURIComponent(runId)}/exports/json`} download>Download JSON</a>
         <a href={`/api/v1/runs/${encodeURIComponent(runId)}/exports/markdown`} download>Download Markdown</a>
       </div>
+      <RerunControls key={ownerScope} report={report} />
       {selection.evidence && <EvidencePanel key={`${ownerScope}:${report.revision}:${selection.attempt ?? ""}:${selection.evidence}`}
         runId={runId} evidenceId={selection.evidence} selectedAttempt={selection.attempt}
         attemptScope={report.agents.map((item) => item.attemptId).join(",")} retryOwner={retryOwner} />}

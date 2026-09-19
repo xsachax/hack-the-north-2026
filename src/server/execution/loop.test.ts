@@ -3,7 +3,7 @@ import { personas } from "../../lib/personas";
 import { legacyDemoCriteria, type CriterionCheck, type Criterion } from "../../lib/criteria";
 import { executePersona } from "./loop";
 import {
-  decisionSchema, ExecutionError,
+  decisionSchema, ExecutionError, TakeoverInterrupted, type ExecutionControl,
   type Brain, type BrainInput, type BrowserDriver, type CleanupOutcome, type Decision,
   type ExecutePersonaInput, type ExecutionDependencies, type ExecutionEvent,
   type Observation, type EvaluationInput, type Evaluator,
@@ -338,6 +338,145 @@ function deferred<T>() {
 
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date("2026-01-01T00:00:00Z")); });
 afterEach(() => { expect(vi.getTimerCount()).toBe(0); vi.useRealTimers(); });
+
+function takeoverControl() {
+  let state: ReturnType<ExecutionControl["read"]> = { phase: "agent", version: 0 };
+  const move = (phase: typeof state.phase) => { state = { phase, version: state.version + 1 }; };
+  const control: ExecutionControl = {
+    read: () => state,
+    assertDispatch: () => { if (state.phase !== "agent") throw new TakeoverInterrupted(); },
+    quiesce: vi.fn(() => move("quiescing")),
+    acknowledge: vi.fn(() => move("human")),
+    resume: vi.fn(() => move(state.phase === "handback" ? "resuming" : "agent")),
+    finish: vi.fn(() => move("closed")),
+  };
+  return { control, move };
+}
+
+describe("exclusive human takeover", () => {
+  it.each(["observe", "decide", "act"] as const)("drains an in-flight %s before acknowledgement and resumes from a fresh observation", async (operation) => {
+    const f = fixture([observation(), observation({ checks: [check()] })]);
+    const takeover = takeoverControl();
+    const gate = deferred<void>();
+    let entered = false;
+    if (operation === "observe") f.observe.mockImplementationOnce(async () => { entered = true; await gate.promise; return observation(); });
+    if (operation === "decide") f.decide.mockImplementationOnce(async () => { entered = true; await gate.promise; return decision(); });
+    if (operation === "act") f.act.mockImplementationOnce(async () => { entered = true; await gate.promise; });
+    const pending = executePersona(input(), { ...f.deps, control: takeover.control });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(entered).toBe(true);
+    takeover.move("requested");
+    await vi.advanceTimersByTimeAsync(100);
+    expect(takeover.control.acknowledge).not.toHaveBeenCalled();
+    gate.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(takeover.control.read().phase).toBe("human");
+    const counts = [f.observe.mock.calls.length, f.decide.mock.calls.length, f.act.mock.calls.length];
+    await vi.advanceTimersByTimeAsync(500);
+    expect([f.observe.mock.calls.length, f.decide.mock.calls.length, f.act.mock.calls.length]).toEqual(counts);
+    f.observe.mockImplementation(async () => observation({ id: "fresh", checks: [check()] }));
+    takeover.move("handback");
+    await vi.advanceTimersByTimeAsync(150);
+    const result = await pending;
+    expect(result.status).toBe("succeeded");
+    expect(result.modelCalls).toBe(operation === "observe" ? 0 : 1);
+    expect(f.act).toHaveBeenCalledTimes(operation === "act" ? 1 : 0);
+    expect(f.onEvent.mock.calls.filter(([event]) => event.kind === "decision")).toHaveLength(operation === "act" ? 1 : 0);
+    expect(f.onEvent.mock.calls.some(([event]) => event.kind === "observation" && event.observation.id === "fresh")).toBe(true);
+  });
+
+  it("discards stale successful evaluation, charges it, and reevaluates the fresh state", async () => {
+    const f = fixture();
+    const takeover = takeoverControl();
+    const gate = deferred<void>();
+    let calls = 0;
+    const evaluate = vi.fn<Evaluator["evaluate"]>(async (value) => {
+      if (++calls === 1) await gate.promise;
+      return semanticCheck(value, calls === 1);
+    });
+    f.decide.mockResolvedValue(decision({ action: "give_up", candidateId: null }));
+    const pending = executePersona(input({ criteria: ["Helpful support"] }), { ...f.deps, evaluator: { evaluate }, control: takeover.control });
+    await vi.advanceTimersByTimeAsync(0);
+    takeover.move("requested");
+    gate.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(takeover.control.read().phase).toBe("human");
+    expect(f.onEvent.mock.calls.filter(([event]) => event.kind === "observation")).toHaveLength(0);
+    takeover.move("handback");
+    await vi.advanceTimersByTimeAsync(150);
+    const result = await pending;
+    expect(result).toMatchObject({ status: "gave_up", modelCalls: 3, checks: [{ passed: false, status: "not_met" }] });
+    expect(evaluate).toHaveBeenCalledTimes(2);
+    expect(f.act).not.toHaveBeenCalled();
+  });
+
+  it("uses a non-closing quiescence fence before acknowledgement", async () => {
+    const f = fixture([observation({ checks: [check()] })]);
+    const takeover = takeoverControl();
+    const gate = deferred<void>();
+    takeover.move("requested");
+    const quiesce = vi.fn(async () => gate.promise);
+    const drain = vi.fn(async () => {});
+    const pending = executePersona(input(), {
+      ...f.deps, control: takeover.control, brain: { decide: f.decide, quiesce, drain },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(takeover.control.read().phase).toBe("quiescing");
+    expect(drain).not.toHaveBeenCalled();
+    expect(f.observe).not.toHaveBeenCalled();
+    gate.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(takeover.control.read().phase).toBe("human");
+    takeover.move("handback");
+    await vi.advanceTimersByTimeAsync(150);
+    expect((await pending).status).toBe("succeeded");
+    expect(quiesce).toHaveBeenCalledOnce();
+    expect(drain).toHaveBeenCalledOnce();
+  });
+
+  it.each(["requested", "quiescing", "human", "handback", "resuming"] as const)("cancels during %s without dispatching new work", async (phase) => {
+    const f = fixture();
+    const takeover = takeoverControl();
+    const abort = new AbortController();
+    takeover.move(phase);
+    if (phase === "requested") takeover.control.quiesce = vi.fn();
+    if (phase === "quiescing") takeover.control.acknowledge = vi.fn();
+    if (phase === "handback" || phase === "resuming") takeover.control.resume = vi.fn();
+    const pending = executePersona(input({ signal: abort.signal }), { ...f.deps, control: takeover.control });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(takeover.control.read().phase).toBe(phase);
+    abort.abort();
+    const result = await pending;
+    expect(result).toMatchObject({ status: "cancelled", modelCalls: 0, steps: 0 });
+    expect(f.observe).not.toHaveBeenCalled();
+    expect(f.act).not.toHaveBeenCalled();
+    expect(f.close).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the attempt duration budget running during acknowledged human control", async () => {
+    const f = fixture();
+    const takeover = takeoverControl();
+    takeover.move("human");
+    const pending = executePersona(input({ limits: { maxDurationMs: 200 } }), { ...f.deps, control: takeover.control });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await pending).toMatchObject({ status: "limit_reached", durationMs: 200, modelCalls: 0 });
+    expect(f.observe).not.toHaveBeenCalled();
+  });
+
+  it("fails closed instead of acknowledging an uncertain browser operation failure", async () => {
+    const f = fixture();
+    const takeover = takeoverControl();
+    const gate = deferred<void>();
+    f.act.mockImplementationOnce(async () => gate.promise);
+    const pending = executePersona(input(), { ...f.deps, control: takeover.control });
+    await vi.advanceTimersByTimeAsync(0);
+    takeover.move("requested");
+    gate.reject(new Error("browser transport timeout"));
+    expect(await pending).toMatchObject({ status: "infrastructure_failed", modelCalls: 1 });
+    expect(takeover.control.acknowledge).not.toHaveBeenCalled();
+    expect(f.close).toHaveBeenCalledOnce();
+  });
+});
 
 describe("trusted objectives and observations", () => {
   it("succeeds on initial trusted evidence without spending a model call", async () => {

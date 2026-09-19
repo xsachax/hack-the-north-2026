@@ -1,3 +1,9 @@
+import { contextMigration } from "./workflows/contexts";
+import { takeoverMigration } from "./workflows/takeover";
+import { rerunMigration } from "./workflows/rerun-migration";
+import { reproductionMigration } from "./workflows/reproduction";
+import { advancedWorkerMigration } from "./worker/advanced-workflows";
+
 export const migrations = [
   `
   CREATE TABLE owners (
@@ -152,4 +158,9 @@ export const migrations = [
   -- finding-v2 hashes private canonical identity rather than redacted display.
   DELETE FROM report_snapshots;
   `,
+  contextMigration,
+  takeoverMigration,
+  rerunMigration,
+  reproductionMigration,
+  advancedWorkerMigration,
 ] as const;

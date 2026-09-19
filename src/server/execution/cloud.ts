@@ -54,7 +54,8 @@ export type FixtureExecutionOptions = {
   /** Private server-only hook; never stream these URLs as public events. */
   onSession: (reference: PrivateSessionReference) => Promise<void>;
   keyboardOnly?: boolean;
-  contextReference?: never;
+  /** Resolved only by the worker's durable owner/target context lease. */
+  contextReference?: { id: string; persist: boolean };
   actor?: "agent";
 };
 
@@ -81,9 +82,13 @@ function validateFixtureOptions(options: FixtureExecutionOptions) {
     site = controlledSite(options.controlledSiteId ?? "store");
     scope = controlledNavigationScope(site, options.targetUrl, options.scope);
   } catch { throw new ExecutionError("unsupported", "controlled_target_out_of_scope"); }
-  if (options.mode !== "controlled-fixture"
-    || options.contextReference !== undefined || (options.actor && options.actor !== "agent")) {
-    throw new ExecutionError("unsupported", "arbitrary_targets_contexts_and_takeover_disabled");
+  if (options.mode !== "controlled-fixture" || (options.actor && options.actor !== "agent")) {
+    throw new ExecutionError("unsupported", "arbitrary_targets_disabled");
+  }
+  if (options.contextReference !== undefined) {
+    if (!z.strictObject({ id: z.uuid(), persist: z.boolean() }).safeParse(options.contextReference).success) {
+      throw new ExecutionError("unsupported", "invalid_private_context_reference");
+    }
   }
   const fixtures = options.fixtures === undefined ? undefined : fixturesSchema.parse(options.fixtures);
   if (site.id !== "store" && fixtures) throw new ExecutionError("unsupported", "seed_not_supported_for_site");
@@ -228,7 +233,10 @@ export async function createFixtureExecution(config: AppConfig, options: Fixture
     const allocated = await bb.sessions.create({
       projectId: config.BROWSERBASE_PROJECT_ID, extensionId,
       api_timeout: timeoutSeconds, keepAlive: false, proxies: false,
-      browserSettings: { recordSession: true, solveCaptchas: false, viewport: options.viewport },
+      browserSettings: {
+        recordSession: true, solveCaptchas: false, viewport: options.viewport,
+        ...(options.contextReference ? { context: options.contextReference } : {}),
+      },
       userMetadata,
     });
     sessionId = allocated.id;

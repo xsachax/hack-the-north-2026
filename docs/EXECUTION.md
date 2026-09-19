@@ -85,8 +85,12 @@ belong only in the private hook, never in browser-safe event payloads.
 Optional `correlationToken` and synchronous `assertActive` hooks let the worker
 tag launches and fence dispatch at the actual driver guard. Unsupported/duplicate
 legacy fixture criteria fail before launch; custom criteria require the explicit
-registered-site mode described below. Context reference and human actor seams reject unsupported use rather than
-pretending reuse/takeover is implemented.
+registered-site mode described below. Context provider references are resolved
+privately by the durable worker from explicit owner/scope selections; callers
+cannot submit remote IDs. The loop accepts a durable execution-control adapter
+for acknowledged takeover, drains in-flight inference, discards stale decisions
+while charging attempts, and reobserves on handback. See
+[advanced workflows](ADVANCED_WORKFLOWS.md) for the managed-control boundary.
 Layer04 uses explicit no-retry session allocation plus connection rather than
 the SDK launch convenience function. Its optional `cleanupJson` hook persists
 teardown telemetry after cancellation without relaxing lease fencing. Existing

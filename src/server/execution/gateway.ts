@@ -16,6 +16,10 @@ export class GatewayBrain implements Brain {
 
   async drain(): Promise<void> {
     this.closed = true;
+    await this.quiesce();
+  }
+
+  async quiesce(): Promise<void> {
     await Promise.allSettled([...this.pending]);
   }
 

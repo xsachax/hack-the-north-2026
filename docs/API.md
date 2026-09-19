@@ -76,6 +76,8 @@ longer-lived admission limits may not clear after one minute.
 | POST | `/personas` | Full custom profile; returns new server-generated UUID |
 | PUT | `/personas/:id` | Full replacement of owned custom profile, not a partial patch |
 | DELETE | `/personas/:id` | No body; deletes custom profile; existing attempt snapshots remain intact |
+| GET | `/contexts` | Owned application context references, exact scope signatures, eligibility/persistence/retirement states; no provider IDs or contents |
+| DELETE | `/contexts/:id` | No body; immediately revokes reuse and requests worker retirement; not a claim of immediate remote erasure |
 | POST | `/runs` | Validated scoped request below; required `Idempotency-Key` |
 | POST | `/demo-runs` | Explicit opt-in trusted fixture request below; required `Idempotency-Key` |
 | POST | `/controlled-runs` | Explicit operator-gated registered site, custom criteria and optional narrowed navigation scope; required `Idempotency-Key` |
@@ -86,11 +88,20 @@ longer-lived admission limits may not clear after one minute.
 | GET | `/runs/:id/events/stream?after=0` | Owner-scoped SSE; exclusive cursor or `Last-Event-ID`, bounded connection lifetime |
 | GET | `/runs/:id/summaries` | `{items}`: attempt/launch states, cleanup/count summary, remote usage and reservation/consumption/refund |
 | GET | `/runs/:id/sessions` | `{items:[{attemptId,available,liveViewUrl}]}`; authorized active live-view metadata only |
+| GET | `/attempts/:id/takeover?controllerId=UUID` | Current durable phase/version and short-lived interactive grant only for the acknowledged requesting tab; omit controller for read-only status |
+| POST | `/attempts/:id/takeover` | `{action:"request"|"handback",expectedVersion,controllerId}`; required `Idempotency-Key`, owner, Origin and CSRF |
+| GET | `/attempts/:id/takeover/intervals` | `{items}` of bounded human-control intervals, not detailed human action capture |
 | GET | `/runs/:id/reports` | Versioned persisted-source report, per-agent criteria/timeline/evidence, grouped findings and explicit denominators |
 | GET | `/runs/:id/attempts/:attemptId/report` | Same report's per-agent detail; attempt must actually belong to this run |
 | GET | `/runs/:id/groups/:signature` | Evidence-backed group for this run; versioned 64-character comparison signature |
 | GET | `/runs/:id/exports/json` | Safe owner-only JSON attachment with stable evidence references, no private media |
 | GET | `/runs/:id/exports/markdown` | Escaped Markdown attachment; no reproduction-test claim |
+| POST | `/runs/:id/reruns` | `{authorizationAcknowledged:true,attemptIds:[UUID],scenario?:"fixed"|"second-coupon"}`; required durable `Idempotency-Key`; returns `{run,created}` |
+| GET | `/runs/:id/comparisons/:childId` | Owner/lineage-checked exact-definition/scope comparison, not absence-implies-fixed |
+| POST | `/runs/:id/reproductions` | `{attemptId,authorizationAcknowledged:true}`; prepares the one durable bounded workflow for that owner's source attempt; no allocation in handler |
+| GET | `/reproductions/:id` | Status, explicit limits and cumulative candidate/step/time/reservation charges |
+| POST | `/reproductions/:id/cancel` | Empty JSON object; durable cancellation intent, not remote-closure proof |
+| GET | `/reproductions/:id/export` | Safe supported ready-to-run regression attachment; unavailable/unsupported evidence does not generate a passing placeholder |
 | POST | `/runs/:id/attempts/:attemptId/replay/authorize` | CSRF-protected `{acknowledgeSensitiveVideo:true}`; 15-minute opaque HttpOnly sensitive-playback grant scoped to this attempt |
 | GET | `/runs/:id/attempts/:attemptId/replay` | Browser-safe HLS readiness and same-origin opaque page playlist paths; no provider read without consent |
 | GET | `/runs/:id/attempts/:attemptId/replay/pages/:index/playlist` | Rewritten protected M3U8; validated owner, actual session binding and consent on every request |
@@ -154,6 +165,46 @@ At execution each requested limit is clamped to the persisted worker policy.
 Duration is additionally capped at `max(1000,(sessionSeconds-60)*1000)`, retaining
 cleanup headroom. These limits never increase operator caps, change allocation
 reservations, authorize website execution, or create a retry/relaunch path.
+
+### Explicit private browser state
+
+Controlled assignments optionally accept `browserState`: `{mode:"fresh"}` (the
+default), `{mode:"save",acknowledgeSensitiveStorage:true}`, or
+`{mode:"returning",contextId:APPLICATION_UUID,persist:false,acknowledgeSensitiveStorage:true}`.
+Saving changes on returning use additionally requires `persist:true`. References
+belong to the current owner and exact full navigation scope; clients cannot
+supply provider IDs. Website requests cannot use non-fresh state.
+
+The worker creates provider resources, not these HTTP handlers. Atomic holds
+survive worker lease expiry and unknown allocation. A 10-second delay after
+confirmed closure is eligibility only, never a provider save-ready guarantee.
+Revocation stops reuse immediately, while remote deletion requires confirmed
+closure and a running worker; creation/deletion uncertainty is retained rather
+than retried invisibly. See [CONTEXTS.md](CONTEXTS.md) for the verified SDK
+contract, limits, persistence and retention semantics.
+
+### Advanced workflow boundaries
+
+Takeover commands do not optimistically pause the agent. Only the current worker
+can acknowledge after draining in-flight work, and only the matching controller
+receives a short-lived interactive grant. Human control is bounded to 60 seconds;
+paid TTL continues. Handback waits outstanding grants, then takes a fresh
+observation. Managed-app control is not provider-wide revocation of a trusted
+operator's external dashboard access.
+
+Reruns clone selected immutable source assignments with fresh state; a current
+persona edit cannot alter the child snapshot. The explicit store scenario change
+is the only supported change, not a scope-expansion API. Same owner/key/body
+returns the same child after lost replies. Comparison preserves report-v1,
+finding-v2, criterion-v1, all five states and tested/not-tested cohorts.
+
+Reproduction is a separate paid authorization and durable bounded workflow,
+currently only for the controlled second-coupon predicate. Repeated preparation
+does not reset its cumulative caps. Every real candidate is dispatched through
+normal worker reservation/fencing and a fresh browser. Unsupported, human,
+secret-dependent, ambiguous and destructive histories are explicit non-replayable
+states. See [ADVANCED_WORKFLOWS.md](ADVANCED_WORKFLOWS.md) for production limits,
+supported code generation, comparison evidence and recovery semantics.
 
 ### Safe capabilities and browser contracts
 

@@ -8,6 +8,15 @@ exception. Layer 04b (#11) adds custom structural and evidence-grounded semantic
 criteria for the store and project board before the layer 05 wall. Natural-language
 evaluation is a recorded heuristic, not a deterministic outcome oracle.
 
+Layer07 adds [advanced controlled workflows](ADVANCED_WORKFLOWS.md) on this same
+worker: private context creation/adoption/retirement, acknowledged exclusive
+human control, immutable reruns and deterministic bounded reproduction jobs.
+Context holds survive worker lease expiry; unknown remote ownership is never
+released on a local timeout. Reproduction outboxes map each candidate to one
+normal fresh reserved job; cleanup uncertainty stops reduction. Context
+revocation and reproduction cancellation set job-level cancellation even when
+the original run itself was not cancelled.
+
 ## Clean startup
 
 Use Node 22.18+ (22.x), `npm ci`, and `npm run build`. Provision `.env.local`

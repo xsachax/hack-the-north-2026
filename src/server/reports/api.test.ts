@@ -85,6 +85,12 @@ describe("protected durable reports API", () => {
     const first = await data<RunReport>(await handler()(request(`runs/${run.id}/reports`)));
     sql((db) => {
       db.prepare("UPDATE report_snapshots SET revision='obsolete',report=json_set(report,'$.signatureVersion','finding-v1')").run();
+      // Reproduce the actual v5 schema, not new tables with an artificially old version.
+      for (const table of [
+        "reproduction_worker_jobs", "reproduction_candidates", "reproductions", "rerun_attempts", "rerun_runs",
+        "takeover_commands", "takeover_intervals", "takeover_controls",
+        "context_operations", "context_selections", "browser_contexts",
+      ]) db.exec(`DROP TABLE ${table}`);
       db.exec("PRAGMA user_version=5");
     });
     repository.close();

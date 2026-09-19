@@ -7,6 +7,7 @@ import {
   addProject, BOARD_STORAGE_KEY, projectCategories, projectSchema, readBoardState, type BoardState,
 } from "@/lib/project-board";
 import "./board.css";
+import { DemoPreference } from "@/components/demo-preference";
 
 const subscribe = () => () => {};
 
@@ -16,6 +17,7 @@ export function ProjectBoard({ route }: { route: string }) {
     <header><a href="/project-board">Paperplane project board</a><p>Synthetic projects for browser testing. Nothing leaves this tab.</p></header>
     <nav aria-label="Project board"><a href="/project-board/new">New project</a><a href="/project-board/projects">All projects</a></nav>
     {ready ? <BoardContent route={route} /> : <p role="status">Opening the project board...</p>}
+    <DemoPreference />
   </main>;
 }
 
