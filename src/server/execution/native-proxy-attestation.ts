@@ -76,18 +76,22 @@ export async function verifyNativeProxyRefusal(context: BrowserContext, assertAc
   let started = false;
   let ended = false;
   let stream: string | undefined;
+  let phase = "session";
   try {
     assertActive();
     const browser = context.browser();
     if (!browser) throw new Error("native_proxy_trace_unavailable");
     tracing = await bounded(browser.newBrowserCDPSession());
     // Chrome rejects a competing trace. Never stop a trace this caller did not start.
+    phase = "trace_start";
     await bounded(tracing.send("Tracing.start", {
       transferMode: "ReturnAsStream", streamFormat: "json",
       traceConfig: { recordMode: "recordUntilFull", includedCategories: ["netlog"] },
     }).then(() => { started = true; }));
     assertActive();
+    phase = "page";
     page = await bounded(context.newPage());
+    phase = "navigation";
     let refused = false;
     try {
       await page.goto("https://example.com/", { waitUntil: "commit", timeout: 5000 });
@@ -95,15 +99,18 @@ export async function verifyNativeProxyRefusal(context: BrowserContext, assertAc
       refused = error instanceof Error && /^page\.goto: net::ERR_PROXY_CONNECTION_FAILED at https:\/\/example\.com\/(?:\n|$)/.test(error.message);
     }
     assertActive();
+    phase = "trace_end";
     const complete = new Promise<{ stream?: string; dataLossOccurred?: boolean }>((resolve) => tracing!.once("Tracing.tracingComplete", resolve));
     await bounded(tracing.send("Tracing.end"));
     ended = true;
+    phase = "trace_complete";
     const result = await bounded(complete);
     stream = result.stream;
     if (!stream || result.dataLossOccurred) throw new Error("native_proxy_trace_unavailable");
     const chunks: Buffer[] = [];
     let bytes = 0;
     let eof = false;
+    phase = "trace_read";
     for (let index = 0; index < 32 && !eof; index++) {
       assertActive();
       const chunk = await bounded(tracing.send("IO.read", { handle: stream, size: 65536 }));
@@ -114,10 +121,14 @@ export async function verifyNativeProxyRefusal(context: BrowserContext, assertAc
       eof = chunk.eof;
     }
     if (!eof || !refused) throw new Error("native_proxy_endpoint_unconfirmed");
+    phase = "trace_validate";
     assertNativeProxyRefusalTrace(JSON.parse(Buffer.concat(chunks).toString("utf8")));
     assertActive();
-  } catch {
-    throw new Error("native_proxy_endpoint_unconfirmed");
+  } catch (error) {
+    const known = new Set(["native_proxy_trace_rejected", "native_proxy_attestation_timeout",
+      "native_proxy_trace_unavailable", "native_proxy_trace_limit", "native_proxy_endpoint_unconfirmed"]);
+    const reason = error instanceof Error && known.has(error.message) ? error.message : "unconfirmed";
+    throw new Error("native_proxy_endpoint_unconfirmed", { cause: new Error(`${phase}:${reason}`) });
   } finally {
     try {
       if (started && !ended && tracing) await bounded(tracing.send("Tracing.end"));

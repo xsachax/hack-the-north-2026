@@ -199,6 +199,18 @@ describe("bounded refusal trace acquisition", () => {
   });
 
   it.each([
+    [{ competing: true }, "trace_start:unconfirmed"],
+    [{ data: "{}" }, "trace_validate:native_proxy_trace_rejected"],
+    [{ missingStream: true }, "trace_complete:native_proxy_trace_unavailable"],
+    [{ data: "private malformed trace contents" }, "trace_validate:unconfirmed"],
+  ])("retains only constant phase and reason diagnostics", async (options, cause) => {
+    const fake = harness(options);
+    await expect(verifyNativeProxyRefusal(fake.context, () => {})).rejects.toMatchObject({
+      message: "native_proxy_endpoint_unconfirmed", cause: { message: cause },
+    });
+  });
+
+  it.each([
     ["success despite refusal-shaped evidence", { navigation: "success" as const }],
     ["reset navigation", { navigation: "reset" as const }],
     ["trace data loss", { loss: true }],
