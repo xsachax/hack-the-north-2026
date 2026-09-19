@@ -21,6 +21,14 @@ Layer07 adds [advanced controlled workflows](docs/ADVANCED_WORKFLOWS.md):
 explicit private contexts, acknowledged managed takeover, immutable scoped
 reruns/comparison, and supported coupon regression export/bounded reduction;
 none of these changes declares that public-target gate #8 is solved.
+The [capability audit](docs/CAPABILITIES.md) maps supported behavior to actual
+implementation and regression coverage, and distinguishes cloud evidence from
+offline fixture checks.
+The [deployment runbook](docs/DEPLOYMENT.md) covers the private single-host
+app/worker package, runtime secrets, probes, backups and rollback. The
+[release rehearsal](docs/REHEARSAL.md) has a separate non-replenishing budget and
+private recording/inspection gate. Shipping hardening does not clear #8 or
+complete the original public-website release.
 
 ## Launch and watch
 
@@ -57,7 +65,9 @@ playback limitations are explicit; see [recording integration](docs/REPLAY.md).
 
 ## Local development
 
-Requires Node.js 22.18+ (22.x) and npm.
+Requires Node.js 22.18+ (22.x) and npm. `.nvmrc` pins the rehearsed runtime;
+`.npmrc` rejects unsupported Node engines rather than silently installing on
+an incompatible runtime.
 
 ```sh
 nvm use
@@ -111,7 +121,7 @@ The integration attempts to release Stagehand and the browser after success or f
 
 ## Credentials and evidence
 
-- `BROWSERBASE_API_KEY` belongs in `.env.local` for development and GitHub **Actions secrets** for the manual workflow, never source code or a `NEXT_PUBLIC_*` variable.
+- `BROWSERBASE_API_KEY` belongs in `.env.local` for development and the protected `paid-browserbase` **environment secret** for hosted paid workflows, never source code or a `NEXT_PUBLIC_*` variable. Follow the [operator protection and migration prerequisites](docs/CI.md#paid-workflows-are-a-separate-operator-decision) first; the existing repository-scoped key has not been moved or environment-protected by this PR.
 - `.env.local` is ignored and should have permissions `600`. `.env.example` contains placeholders only.
 - GitHub secrets cannot be read back. A local process or deployed worker needs its own securely supplied environment variable.
 - Rotate any key pasted into chat. Update both the local environment and GitHub secret when rotating.
@@ -119,10 +129,13 @@ The integration attempts to release Stagehand and the browser after success or f
 - Regular CI uses no secrets and makes no cloud calls. The paid smoke workflow is manual, requires explicit confirmation, and never uploads evidence as public Actions artifacts. Workflows become available after they are pushed (manual dispatch normally requires the workflow on the default branch).
 - Owner cookies, CSRF/exact-origin defenses, persisted admission limits and a strong access-code gate protect demo admission. This is not named-account authentication or a complete public multi-tenant service; see [identity and deployment limitations](docs/API.md#deployment-and-identity). Workers share durable spending/concurrency reservations. Live-view links are access-bearing and returned only through an owner-authorized endpoint.
 
-To set or rotate the GitHub secret without including its value in a shell command:
+Only after the protected environment, independent reviewers and branch policy
+are configured and verified, provision its secret without including the value
+in a shell command. Deliberately migrate/rotate/remove the old repository secret
+only after auditing its other consumers; this command does not do that:
 
 ```sh
-gh secret set BROWSERBASE_API_KEY --repo xsachax/hack-the-north-2026
+gh secret set BROWSERBASE_API_KEY --repo xsachax/hack-the-north-2026 --env paid-browserbase
 ```
 
 ## Configuration
@@ -144,9 +157,14 @@ gh secret set BROWSERBASE_API_KEY --repo xsachax/hack-the-north-2026
 See [worker policy](docs/WORKER.md#durable-policy-and-spending) for owner caps,
 90-hour development maximum, protected 10-hour final reserve, the prior 363-second
 rounded-up external baseline, heartbeat and graceful-shutdown settings. The
-separate layer07 advanced rehearsal uses the current **985-second external
+separate layer07 advanced rehearsal preserves its historical **985-second external
 baseline** and a non-replenishing **3,600-second new-reservation cap**; never
 reuse the historical 363-second baseline for that rehearsal.
+The accepted [layer08 release rehearsal](docs/WORKER.md#layer08-release-rehearsal)
+preserves its approved 1,092 baseline and 3,600-second lifetime reservation cap.
+Tracked project actual is now **1,345.293 seconds**; fresh later work in this
+project must account for at least 1,346 seconds of prior usage. Existing proof
+policies and ledgers are immutable, not reset to regain budget.
 
 ## Layout
 

@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { advancedSourceDigest, writeAdvancedBuildReceipt } from "./advanced-build";
 
+process.umask(0o077);
 const before = await advancedSourceDigest();
 const child = spawn(process.execPath, ["node_modules/next/dist/bin/next", "build", ...process.argv.slice(2)], { stdio: "inherit" });
 const code = await new Promise<number>((resolve, reject) => {

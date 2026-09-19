@@ -249,6 +249,14 @@ export function Launch() {
             </details>;
           })}
           <p className="muted">Fresh sessions by default; private returning state is explicit per assignment. Phone is a viewport, not device emulation. Throttling, uploads, tabs and subframes remain unsupported.</p>
+          <details className="configuration">
+            <summary>Supported testing and known limits</summary>
+            <p>Agents use DOM plus viewport screenshots, not screenshot-only human perception. Structural checks use observed controls and text; semantic verdicts and confidence are heuristic, not proof or calibrated probabilities.</p>
+            <p>Keyboard actions are supported, but there is no general accessibility or WCAG scanner. Only the planted second-coupon defect has verified autonomous discovery and automatic regression export; fixture tests do not mean agents found every planted problem.</p>
+            <p>Returning state requires explicit consent and a later observed check; eligibility is not provider confirmation that storage finished saving. Takeover is exclusive inside this app, not revocation of external provider control links.</p>
+            <p>Comparisons need matching criteria and confirming tested coverage; a missing finding alone is not a fix. Reduction reports the shortest supported path found, not a globally shortest reproduction.</p>
+            <p>Screenshots and recordings are private, sensitive pixels, not redacted media. Arbitrary authorized websites remain blocked until connection-level network isolation is proven.</p>
+          </details>
         </section>
         <label className="acknowledgement"><input type="checkbox" required checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} /><span>I am authorized to test this scope and will use only non-destructive tasks.</span></label>
         <button className="primary launch-button" type="submit" disabled={!capabilities || !selected.length || (mode === "controlled" && !capabilities.controlledRunsEnabled)}>

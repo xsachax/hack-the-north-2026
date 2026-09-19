@@ -18,38 +18,67 @@ permissions:
   contents: read
 
 concurrency:
-  group: persona-integration-paid
+  group: paid-browserbase
   cancel-in-progress: false
 
 jobs:
   integration:
-    if: inputs.confirm_paid_run && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.confirm_paid_run &&
+      github.ref == 'refs/heads/main' && github.repository == 'xsachax/hack-the-north-2026'
+    environment: paid-browserbase
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+      BROWSERBASE_API_KEY: ""
+      BROWSERBASE_PROJECT_ID: ""
+      FLASH_FLOOD_ACCESS_CODE: ""
+      DEBUG: "false"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1; Node 24
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - name: Require configured paid environment protections
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/environments/paid-browserbase" |
+            jq -e 'any(.protection_rules[]; .type == "required_reviewers" and .prevent_self_review == true and (.reviewers | length) > 0) and .deployment_branch_policy.protected_branches == true' > /dev/null
+          gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq .protected | grep -qx true
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0; Node 24
         with:
           node-version-file: .nvmrc
-          cache: npm
-      - run: npm ci
+          package-manager-cache: false
+      - run: npm ci --no-audit --no-fund
       - run: npm run build
-        env:
-          NEXT_TELEMETRY_DISABLED: "1"
+      - name: Start credential-free loopback fixture
+        run: |
+          umask 077
+          mkdir -p data/ci-fixture
+          ./node_modules/.bin/next start --hostname 127.0.0.1 --port 4321 > data/ci-fixture/server.log 2>&1 &
+          fixture_pid=$!
+          printf '%s\n' "$fixture_pid" > data/ci-fixture/server.pid
+          for _attempt in $(seq 1 30); do
+            kill -0 "$fixture_pid"
+            if curl --fail --silent http://127.0.0.1:4321/demo/category/home > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo "Loopback fixture did not become ready" >&2
+          exit 1
       - name: Run bounded fixture persona
+        timeout-minutes: 5
         env:
           BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
           BROWSERBASE_PROJECT_ID: ${{ secrets.BROWSERBASE_PROJECT_ID }}
           SCENARIO: ${{ inputs.scenario }}
+        run: npm run persona:integration -- --confirm-paid "--scenario=$SCENARIO"
+      - name: Stop owned loopback fixture
+        if: always()
         run: |
-          ./node_modules/.bin/next start --hostname 127.0.0.1 --port 4321 > /tmp/flash-flood-fixture.log 2>&1 &
-          fixture_pid=$!
-          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
-          for attempt in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:4321/demo/category/home > /dev/null; then break; fi
-            sleep 1
-          done
-          npm run persona:integration -- --confirm-paid "--scenario=$SCENARIO"
+          if [ -f data/ci-fixture/server.pid ]; then
+            read -r fixture_pid < data/ci-fixture/server.pid
+            kill "$fixture_pid" 2>/dev/null || true
+            rm -f data/ci-fixture/server.pid
+          fi
       # No public uploads of artifacts, browser references, screenshots or logs.

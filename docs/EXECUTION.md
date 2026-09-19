@@ -220,8 +220,10 @@ there is no fabricated slow-network persona capability.
 Supported adapter actions: click, fill/type, select, scoped navigation, back,
 bounded scrolling, a small keyboard allowlist and wait. Dialogs are dismissed,
 new tabs/popups are denied, and only the main frame is supported. Downloads are
-cancelled; uploads, clipboard, context reuse, human control and throttling are
-unsupported. CDP diagnostics expose only selected numeric performance counters,
+cancelled; uploads, clipboard and throttling are unsupported. The low-level
+driver does not manage contexts or human control; the durable worker separately
+provides explicit contexts and acknowledged takeover as documented in
+[advanced workflows](ADVANCED_WORKFLOWS.md). CDP diagnostics expose only selected numeric performance counters,
 not arbitrary CDP or browser evaluation tools to the model.
 
 ## Network boundary and release limitation
@@ -322,6 +324,42 @@ WebSocket routing are JavaScript-level controls. Browserbase's
 [domain restriction](https://docs.browserbase.com/platform/browser/security/allowed-domains.md)
 does not cover resources/subframes. #8 remains open until the external guarantee
 and deterministic network acceptance tests establish a real public-URL path.
+
+### Layer08 prerequisite refresh (2026-09-19)
+
+Re-read the official [security architecture](https://docs.browserbase.com/account/enterprise/security.md),
+[proxy configuration](https://docs.browserbase.com/platform/identity/proxies.md)
+and [allowed domains](https://docs.browserbase.com/platform/browser/security/allowed-domains.md)
+for release hardening. The documented contracts above are unchanged:
+per-browser VM/subnet and lateral-movement firewalls, custom HTTP(S) proxy
+credentials and optional trusted CAs, creation-time connectivity validation,
+and top-frame-only domain restrictions. They do not establish the required
+account/region-specific destination policy or all-channel no-bypass guarantee.
+No hostile public-site probe, proxy deployment or account purchase was made.
+The supplied application credentials do not supply external gateway hosting
+or authorize guessing provider firewall behavior.
+
+The minimal provider/operator decision before implementing public execution is:
+
+| Required input | Evidence needed before enabling #8 |
+| --- | --- |
+| Provider-enforced policy, or mandatory external gateway | Exact account/region feature/configuration and a documented way to prevent direct connections; a proxy preference alone is insufficient |
+| Private-destination enforcement | Deny loopback, private, link-local/metadata, reserved and non-global IPv4/IPv6 at connection time; validate all DNS answers and pin the actual socket so rebinding cannot change the destination |
+| All channels and failures | Cover redirects, frames, subresources, workers/service workers, WebSockets, WebRTC/UDP, DNS/speculative connections and proxy outage; unsupported channels must be disabled below page JavaScript with no direct fallback |
+| Reachable gateway, if required | Operator-approved hosting/account, authenticated endpoint, TLS and credential delivery, resource/bandwidth limits, maintenance and cost authorization; none is supplied by this repository |
+| Trusted control plane | Keep Browserbase/Stagehand credentials and the narrowly authenticated extension connection unavailable to page content; no page-accessible bypass host |
+| Acceptance environment | Authorized public target plus controlled forbidden-destination listeners and deterministic redirect/rebinding/non-document negative tests; prove listeners see no connections, not merely an error label |
+
+**Separate application scope requirement:** HTTPS CONNECT protects destination
+admission but cannot inspect encrypted paths or methods. Exact path/method scope
+needs verified browser interception or TLS inspection with operator-approved CA
+handling. TLS inspection is not inherently required to deny private destinations;
+it is one possible additional path-policy mechanism, not a substitute for
+mandatory all-channel egress enforcement. Do not disable certificate validation.
+If no provider-supported no-bypass configuration exists, changing browser hosting
+and one-key Gateway compatibility is a product/infrastructure decision, not an
+unsafe opt-out. Until these inputs and real positive/negative proofs exist,
+`websiteExecutionEnabled` remains false and #1/#8 remain open.
 
 ## Evidence privacy and diagnostics
 

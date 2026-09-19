@@ -14,7 +14,7 @@ export async function advancedSourceDigest(cwd = process.cwd()): Promise<string>
   const files = execFileSync("git", ["ls-files", "-co", "--exclude-standard", "--",
     "src", "scripts", "tests", "public", "package.json", "package-lock.json", "tsconfig.json",
     "next.config.*", "next-env.d.ts", "playwright.config.*", "vitest.config.*", "eslint.config.*",
-    ".nvmrc", ".github/workflows",
+    ".nvmrc", ".npmrc", ".github/workflows", "Dockerfile", ".dockerignore", "compose.yaml", "deploy",
   ], { cwd, encoding: "utf8" }).trim().split("\n").filter(Boolean);
   const digest = createHash("sha256");
   for (const file of [...new Set(files)].sort()) {

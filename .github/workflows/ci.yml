@@ -6,26 +6,86 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: offline-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
     env:
       NEXT_TELEMETRY_DISABLED: "1"
       # Offline contracts/SQLite/API/target-policy tests must never need cloud secrets.
       BROWSERBASE_API_KEY: ""
       BROWSERBASE_PROJECT_ID: ""
+      FLASH_FLOOD_ACCESS_CODE: ""
+      DEBUG: "false"
+      TMPDIR: ${{ github.workspace }}/data/ci-scratch
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1; Node 24
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - name: Prepare private local scratch
+        run: umask 077 && mkdir -p "$TMPDIR"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0; Node 24
         with:
           node-version-file: .nvmrc
           cache: npm
-      - run: npm ci
-      - run: npm run check
-      - run: npm run build
-      - run: npm run test:http
-      - run: npx playwright install --with-deps chromium --only-shell
-      - run: npm run test:e2e
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Audit locked dependencies (high and critical block)
+        run: npm audit --audit-level=high --ignore-scripts
+      - name: Lint, types, and all unit/repository/API/worker tests
+        timeout-minutes: 10
+        run: npm run check
+      - name: Build and bind the production source receipt
+        timeout-minutes: 5
+        run: npm run build
+      - name: Actual production HTTP and SSE
+        timeout-minutes: 2
+        run: npm run test:http
+      - name: Install locked Chromium headless shell
+        timeout-minutes: 5
+        run: npx --no-install playwright install --with-deps chromium --only-shell
+      - name: Chromium regression suite
+        timeout-minutes: 10
+        run: npm run test:e2e
+      - name: Report HTTPS restart and genuine-owner resume (offline)
+        timeout-minutes: 3
+        run: npm run report:integration -- --offline-preflight
+      - name: Advanced HTTPS restart and marker preflight (offline)
+        timeout-minutes: 3
+        run: npm run advanced:integration -- --offline-preflight
+      - name: Release SQLite queue and budget preflight (offline)
+        timeout-minutes: 3
+        run: npx --no-install tsx scripts/release-integration.ts --offline-preflight
+      - name: Clean Node deployment package and actual HTTPS restart (offline)
+        timeout-minutes: 5
+        run: |
+          npm run release:package -- data/release-package
+          RELEASE_PACKAGE_DIR="$PWD/data/release-package" npm run release:package-check
+      # Private cookies, SQLite files, screenshots and traces are never uploaded.
+
+  container:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+      BROWSERBASE_API_KEY: ""
+      BROWSERBASE_PROJECT_ID: ""
+      FLASH_FLOOD_ACCESS_CODE: ""
+      DEBUG: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1; Node 24
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0; Node 24
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - run: npm ci --no-audit --no-fund
+      - name: Actual offline image, private volume, probes, shutdown and restore
+        timeout-minutes: 15
+        run: node --import tsx scripts/deployment-docker-validate.ts
+      # This random-project validation never receives cloud secrets or uploads evidence.

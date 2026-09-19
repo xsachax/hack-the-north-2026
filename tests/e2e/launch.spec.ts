@@ -78,6 +78,10 @@ test("bootstrap rejects bad codes and preserves no access code in storage; publi
     await page.getByRole("button", { name: "Unlock workspace" }).click();
     await expect(page.getByText("Website execution is not enabled.", { exact: false })).toBeVisible();
     await expect(page.getByRole("button", { name: "Save website request (execution blocked)" })).toBeVisible();
+    await page.getByText("Supported testing and known limits", { exact: true }).click();
+    await expect(page.getByText("Agents use DOM plus viewport screenshots", { exact: false })).toBeVisible();
+    await expect(page.getByText("Keyboard actions are supported, but there is no general accessibility or WCAG scanner.", { exact: false })).toBeVisible();
+    await expect(page.getByText("Comparisons need matching criteria and confirming tested coverage", { exact: false })).toBeVisible();
     expect(await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }))).not.toContain(accessCode);
     const owner = fixture.owner;
     await page.reload();

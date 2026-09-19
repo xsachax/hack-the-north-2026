@@ -25,7 +25,15 @@
     "controlled:integration": "tsx scripts/controlled-integration.ts",
     "ui:integration": "tsx scripts/ui-integration.ts",
     "report:integration": "tsx scripts/report-integration.ts",
-    "advanced:integration": "tsx scripts/advanced-integration.ts"
+    "advanced:integration": "tsx scripts/advanced-integration.ts",
+    "deployment:build": "tsx scripts/deployment-build.ts",
+    "deployment:start": "tsx scripts/deployment-start.ts",
+    "deployment:migrate": "tsx scripts/deployment-migrate.ts",
+    "deployment:backup": "tsx scripts/deployment-backup.ts",
+    "release:package": "tsx scripts/release-package.ts",
+    "release:package-check": "tsx scripts/release-package-check.ts",
+    "release:integration": "tsx scripts/release-integration.ts",
+    "release:finalize": "tsx scripts/release-finalize.ts"
   },
   "dependencies": {
     "@browserbasehq/sdk": "2.20.0",
