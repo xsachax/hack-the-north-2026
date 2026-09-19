@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createServer as createHttpsServer, type RequestOptions } from "node:https";
-import { createServer as createTcpServer } from "node:net";
+import { createServer as createTcpServer, type Socket } from "node:net";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,6 +22,7 @@ const state = vi.hoisted(() => ({
   ca: "",
   holdLookup: false,
   lateLookup: undefined as (() => void) | undefined,
+  sockets: [] as Socket[],
 }));
 vi.mock("node:dns/promises", async (original) => ({
   ...await original<typeof import("node:dns/promises")>(),
@@ -56,11 +57,19 @@ function mappedOptions(options: RequestOptions): RequestOptions {
 }
 vi.mock("node:http", async (original) => {
   const actual = await original<typeof import("node:http")>();
-  return { ...actual, request: (options: RequestOptions) => actual.request(mappedOptions(options)) };
+  return { ...actual, request: (options: RequestOptions) => {
+    const req = actual.request(mappedOptions(options));
+    req.once("socket", (socket) => state.sockets.push(socket));
+    return req;
+  } };
 });
 vi.mock("node:https", async (original) => {
   const actual = await original<typeof import("node:https")>();
-  return { ...actual, request: (options: RequestOptions) => actual.request(mappedOptions(options)) };
+  return { ...actual, request: (options: RequestOptions) => {
+    const req = actual.request(mappedOptions(options));
+    req.once("socket", (socket) => state.sockets.push(socket));
+    return req;
+  } };
 });
 
 const input: PublicTransportRequest = { url: "http://example.com/docs", method: "GET", kind: "navigation" };
@@ -114,7 +123,7 @@ beforeAll(async () => {
   const tlsAddress = tlsServer.address();
   if (!tlsAddress || typeof tlsAddress === "string") throw new Error("Missing TLS listener");
   tlsPort = tlsAddress.port;
-  rawServer = createTcpServer((socket) => socket.once("data", () => { if (!rawHold) socket.end(rawReply); }));
+  rawServer = createTcpServer((socket) => socket.once("data", () => { if (rawHold) socket.write(rawReply); else socket.end(rawReply); }));
   await new Promise<void>((resolve) => rawServer.listen(0, "127.0.0.1", resolve));
   const rawAddress = rawServer.address();
   if (!rawAddress || typeof rawAddress === "string") throw new Error("Missing raw listener");
@@ -125,10 +134,12 @@ beforeEach(() => {
   state.v6.mockReset().mockResolvedValue(["2606:4700:4700::1111"]);
   state.dispatches.length = 0;
   state.pins.length = 0;
+  state.sockets.length = 0;
   state.port = port;
   state.holdLookup = false;
   state.lateLookup = undefined;
   rawHold = false;
+  rawReply = "";
   received = [];
   handler = (_req, res) => res.end("hello");
 });
@@ -476,14 +487,50 @@ describe("job budgets, cancellation, close/drain and late callbacks", () => {
     await expect(broker.request(input)).rejects.toMatchObject({ code: "byte_limit" });
     expect(state.dispatches).toHaveLength(2);
   });
-  it("conservatively charges parser-rejected headers that have no response callback", async () => {
+  it("charges parser-rejected bytes that have no response callback exactly once", async () => {
     state.port = rawPort;
     rawReply = `HTTP/1.1 200 OK\r\nX-Long: ${"x".repeat(2048)}\r\n\r\n`;
-    const broker = transport({ limits: { ...PUBLIC_TRANSPORT_LIMITS, headerBytes: 1024, totalBytes: 1500 } });
+    const broker = transport({ limits: { ...PUBLIC_TRANSPORT_LIMITS, headerBytes: 1024, totalBytes: 3000 } });
     await expect(broker.request(input)).rejects.toMatchObject({ code: "network_failure" });
     await expect(broker.request(input)).rejects.toMatchObject({ code: "byte_limit" });
     await expect(broker.request(input)).rejects.toMatchObject({ code: "byte_limit" });
     expect(state.dispatches).toHaveLength(2);
+  });
+  it.each(["trailers", "eof", "timeout", "cancel"] as const)("charges rejected %s bytes before failure and fences subsequent requests", async (mode) => {
+    state.port = rawPort;
+    const incomplete = `HTTP/1.1 200 OK\r\nX-Padding: ${"x".repeat(2000)}`;
+    rawReply = mode === "trailers"
+      ? `HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nX-Padding: ${"x".repeat(2000)}\r\n\r\n`
+      : incomplete;
+    rawHold = mode === "timeout" || mode === "cancel";
+    const broker = transport({ limits: { ...PUBLIC_TRANSPORT_LIMITS, headerBytes: 4096, totalBytes: 3000, requestMs: 100 } });
+    const cancel = new AbortController();
+    const first = broker.request({ ...input, signal: cancel.signal });
+    const failed = expect(first).rejects.toMatchObject({
+      code: mode === "trailers" ? "unsupported_response" : mode === "timeout" ? "request_timeout" : mode === "cancel" ? "aborted" : "network_failure",
+    });
+    if (mode === "cancel") {
+      await until(() => (state.sockets[0]?.bytesRead ?? 0) >= Buffer.byteLength(rawReply));
+      cancel.abort();
+    }
+    await failed;
+    await expect(broker.request(input)).rejects.toMatchObject({ code: "byte_limit" });
+    await expect(broker.request(input)).rejects.toMatchObject({ code: "byte_limit" });
+    expect(state.dispatches).toHaveLength(2);
+  });
+  it("does not double-charge valid response headers or body", async () => {
+    state.port = rawPort;
+    rawReply = "HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n" + "x".repeat(1000);
+    const broker = transport({ limits: { ...PUBLIC_TRANSPORT_LIMITS, totalBytes: 1500 } });
+    expect((await broker.request(input)).body.length).toBe(1000);
+  });
+  it("charges actual decrypted TLS data to the same terminal aggregate limit", async () => {
+    state.port = tlsPort;
+    handler = (_req, res) => res.end("x".repeat(1000));
+    const broker = transport({ limits: { ...PUBLIC_TRANSPORT_LIMITS, totalBytes: 900 } });
+    await expect(broker.request({ ...input, url: "https://example.com/docs" })).rejects.toMatchObject({ code: "byte_limit" });
+    await expect(broker.request(input)).rejects.toMatchObject({ code: "byte_limit" });
+    expect(state.dispatches).toHaveLength(1);
   });
   it.each(["authorize", "assertActive", "authorizeBrowserHeaders"] as const)("reserves concurrency before synchronous %s reentry", async (callback) => {
     let nested: Promise<unknown> | undefined;

@@ -1,11 +1,11 @@
 import { test, expect, chromium, type BrowserContext, type Worker } from "@playwright/test";
 import assert from "node:assert/strict";
-import { createSocket } from "node:dgram";
 import { createServer, type Server } from "node:http";
 import { createConnection, createServer as createTcpServer, type AddressInfo, type Socket } from "node:net";
-import { mkdtemp, readFile, readlink, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { proxyValue } from "../../src/server/execution/native-policy-extension/policy.js";
+import { ownedDns, verifyNetworkNamespace } from "../network-fixtures";
 
 const ips = ["10.77.0.1", "169.254.77.1", "::1", "fd00::1"];
 const hostname = "owned-rebind.test";
@@ -21,18 +21,6 @@ type ExtensionGlobal = typeof globalThis & {
     } };
   };
 };
-
-async function verifyIsolation() {
-  assert.equal(process.platform, "linux", "Run via scripts/native-policy-linux.ts on Linux");
-  const scratch = process.env.NATIVE_POLICY_LINUX_SCRATCH;
-  const hostNet = process.env.NATIVE_POLICY_LINUX_HOST_NET;
-  const hostMount = process.env.NATIVE_POLICY_LINUX_HOST_MOUNT;
-  assert(scratch && hostNet && hostMount, "Namespace launcher is mandatory");
-  assert.notEqual(await readlink("/proc/self/ns/net"), hostNet, "Must not use host networking");
-  assert.notEqual(await readlink("/proc/self/ns/mnt"), hostMount, "Must not use host mounts");
-  assert.equal(await readFile("/etc/resolv.conf", "utf8"), "nameserver 127.0.0.1\noptions timeout:1 attempts:1\n");
-  return scratch;
-}
 
 async function readPolicy(worker: Worker) {
   return worker.evaluate(async () => {
@@ -168,54 +156,15 @@ async function sentinels() {
 }
 
 async function dns() {
-  const socket = createSocket("udp4");
-  let address = ips[0];
-  const answers: string[] = [];
-  const errors: Error[] = [];
-  socket.on("error", (error) => errors.push(error));
-  socket.on("message", (query, remote) => {
-    // A deliberately tiny authoritative responder: one uncompressed question,
-    // A for our exact .test name, NODATA for AAAA, NXDOMAIN for other names.
-    if (query.length < 12 || query.readUInt16BE(4) !== 1 || (query[2] & 0x80)) return;
-    let end = 12;
-    const labels: string[] = [];
-    while (end < query.length && query[end] !== 0) {
-      const length = query[end++];
-      if (length > 63 || end + length > query.length) return;
-      labels.push(query.toString("ascii", end, end + length));
-      end += length;
-    }
-    if (end + 5 > query.length) return;
-    const type = query.readUInt16BE(end + 1);
-    const klass = query.readUInt16BE(end + 3);
-    const owned = labels.join(".").toLowerCase() === hostname && klass === 1;
-    const answer = owned && type === 1;
-    const header = Buffer.alloc(12);
-    query.copy(header, 0, 0, 2);
-    header.writeUInt16BE(0x8480 | (query.readUInt16BE(2) & 0x0100) | (owned ? 0 : 3), 2);
-    header.writeUInt16BE(1, 4);
-    header.writeUInt16BE(answer ? 1 : 0, 6);
-    const parts = [header, query.subarray(12, end + 5)];
-    if (answer) {
-      // Pointer to question, A/IN, TTL zero, four address bytes.
-      parts.push(Buffer.from([0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 0, 0, 4, ...address.split(".").map(Number)]));
-      answers.push(address);
-    }
-    socket.send(Buffer.concat(parts), remote.port, remote.address, (error) => { if (error) errors.push(error); });
-  });
-  await new Promise<void>((done, reject) => {
-    socket.once("error", reject);
-    socket.bind(53, "127.0.0.1", done);
-  });
+  const resolver = await ownedDns({ names: [hostname], addresses: [ips[0]] });
   return {
-    answers, errors,
-    rebind: (ip: string) => { assert(ips.slice(0, 2).includes(ip)); address = ip; },
-    close: () => new Promise<void>((done) => socket.close(() => done())),
+    ...resolver,
+    rebind: (ip: string) => { assert(ips.slice(0, 2).includes(ip)); resolver.setAddresses([ip]); },
   };
 }
 
 test("native proxy blocks private/link-local/IPv6 and same-process controlled DNS answer changes", async () => {
-  const scratch = await verifyIsolation();
+  const scratch = await verifyNetworkNamespace();
   const sentinel = await sentinels();
   let resolver: Awaited<ReturnType<typeof dns>> | undefined;
   let control: Awaited<ReturnType<typeof launch>> | undefined;

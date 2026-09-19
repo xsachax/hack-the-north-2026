@@ -191,10 +191,6 @@ function responseHeaders(response: IncomingMessage, limit: number): {
   return { headers, length: length === undefined ? undefined : Number(length), location: fields.get("location")?.[0] };
 }
 
-function headerSize(raw: readonly string[]): number {
-  return raw.reduce((sum, field) => sum + Buffer.byteLength(field) + 2, 0);
-}
-
 /** No factory/UI integration: callers must first establish a separate native deny boundary. */
 export function createPublicTransport(options: PublicTransportOptions): PublicTransport {
   const { authorize, authorizeBrowserHeaders, assertActive, signal } = options;
@@ -364,26 +360,22 @@ export function createPublicTransport(options: PublicTransportOptions): PublicTr
         };
         const onAbort = () => fail(reason ?? terminal ?? failure("aborted"));
         controller.signal.addEventListener("abort", onAbort, { once: true });
-        req.on("error", (cause: Error & { code?: string }) => {
-          // Parser failures may never expose rawHeaders. Charge the full bounded
-          // header allowance conservatively, including failures after body data.
-          if (cause.code?.startsWith("HPE_")) {
-            try { charge(limits.headerBytes); } catch (error) { fail(error); }
-          }
-          fail(cause);
-        });
-        req.on("upgrade", (res, socket, head) => {
+        req.on("error", fail);
+        req.on("upgrade", (_res, socket) => {
           socket.destroy();
-          try { charge(headerSize(res.rawHeaders) + head.length); }
-          catch (error) { fail(error); }
           fail(failure("unsupported_response"));
         });
-        req.on("information", (info) => {
+        req.on("information", () => {
           // Bound unsolicited interim responses rather than accepting a stream.
-          try { charge(headerSize(info.rawHeaders)); } catch (error) { fail(error); }
           fail(failure("unsupported_response"));
         });
         req.on("socket", (socket) => {
+          // Count each received plaintext HTTP byte before parser callbacks,
+          // including incomplete headers, framing, rejected trailers and errors.
+          // TLSSocket data is decrypted application data, not TLS wire billing.
+          socket.prependListener("data", (chunk: Buffer) => {
+            try { charge(chunk.length); } catch (cause) { fail(cause); }
+          });
           const fence = () => { try { check(); } catch (cause) { fail(cause); } };
           fence();
           socket.once("connect", fence);
@@ -405,7 +397,6 @@ export function createPublicTransport(options: PublicTransportOptions): PublicTr
           res.on("aborted", () => fail(failure("network_failure")));
           try {
             check();
-            charge(headerSize(res.rawHeaders));
             if (status < 200 || status > 599 || (status >= 300 && status < 400 && status !== 304 && !redirectStatuses.has(status))) {
               throw failure("unsupported_response");
             }
@@ -420,7 +411,6 @@ export function createPublicTransport(options: PublicTransportOptions): PublicTr
           res.on("data", (chunk: Buffer) => {
             try {
               check();
-              charge(chunk.length);
               if ((noBody && chunk.length) || chunk.length > limits.responseBytes - bytes) throw failure("byte_limit");
               bytes += chunk.length;
               chunks.push(chunk);

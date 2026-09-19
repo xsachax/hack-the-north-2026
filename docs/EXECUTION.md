@@ -101,7 +101,7 @@ All limits are required, positive safe integers, and can only reduce the exporte
 | --- | --- | --- |
 | Requests / concurrency | 256 / 8 | No queue; denied/failed/concurrency-rejected attempts also spend request count |
 | Response body / headers | 4 MiB / 16 KiB | Per response; streamed checks precede retention/concatenation |
-| Total bytes | 64 MiB | Aggregate URL + request header fields + response header fields + body, including failures; parser failures conservatively charge the full header allowance when raw headers are unavailable; not TLS/wire billing |
+| Total bytes | 64 MiB | Aggregate URL + request header fields + each incoming plaintext HTTP socket byte exactly once, before parsing: status/headers, framing, body, trailers and incomplete/rejected data; not TLS/wire billing |
 | Redirects | 16 | Aggregate across the instance, not reset by separate chains |
 | Total / request duration | 300 / 15 seconds | From instance construction / accepted request, including DNS and redirect checks |
 | DNS duration | 2 seconds default, 5 maximum | Both families for each destination; canceled on deadline/close/abort |
@@ -128,6 +128,19 @@ framing, concurrent budgets and cancellation/late callbacks. Its socket mapping
 exists **only in tests** to reach owned loopback listeners; it is not evidence that
 a production socket connected to a real public IP, or that native browser egress
 is enforced. No provider resources or external targets are used.
+
+A separate [Linux namespace gate](CI.md#public-transport-namespace-acceptance)
+runs the production library with **no DNS or socket mocks**. It uses the merged
+native-policy launcher's verified private namespace, with synthetic public IPv4/
+IPv6 aliases, reachable private/link-local/IPv6 positive controls, and owned
+TTL-zero DNS. An answer flips from public to private between resolution and the
+first socket; that socket must still reach its pinned public alias, and a second
+request on the same transport must reject the changed answer without another
+connection. The gate also exercises mixed answers, private redirects, read
+cancellation, and actual TLS/SNI/IP SAN success and certificate rejection using
+an ephemeral owned CA in a fresh Node child. This is real socket evidence in an
+isolated synthetic network, **not external public connectivity, a browser
+interception integration or a provider proof**.
 
 ## Run the real integration
 
