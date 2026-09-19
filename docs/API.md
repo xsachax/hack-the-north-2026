@@ -175,6 +175,8 @@ recovery or completion begins. Protected evidence downloads/replays come later.
 
 ### Controlled sites and custom objectives (layer04b / UI05)
 
+Implemented in issue #11 / PR #17, on top of merged worker PR #15.
+
 `POST /controlled-runs` uses the same strong access-code, `ENABLE_DEMO_RUNS`,
 owner, Origin, CSRF, body-size, rate-limit and idempotency protections as the demo
 route. It is an **operator-selected trusted-site registry**, not the ordinary

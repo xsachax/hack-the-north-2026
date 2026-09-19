@@ -15,6 +15,9 @@ citations, not deterministic proof or calibrated confidence statistics.
 
 The [delivery plan](docs/DELIVERY_PLAN.md) defines the architecture, sequential PR layers, acceptance gates, capability matrix and accountability ledger for the end-to-end build.
 
+Layer04b (issue #11 / PR #17) follows merged durable-worker PR #15. It is the
+backend prerequisite for UI05, not a declaration that public-target gate #8 is solved.
+
 ## Local development
 
 Requires Node.js 22.18+ (22.x) and npm.

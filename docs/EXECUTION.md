@@ -378,6 +378,8 @@ subsequent checkout and completion routes.
 
 ## Layer04b acceptance and next-layer boundary
 
+Issue #11 / PR #17 extends the merged worker in PR #15; #8 remains open.
+
 The final layer04b gates pass **1,290 unit/API tests and 48 Chromium E2E tests**,
 plus lint/types, production build and built-app HTTP/SSE smoke. Both registered
 sites have real driver/loop/durable-worker regressions with custom personas and

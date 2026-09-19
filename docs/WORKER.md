@@ -328,6 +328,8 @@ identity use separate schemas; SSE reads never manufacture execution progress.
 
 ## Layer04b controlled-site rehearsal
 
+Issue #11 / PR #17 builds on merged layer04 PR #15 without weakening #8.
+
 After the offline gates, `npm run controlled:integration -- --confirm-paid`
 runs one custom persona through owner admission and the real durable worker on
 the registered project board. It starts on the empty projects list, asks for
