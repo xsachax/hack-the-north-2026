@@ -1,0 +1,38 @@
+name: Browserbase smoke (paid, manual)
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_paid_run:
+        description: "Start one short Browserbase session and use Model Gateway credits"
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browserbase-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    if: inputs.confirm_paid_run
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Run one capped smoke session
+        run: npm run browserbase:smoke
+        env:
+          BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
+          BROWSERBASE_PROJECT_ID: ${{ secrets.BROWSERBASE_PROJECT_ID }}
+          SESSION_TIMEOUT_SECONDS: "120"
+      # Do not upload recordings, screenshots, or live URLs to a public repo's artifacts.
