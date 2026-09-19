@@ -135,7 +135,7 @@ async function main() {
       }));
       runs.push({ id: run.id, expected });
     }
-    for (let i = 0; i < 2; i++) children.push(spawn(process.execPath, ["--import", "tsx", "scripts/worker.ts", "--confirm-paid"], { env, stdio: "ignore" }));
+    for (let i = 0; i < 2; i++) children.push(spawn(process.execPath, ["--conditions=react-server", "--import", "tsx", "scripts/worker.ts", "--confirm-paid"], { env, stdio: "ignore" }));
     let cancelled = false;
     const cancelRun = runs.find((run) => run.expected === "cancelled")!;
     const deadline = Date.now() + 360000;

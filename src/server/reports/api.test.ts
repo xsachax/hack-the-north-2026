@@ -86,11 +86,19 @@ describe("protected durable reports API", () => {
     sql((db) => {
       db.prepare("UPDATE report_snapshots SET revision='obsolete',report=json_set(report,'$.signatureVersion','finding-v1')").run();
       // Reproduce the actual v5 schema, not new tables with an artificially old version.
+      db.exec("DROP TRIGGER runs_execution_policy_immutable");
+      db.exec("ALTER TABLE runs DROP COLUMN public_asset_policy");
+      db.exec("ALTER TABLE runs DROP COLUMN public_execution_policy");
       for (const table of [
+        "native_resource_events", "native_resources",
         "reproduction_worker_jobs", "reproduction_candidates", "reproductions", "rerun_attempts", "rerun_runs",
         "takeover_commands", "takeover_intervals", "takeover_controls",
         "context_operations", "context_selections", "browser_contexts",
       ]) db.exec(`DROP TABLE ${table}`);
+      expect(db.prepare("PRAGMA table_info(runs)").all().map((column) => column.name))
+        .not.toContain("public_execution_policy");
+      expect(db.prepare("PRAGMA table_info(runs)").all().map((column) => column.name))
+        .not.toContain("public_asset_policy");
       db.exec("PRAGMA user_version=5");
     });
     repository.close();

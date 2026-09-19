@@ -163,4 +163,34 @@ export const migrations = [
   rerunMigration,
   reproductionMigration,
   advancedWorkerMigration,
+  `
+  ALTER TABLE runs ADD COLUMN public_execution_policy TEXT
+    CHECK(public_execution_policy IS NULL OR public_execution_policy='native-public-v1');
+  ALTER TABLE runs ADD COLUMN public_asset_policy TEXT
+    CHECK(
+      (public_execution_policy IS NULL AND public_asset_policy IS NULL) OR
+      (public_execution_policy IS NOT NULL AND public_asset_policy IS NOT NULL AND
+        public_asset_policy='public-http-readonly-v1' AND execution_mode='website' AND
+        controlled_site_id IS NULL AND scenario IS NULL)
+    );
+  CREATE TRIGGER runs_execution_policy_immutable
+    BEFORE UPDATE OF public_execution_policy,public_asset_policy,execution_mode,controlled_site_id,scenario ON runs
+    WHEN NEW.public_execution_policy IS NOT OLD.public_execution_policy OR
+      NEW.public_asset_policy IS NOT OLD.public_asset_policy OR
+      NEW.execution_mode IS NOT OLD.execution_mode OR
+      NEW.controlled_site_id IS NOT OLD.controlled_site_id OR NEW.scenario IS NOT OLD.scenario
+    BEGIN SELECT RAISE(ABORT,'immutable_execution_policy'); END;
+  CREATE TABLE native_resources (
+    job_id TEXT PRIMARY KEY REFERENCES launches(job_id),
+    extension_id TEXT UNIQUE,
+    resource TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE native_resource_events (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL REFERENCES launches(job_id),
+    resource TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  `,
 ] as const;

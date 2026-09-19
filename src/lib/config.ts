@@ -13,6 +13,7 @@ export const configSchema = z.object({
   MAX_STEPS_PER_PERSONA: z.coerce.number().int().min(1).max(30).default(12),
   SESSION_TIMEOUT_SECONDS: z.coerce.number().int().min(60).max(300).default(120),
   DATA_DIR: z.string().trim().min(1).default("./data"),
+  ENABLE_PUBLIC_RUNS: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
 });
 
 export type AppConfig = z.infer<typeof configSchema>;

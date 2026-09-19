@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
-import { copyFile, mkdir, readdir } from "node:fs/promises";
+import { copyFile, mkdir } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { assertPrivateDirectory } from "./advanced-proof";
+import { releaseSourceFiles } from "../src/server/deployment/source";
 
 const destination = resolve(process.argv[2] ?? "data/release-package");
 if (process.argv.length > 3 || dirname(destination) !== resolve("data") ||
@@ -10,24 +11,9 @@ process.umask(0o077);
 await mkdir("data", { recursive: true, mode: 0o700 });
 await assertPrivateDirectory(resolve("data"));
 await mkdir(destination, { mode: 0o700 });
-for (const file of ["package.json", "package-lock.json", ".npmrc", "next.config.ts", "tsconfig.json"]) {
+for (const file of await releaseSourceFiles()) {
+  await mkdir(dirname(join(destination, file)), { recursive: true, mode: 0o700 });
   await copyFile(file, join(destination, file));
-}
-async function copySource(directory: string): Promise<void> {
-  await mkdir(join(destination, directory), { recursive: true, mode: 0o700 });
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    const path = join(directory, entry.name);
-    if (entry.isSymbolicLink()) throw new Error("release_package_source_symlink");
-    if (entry.isDirectory()) await copySource(path);
-    else if (entry.isFile() && /\.(ts|tsx|css)$/.test(entry.name) && !entry.name.endsWith(".test.ts")) {
-      await copyFile(path, join(destination, path));
-    }
-  }
-}
-await copySource("src");
-await mkdir(join(destination, "scripts"), { mode: 0o700 });
-for (const file of await readdir("scripts")) {
-  if (file === "worker.ts" || /^deployment.*\.ts$/.test(file)) await copyFile(join("scripts", file), join(destination, "scripts", file));
 }
 const env: NodeJS.ProcessEnv = {
   NODE_ENV: "development", PATH: process.env.PATH, HOME: process.env.HOME,

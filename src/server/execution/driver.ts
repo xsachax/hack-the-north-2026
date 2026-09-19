@@ -20,6 +20,10 @@ export const fixtureCapabilities = Object.freeze({
   humanTakeover: "unsupported", networkThrottling: "unsupported",
   arbitraryTargets: "disabled",
 } as const);
+export const readOnlyCapabilities = Object.freeze({
+  ...fixtureCapabilities, click: "links_only", type: false, select: false, keyboard: false,
+  arbitraryTargets: "requires_native_policy",
+} as const);
 
 export type CriterionVerifier = (page: Page, observation: Observation) => Promise<readonly CriterionCheck[]>;
 export type DriverOptions = {
@@ -31,6 +35,8 @@ export type DriverOptions = {
   close: () => Promise<CleanupOutcome>;
   networkErrors: readonly string[];
   keyboardOnly?: boolean;
+  readOnly?: boolean;
+  networkFailureCode?: "fixture_network_failed" | "public_transport_failed";
   assertActive?: () => void;
 };
 export type ScopedDriverOptions = DriverOptions & {
@@ -40,7 +46,7 @@ export type ScopedDriverOptions = DriverOptions & {
 };
 
 export class ScopedBrowserDriver implements BrowserDriver {
-  readonly capabilities = fixtureCapabilities;
+  get capabilities() { return this.options.readOnly ? readOnlyCapabilities : fixtureCapabilities; }
   private readonly page: Page;
   private actionId = "setup";
   private actionNumber = 0;
@@ -63,7 +69,7 @@ export class ScopedBrowserDriver implements BrowserDriver {
       if (error.message === "FLASH_FLOOD_UNSUPPORTED_TABS") this.unsupported = "tabs_unsupported";
       const confirmed = options.classifyFunctionalError?.(error);
       this.record("pageerror", confirmed ?? "PAGE_ERROR");
-      this.signals.push({
+      this.addSignal({
         kind: confirmed ? "functional_failure" : "console",
         message: confirmed ?? "PAGE_ERROR",
         evidence: `page-main/${this.actionId}`,
@@ -78,7 +84,7 @@ export class ScopedBrowserDriver implements BrowserDriver {
       if (response.status() >= 400) {
         const pending = this.requests.get(response.request());
         this.record("http_error", "HTTP_ERROR", { url: response.url(), status: response.status(), actionId: pending?.actionId });
-        this.signals.push({ kind: "http", message: "HTTP_ERROR", status: response.status() });
+        this.addSignal({ kind: "http", message: "HTTP_ERROR", status: response.status() });
       }
     });
     this.page.on("requestfinished", (request) => {
@@ -94,8 +100,13 @@ export class ScopedBrowserDriver implements BrowserDriver {
     this.record("policy_block", "POLICY_BLOCK", { url });
   }
 
+  private addSignal(signal: TelemetrySignal): void {
+    if (this.signals.length < 256) this.signals.push(signal);
+    else if (!this.errors.length) this.errors.push("telemetry_limit");
+  }
+
   private record(kind: TelemetryRecord["kind"], code: string, extra: Partial<TelemetryRecord> = {}): void {
-    if (this.telemetry.length >= 256) { this.errors.push("telemetry_limit"); return; }
+    if (this.telemetry.length >= 256) { if (!this.errors.length) this.errors.push("telemetry_limit"); return; }
     this.telemetry.push(sanitizeTelemetry({
       timestamp: new Date().toISOString(), pageId: "page-main", actionId: extra.actionId ?? this.actionId,
       kind, code, url: extra.url ?? this.page.url(), status: extra.status, durationMs: extra.durationMs,
@@ -107,7 +118,7 @@ export class ScopedBrowserDriver implements BrowserDriver {
     this.options.assertActive?.();
     if (this.closed) throw new ExecutionError("infra", "driver_closed");
     if (this.unsupported) throw new ExecutionError("unsupported", this.unsupported);
-    if (this.options.networkErrors.length) throw new ExecutionError("infra", "fixture_network_failed");
+    if (this.options.networkErrors.length) throw new ExecutionError("infra", this.options.networkFailureCode ?? "fixture_network_failed");
     if (this.errors.length) throw new ExecutionError("limit", "telemetry_limit");
     if (!allowsNavigation(this.options.scope, this.page.url())) throw new ExecutionError("block", "page_out_of_scope");
     if (this.page.frames().length !== 1) throw new ExecutionError("unsupported", "subframes_unsupported");
@@ -250,10 +261,16 @@ export class ScopedBrowserDriver implements BrowserDriver {
   async act(action: BrowserAction, signal: AbortSignal): Promise<void> {
     this.guard(signal);
     if (action.actor !== "agent") throw new ExecutionError("unsupported", "human_actor_not_enabled");
+    if (this.options.readOnly && !["click", "navigate", "back", "scroll", "wait"].includes(action.action)) {
+      throw new ExecutionError("unsupported", "read_only_action_required");
+    }
     if (this.lastObservationUrl !== this.page.url()) throw new ExecutionError("block", "stale_observation");
     this.actionId = `action-${++this.actionNumber}`;
     const candidate = action.candidateId ? this.candidates.get(action.candidateId) : undefined;
     const locator = candidate ? this.page.locator(`[data-ff-candidate="${candidate.id}"]`) : undefined;
+    if (this.options.readOnly && action.action === "click" && candidate?.kind !== "link") {
+      throw new ExecutionError("unsupported", "read_only_link_required");
+    }
     if (["click", "type", "select"].includes(action.action)) {
       if (!candidate || !locator || !await locator.isVisible() || !await locator.isEnabled()) throw new ExecutionError("block", "ungrounded_candidate");
       const box = await locator.boundingBox();
@@ -264,6 +281,19 @@ export class ScopedBrowserDriver implements BrowserDriver {
     switch (action.action) {
       case "click":
         if (this.options.keyboardOnly) throw new ExecutionError("unsupported", "pointer_disabled");
+        if (this.options.readOnly) {
+          const href = await locator!.evaluate((element) => {
+            if (!(element instanceof HTMLAnchorElement) || !element.isConnected
+              || element.hasAttribute("download") || !["", "_self"].includes(element.getAttribute("target") ?? "")) return null;
+            return element.hasAttribute("href") ? element.href : null;
+          });
+          if (href === null) throw new ExecutionError("unsupported", "read_only_link_required");
+          if (!href || !allowsNavigation(this.options.scope, href)) throw new ExecutionError("block", "link_out_of_scope");
+          this.guard(signal);
+          // Follow the captured URL, never re-resolve or dispatch a page-controlled click handler.
+          await this.page.goto(href, { waitUntil: "domcontentloaded" });
+          break;
+        }
         if (candidate?.kind === "link") {
           const href = await locator!.getAttribute("href");
           if (!href || !allowsNavigation(this.options.scope, new URL(href, this.page.url()).href)) throw new ExecutionError("block", "link_out_of_scope");

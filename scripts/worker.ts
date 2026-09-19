@@ -1,3 +1,4 @@
+import "server-only";
 import nextEnv from "@next/env";
 import { z } from "zod";
 import { readConfig } from "../src/lib/config";
@@ -8,8 +9,9 @@ import { DurableWorker, productionDependencies } from "../src/server/worker/runt
 nextEnv.loadEnvConfig(process.cwd());
 
 async function main() {
-  if (process.argv.slice(2).join(" ") !== "--confirm-paid" || process.env.ENABLE_DEMO_RUNS !== "true") {
-    throw new Error("worker_requires_explicit_paid_demo_confirmation");
+  if (process.argv.slice(2).join(" ") !== "--confirm-paid" ||
+    process.env.ENABLE_DEMO_RUNS !== "true") {
+    throw new Error("worker_requires_explicit_paid_confirmation");
   }
   const policy = readWorkerPolicy(process.env);
   const config = { ...readConfig(process.env), SESSION_TIMEOUT_SECONDS: policy.sessionSeconds };

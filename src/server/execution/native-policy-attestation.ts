@@ -25,13 +25,16 @@ export async function verifyNativeWebRtcPreferences(context: Pick<BrowserContext
     page = await context.newPage();
     await page.goto("chrome://prefs-internals/", { waitUntil: "domcontentloaded", timeout: 5000 });
     const selected: unknown = await page.evaluate(() => {
-      const property = (value: unknown, key: string): unknown =>
-        value !== null && typeof value === "object" && Object.hasOwn(value, key)
-          ? Reflect.get(value, key) : undefined;
+      const access = {
+        property(value: unknown, key: string): unknown {
+          return value !== null && typeof value === "object" && Object.hasOwn(value, key)
+            ? Reflect.get(value, key) : undefined;
+        },
+      };
       const root: unknown = JSON.parse(document.body.textContent ?? "");
-      const webrtc = property(root, "webrtc");
-      const global = property(property(webrtc, "ip_handling_policy"), "value");
-      const overrides = property(property(webrtc, "ip_handling_url"), "value");
+      const webrtc = access.property(root, "webrtc");
+      const global = access.property(access.property(webrtc, "ip_handling_policy"), "value");
+      const overrides = access.property(access.property(webrtc, "ip_handling_url"), "value");
       // Return only validated constants, never profile data or override URLs.
       return {
         global: global === "disable_non_proxied_udp" ? global : null,

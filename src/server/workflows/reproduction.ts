@@ -111,6 +111,7 @@ export class ReproductionService {
     if (source.source.run.id !== runId || !source.source.attempts.some((attempt) => attempt.id === attemptId)) {
       throw new ServiceError("not_found", 404);
     }
+    if (source.source.run.executionMode === "public-readonly") throw new ServiceError("public_reproduction_unsupported", 400);
     const existing = this.db.prepare("SELECT id FROM reproductions WHERE owner_id=? AND run_id=? AND attempt_id=?")
       .get(owner, runId, attemptId);
     if (existing) return this.view(this.job(String(existing.id), owner));

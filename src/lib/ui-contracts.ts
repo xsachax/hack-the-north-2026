@@ -6,6 +6,9 @@ import {
 export const capabilitiesSchema = z.strictObject({
   controlledRunsEnabled: z.boolean(),
   websiteExecutionEnabled: z.literal(false),
+  publicExecutionEnabled: z.boolean().default(false),
+  publicExecutionReason: z.enum(["offline_checkpoint", "implementation_not_ready", "operator_disabled", "strong_access_code_required", "session_timeout_unsupported", "ready"])
+    .default("offline_checkpoint"),
   maxActiveViews: z.literal(3),
   accessCodeConfigured: z.boolean(),
   browserbaseKeyConfigured: z.boolean(),

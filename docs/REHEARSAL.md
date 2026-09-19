@@ -51,6 +51,11 @@ There is **no assertion that all six planted defects were found**.
 Prepare a new private package directory after final source edits. This copies
 only the Docker source allowlist and performs a fresh locked installation and
 credential-free deployment build; existing directories are never overwritten.
+The package and deployment source digest use the same allowlist, including the
+public native extension's JS/JSON. Its receipt also hashes the installed pinned
+Stagehand extension ZIP and dependency bytes. Native source or input-archive
+changes invalidate package approval even with an unchanged `BUILD_ID`; private
+generated extension archives and dotenv files are not source-package inputs.
 The package check starts the actual supervisor twice, proves HTTPS owner
 continuity and disabled paid admission, then verifies zero reservations:
 

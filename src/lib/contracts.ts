@@ -2,6 +2,7 @@ import { z } from "zod";
 import { targetScopeSchema } from "./target-scope";
 import { citationSchema, criterionCheckSchema, criterionKey, criterionSchema } from "./criteria";
 import { browserStateSchema } from "./context-contracts";
+import { PUBLIC_ASSET_POLICY, PUBLIC_EXECUTION_POLICY } from "./public-execution";
 
 const text = (max: number) => z.string().trim().min(1).max(max).refine(
   (value) => !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value),
@@ -50,10 +51,15 @@ export const assignmentSchema = z.strictObject({
 });
 export const createRunSchema = z.strictObject({
   authorizationAcknowledged: z.literal(true),
+  executionPolicy: z.literal(PUBLIC_EXECUTION_POLICY).optional(),
+  assetPolicy: z.literal(PUBLIC_ASSET_POLICY).optional(),
   scope: targetScopeSchema,
   assignments: z.array(assignmentSchema).min(1).max(12),
 }).refine((value) => new Set(value.assignments.map((entry) => entry.personaId)).size === value.assignments.length,
-  "Each persona may appear only once");
+  "Each persona may appear only once")
+  .refine((value) => !!value.executionPolicy === !!value.assetPolicy, "Public execution requires both explicit policies")
+  .refine((value) => !value.executionPolicy || value.assignments.every((assignment) =>
+    !assignment.browserState || assignment.browserState.mode === "fresh"), "Public runs require fresh profiles");
 export type CreateRun = z.infer<typeof createRunSchema>;
 export const runSchema = z.strictObject({
   id: idSchema,
@@ -64,9 +70,13 @@ export const runSchema = z.strictObject({
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
   cancelRequestedAt: timestampSchema.nullable(),
-  executionMode: z.enum(["website", "controlled-fixture"]).default("website"),
+  executionMode: z.enum(["website", "controlled-fixture", "public-readonly"]).default("website"),
+  executionPolicy: z.literal(PUBLIC_EXECUTION_POLICY).optional(),
+  assetPolicy: z.literal(PUBLIC_ASSET_POLICY).optional(),
   controlledSiteId: z.enum(["store", "project-board"]).optional(),
-});
+}).refine((value) => value.executionMode === "public-readonly"
+  ? !!value.executionPolicy && !!value.assetPolicy && !value.controlledSiteId
+  : !value.executionPolicy && !value.assetPolicy, "Execution policies must match the canonical mode");
 export type Run = z.infer<typeof runSchema>;
 export const attemptSchema = z.strictObject({
   id: idSchema,

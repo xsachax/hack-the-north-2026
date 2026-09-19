@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { advancedSourceDigest, assertAdvancedBuild, writeAdvancedBuildReceipt } from "../../../scripts/advanced-build";
@@ -41,6 +41,20 @@ describe("source and production-build approval binding", () => {
     await writeFile(join(directory, ".next", "server", "app.js"), "modified after build");
     await expect(assertAdvancedBuild(source, directory)).rejects.toThrow("advanced_build_not_approved_source");
   });
+  it.each(["policy.js", "background.js", "manifest.json"])(
+    "invalidates the source approval for native %s tampering with an unchanged BUILD_ID", async (file) => {
+      const extension = join(directory, "src/server/execution/native-policy-extension");
+      await mkdir(extension, { recursive: true });
+      await writeFile(join(extension, file), "approved native runtime asset");
+      const source = await advancedSourceDigest(directory);
+      await writeAdvancedBuildReceipt(source, directory);
+      await writeFile(join(extension, file), "changed native runtime asset");
+      const changed = await advancedSourceDigest(directory);
+      expect(changed).not.toBe(source);
+      expect(await readFile(join(directory, ".next/BUILD_ID"), "utf8")).toBe("offline-build");
+      await expect(assertAdvancedBuild(changed, directory)).rejects.toThrow("advanced_build_not_approved_source");
+    },
+  );
   it("cannot stamp a build if its source changed while compilation was running", async () => {
     const before = await advancedSourceDigest(directory);
     await writeFile(join(directory, "next.config.ts"), "changed during build");

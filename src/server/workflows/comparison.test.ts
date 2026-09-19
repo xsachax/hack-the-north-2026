@@ -7,6 +7,7 @@ import type { ReportSource } from "../repository";
 import { aggregateReport, type LoadedEvidence } from "../reports/aggregate";
 import { resultSchema } from "../worker/result";
 import { compareReports, type ComparisonSource } from "./comparison";
+import { PUBLIC_ASSET_POLICY, PUBLIC_EXECUTION_POLICY } from "../../lib/public-execution";
 
 const time = "2026-09-19T12:00:00.000Z";
 const cart = "https://fixture.flash-flood.invalid/demo/cart";
@@ -85,6 +86,40 @@ function merge(first: ComparisonSource, second: ComparisonSource): ComparisonSou
 }
 
 describe("conservative immutable rerun comparison", () => {
+  it.each([
+    { executionPolicy: PUBLIC_EXECUTION_POLICY },
+    { assetPolicy: PUBLIC_ASSET_POLICY },
+    { executionMode: "website" },
+  ])("never confirms coverage across mismatched policy/capability snapshots: %j", (snapshot) => {
+    const parent = fixture(), child = fixture({ check: "met" });
+    // Deliberately inconsistent historical input must not inherit controlled coverage.
+    Object.assign(child.source.run, snapshot);
+    const result = compare(parent, child);
+    expect(result.comparable).toBe(false);
+    expect(result.pairs[0].criteria[0]).toMatchObject({ comparable: false, tested: false, confirmedMet: false });
+    expect(result.groups[0]).toMatchObject({ state: "not_comparable", after: { tested: 0, confirmed: 0 } });
+  });
+
+  it("marks even matching public policy snapshots unsupported, without inventing browser results", () => {
+    const parent = fixture({ status: "queued", check: "not_observed", finality: "active" });
+    const child = fixture({ status: "queued", check: "not_observed", finality: "active" });
+    for (const bundle of [parent, child]) {
+      bundle.source.run = {
+        ...bundle.source.run, executionMode: "public-readonly", controlledSiteId: undefined,
+        executionPolicy: PUBLIC_EXECUTION_POLICY, assetPolicy: PUBLIC_ASSET_POLICY,
+      };
+      bundle.source.events = [];
+      bundle.source.evidence = [];
+      bundle.source.results = [];
+      bundle.loaded = [];
+      rebuild(bundle);
+    }
+    const result = compare(parent, child);
+    expect(result.comparable).toBe(false);
+    expect(result.pairs[0]).toMatchObject({ comparable: false });
+    expect(result.pairs[0].criteria.every((criterion) => !criterion.tested && !criterion.confirmedMet)).toBe(true);
+  });
+
   it("requires positive exact-definition/current-page evidence to confirm an unmet criterion", () => {
     const parent = fixture(), child = fixture({ check: "met" });
     const result = compare(parent, child);

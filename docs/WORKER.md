@@ -1,25 +1,67 @@
 # Durable worker runbook (layer 04)
 
-The separate Node process executes only explicitly admitted registered controlled sites.
-`POST /api/v1/runs` still admits scoped website requests, but a worker terminates
-them as `blocked` with `blocked_unsupported`, without allocating a browser.
-Release gate #8 remains open. There is no public-URL fallback or target-validation
-exception. Layer 04b (#11) adds custom structural and evidence-grounded semantic
+The separate Node process preserves registered controlled-site execution and
+contains a distinct, source-disabled public read-only path. Legacy/unversioned
+website requests remain `blocked_unsupported` without allocating a browser;
+enabling a flag cannot upgrade those stored requests. Release gate #8 remains
+open. There is no fixture fallback or target-validation exception.
+Layer 04b (#11) adds custom structural and evidence-grounded semantic
 criteria for the store and project board before the layer 05 wall. Natural-language
 evaluation is a recorded heuristic, not a deterministic outcome oracle.
 
-The unconnected [public HTTP transport library](EXECUTION.md#public-http-transport-library-offline-not-enabled)
-adds a bounded per-job API, not a worker mode. Do not route public jobs through it
-until the native deny boundary and combined real browser/transport proof are
-accepted. Future integration must bind its immutable authorization and abort
-signal to the durable lease and drain/close it during teardown.
+The genuine public factory binds the [HTTP broker](EXECUTION.md#public-http-transport-library-offline-not-enabled)
+to immutable navigation/asset snapshots and the durable lease. The worker
+requires both `native-public-v1` and `public-http-readonly-v1`, operator enablement
+and implementation readiness; all native profile/policy checks remain mandatory.
+This offline checkpoint hard-disables new public claims and execution directly
+through `PUBLIC_EXECUTION_IMPLEMENTATION_READY=false`. Neither
+`ENABLE_PUBLIC_RUNS=true` nor injected runtime/admission readiness can override
+the source-level stop. Queued versioned public jobs finish `blocked_unsupported` before
+any launch reservation or public factory call. Re-enablement requires the new
+public-execution plan and a reviewed source change, not configuration changes.
+Historical tests and the standalone broker proof are not acceptance.
+
+The same source stop suspends automatic and manual public/native reconciliation,
+including restored native-resource or discovery-event rows attached to a launch.
+Worker startup and `worker:reconcile` perform no provider lookup, release, or
+extension deletion for those records. Known identities, pending/quarantined
+state, and reservations remain unchanged; suspension is not confirmed cleanup.
+The reconciliation CLI exits unsuccessfully with
+`public_recovery_checkpoint_disabled_reservation_retained`. Controlled-only
+reconciliation is unchanged.
+
+`public-checkpoint.test.ts` exercises the actual false constant and operator/
+admission flags together. Future-path worker and deadline unit tests explicitly
+mock readiness inside Vitest only; their passing results do not enable public
+execution or establish live acceptance.
 
 The #8 [native-policy probe](EXECUTION.md#native-browser-policy-candidate-offline-phase-a)
-is offline-only. It is not imported by the worker/cloud factory and changes no
-admission, returning-context, recovery or budget behavior. Running it uploads no
-extension and allocates no provider browser/model work. A provider proof requires
+has both offline conformance tests and a production adapter used by the gated
+public factory. Running offline probes uploads no extension and allocates no
+provider browser/model work. A provider proof requires
 fresh coordinator approval and a separately reviewed bounded harness; existing
 API credentials do not grant that approval.
+
+Public sessions are fresh only, with no context save/reuse or takeover. Native
+resource intents and known extension/session identities are journaled before
+subsequent work. Late identity discovery may append private reconciliation
+evidence but never grants a stale lease authority to alter lifecycle, usage or
+cleanup. Unknown allocation/upload/deletion outcomes stay quarantined; there is
+no automatic browser retry.
+
+The absolute public deadline starts before session-create dispatch and reserves
+80 seconds of the provider TTL for Gateway drain, metrics and release/readback.
+The loop receives only the remaining duration; TTL <=80 seconds is unsupported,
+and TTL never exceeds 300 seconds. Native interruption is infrastructure failure,
+not user cancellation or a target bug. Policy and attachments remain installed
+through remote release. `COMPLETED` is required for clean live acceptance;
+operational retirement of `ERROR`/`TIMED_OUT` requires two independently matched
+identity/status/start/end readbacks and remains a failed outcome. Exact-ID
+authenticated not-found is required to confirm extension deletion.
+
+The maintained worker/reconciliation commands and deployment supervisor supply
+`--conditions=react-server` before imports. This resolves the server-only broker
+marker, not an authorization bypass.
 
 Layer07 adds [advanced controlled workflows](ADVANCED_WORKFLOWS.md) on this same
 worker: private context creation/adoption/retirement, acknowledged exclusive
@@ -95,6 +137,12 @@ external baseline.
 | `WORKER_SHUTDOWN_MS` | 60000 | 10000..120000 graceful deadline, then process exits with durable recovery required |
 | `FIXTURE_PORT` | 4321 | Trusted loopback Next fixture source; no public tunnel |
 | `ENABLE_DEMO_RUNS` | false | Required for demo/registered-site API admission and ordinary paid worker CLI |
+| `ENABLE_PUBLIC_RUNS` | false | Cannot enable public execution at this offline checkpoint; the immutable source-level readiness stop overrides this flag |
+
+The checkpoint worker always requires `ENABLE_DEMO_RUNS=true` plus
+`--confirm-paid` and a healthy controlled fixture source. The public flag cannot
+substitute for this paid-execution gate. All maintained harness worker subprocesses
+pass Node's `--conditions=react-server`; they retain the server-only import guard.
 
 Explicit environment settings override worker defaults; `.env.example` keeps
 the existing shorter 120-second timeout and 12-step setting. For coupon journeys

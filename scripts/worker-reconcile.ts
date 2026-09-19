@@ -1,3 +1,4 @@
+import "server-only";
 import nextEnv from "@next/env";
 import { z } from "zod";
 import { readConfig } from "../src/lib/config";
@@ -23,7 +24,8 @@ async function main() {
     if (!settled) process.exitCode = 1;
   } finally { repository.close(); }
 }
-main().catch(() => {
-  console.error("worker_reconciliation_failed");
+main().catch((error: unknown) => {
+  console.error(error instanceof Error && error.message === "public_recovery_checkpoint_disabled"
+    ? "public_recovery_checkpoint_disabled_reservation_retained" : "worker_reconciliation_failed");
   process.exitCode = 1;
 });

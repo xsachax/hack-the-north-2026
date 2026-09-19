@@ -96,7 +96,7 @@ export async function supervise(env: NodeJS.ProcessEnv, paid: boolean, shutdownM
       await delay(250);
     }
     if (paid && !stopping) {
-      worker = launch(["--import", "tsx", "scripts/deployment-worker.ts", "--confirm-paid"], true);
+      worker = launch(["--conditions=react-server", "--import", "tsx", "scripts/deployment-worker.ts", "--confirm-paid"], true);
       worker.on("message", (message) => {
         if (typeof message === "object" && message !== null && "type" in message && message.type === "heartbeat") heartbeat = Date.now();
       });

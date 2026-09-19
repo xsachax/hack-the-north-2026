@@ -10,6 +10,7 @@ import { useOwnerSession } from "./owner-session";
 import { PersonaAvatar } from "./persona-avatar";
 import { RecordingEvidence } from "./recording-evidence";
 import { ReproductionPanel } from "./reproduction-panel";
+import { PUBLIC_EXECUTION_LIMITS } from "@/lib/public-execution";
 import "./run-report.css";
 
 const REFRESH_MS = 5000;
@@ -46,6 +47,8 @@ function RerunControls({ report }: { report: RunReport }) {
   const [acknowledged, setAcknowledged] = useState(() => !!pending);
   const [scenario, setScenario] = useState<"" | "fixed" | "second-coupon">(() => pending?.request.scenario ?? "");
   const [isControlledStore, setIsControlledStore] = useState(false);
+  const [publicReadonly, setPublicReadonly] = useState(false);
+  const [rerunSupported, setRerunSupported] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [createdId, setCreatedId] = useState("");
@@ -66,9 +69,11 @@ function RerunControls({ report }: { report: RunReport }) {
         const run = runSchema.parse(await api(`/runs/${encodeURIComponent(report.runId)}`, { signal: controller.signal }));
         if (!controller.signal.aborted && run.id === report.runId) {
           setIsControlledStore(run.executionMode === "controlled-fixture" && (!run.controlledSiteId || run.controlledSiteId === "store"));
+          setPublicReadonly(run.executionMode === "public-readonly");
+          setRerunSupported(run.executionMode === "controlled-fixture");
         }
       } catch {
-        // Without authoritative site metadata, only unchanged-scenario admission is offered.
+        // Unavailable metadata cannot authorize a rerun.
       }
     })();
     return () => controller.abort();
@@ -102,7 +107,7 @@ function RerunControls({ report }: { report: RunReport }) {
     return () => { controller.abort(); if (timer) clearTimeout(timer); };
   }, [childId, refresh, report.runId]);
   async function rerun() {
-    if (inFlight.current || !csrfToken) return;
+    if (!rerunSupported || inFlight.current || !csrfToken) return;
     inFlight.current = true;
     setBusy(true);
     setError("");
@@ -138,12 +143,17 @@ function RerunControls({ report }: { report: RunReport }) {
       if (failure instanceof ApiError && [401, 403].includes(failure.status)) retryOwner();
     } finally { inFlight.current = false; setBusy(false); }
   }
+  if (publicReadonly) return <section className="report-panel report-rerun" aria-label="Rerun unsupported">
+    <p>{PUBLIC_EXECUTION_LIMITS.rerun}</p>
+    <p>{PUBLIC_EXECUTION_LIMITS.comparison}</p>
+  </section>;
   return <section className="report-panel report-rerun" aria-labelledby="rerun-title">
     <p className="report-kicker">IMMUTABLE SCOPED RERUN</p>
     <h2 id="rerun-title">Rerun selected attempts</h2>
     <p>Controlled runs only. Copies the original persona snapshots, goals, criteria, limits and navigation scope.
       Starts fresh browser state; no live session, cookies or provider references are copied. The parent stays unchanged.</p>
-    <fieldset disabled={busy || !!pending}>
+    {!rerunSupported && <p>Reruns require verified controlled-run metadata.</p>}
+    <fieldset disabled={!rerunSupported || busy || !!pending}>
       <legend>Select original assignments</legend>
       {report.agents.map((agent) => <label key={agent.attemptId} className="report-rerun-choice">
         <input type="checkbox" checked={selected.includes(agent.attemptId)} onChange={(event) => setSelected((ids) =>
@@ -162,7 +172,7 @@ function RerunControls({ report }: { report: RunReport }) {
       <label className="report-rerun-choice"><input type="checkbox" checked={acknowledged}
         onChange={(event) => setAcknowledged(event.target.checked)} />I authorize this fresh scoped rerun.</label>
     </fieldset>
-    <button disabled={busy || !!createdId || !selected.length || !acknowledged || !csrfToken} onClick={() => void rerun()}>
+    <button disabled={!rerunSupported || busy || !!createdId || !selected.length || !acknowledged || !csrfToken} onClick={() => void rerun()}>
       {busy ? "Creating scoped rerun…" : pending ? "Retry same rerun" : "Rerun selected attempts"}
     </button>
     {error && <p role="alert">{error} {pending

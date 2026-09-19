@@ -292,7 +292,7 @@ async function main() {
       await save("offline-admission", { attempts, submitted, uiAccepted, noWorkerStarted: children.length === 1 });
       return;
     }
-    await start(["--import", "tsx", "scripts/worker.ts", "--confirm-paid"], "worker.log");
+    await start(["--conditions=react-server", "--import", "tsx", "scripts/worker.ts", "--confirm-paid"], "worker.log");
     let liveConnection = false;
     let overlap = false;
     let maxViewers = 0;

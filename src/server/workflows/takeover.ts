@@ -61,12 +61,13 @@ export class TakeoverService {
   ) {}
 
   private attempt(owner: string, attemptId: string) {
-    const row = this.db.prepare(`SELECT a.status,r.cancel_requested_at AS run_cancel,j.id AS job_id,
+    const row = this.db.prepare(`SELECT a.status,r.cancel_requested_at AS run_cancel,r.public_execution_policy,j.id AS job_id,
       j.cancel_requested_at,j.status AS job_status,j.lease_expires_at,j.lease_generation,
       l.state,l.session_reference FROM attempts a JOIN runs r ON r.id=a.run_id
       JOIN jobs j ON j.attempt_id=a.id AND j.run_id=r.id LEFT JOIN launches l ON l.job_id=j.id
       WHERE a.id=? AND r.owner_id=?`).get(attemptId, owner);
     if (!row) throw new ServiceError("not_found", 404);
+    if (row.public_execution_policy !== null) throw new ServiceError("public_takeover_unsupported", 400);
     return row;
   }
 

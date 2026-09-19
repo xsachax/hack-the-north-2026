@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,6 +10,7 @@ import { deploymentHealthBody, nextServerCommand, stopChild } from "./supervisor
 import { readWorkerPolicy } from "../worker/config";
 import { migrations } from "../migrations";
 import { assertReleaseBuild, releaseBuildDigest, releaseSourceDigest, writeReleaseBuildReceipt } from "./build";
+import { releaseSourceFiles } from "./source";
 import { isolatedValidationCompose, offlineReadinessPassed } from "./docker-validation";
 import { WorkerRepository } from "../worker/repository";
 import { personas } from "../../lib/personas";
@@ -294,6 +295,8 @@ it("binds the release receipt to application and worker sources", async () => {
 });
 
 describe("runnable release approval", () => {
+  const nativeExtension = "src/server/execution/native-policy-extension";
+  const stagehand = "node_modules/@browserbasehq/stagehand";
   async function buildFixture(linked = false) {
     const root = directory();
     for (const path of ["src", "scripts", ".next/server", ".next/cache", "node_modules/example"]) {
@@ -307,10 +310,75 @@ describe("runnable release approval", () => {
     writeFileSync(join(root, ".next/BUILD_ID"), "unchanged-build-id");
     writeFileSync(join(root, ".next/server/page.js"), "compiled approved page");
     writeFileSync(join(root, "node_modules/example/index.js"), "approved installed dependency");
+    mkdirSync(join(root, nativeExtension), { recursive: true });
+    for (const file of ["policy.js", "background.js", "manifest.json"]) {
+      copyFileSync(join(nativeExtension, file), join(root, nativeExtension, file));
+    }
+    writeFileSync(join(root, nativeExtension, "composed.js"), "export const compose = true;");
+    mkdirSync(join(root, stagehand, "dist/assets"), { recursive: true });
+    for (const file of ["package.json", "LICENSE", "dist/assets/stagehand-extension.zip"]) {
+      copyFileSync(join(stagehand, file), join(root, stagehand, file));
+    }
     if (linked) symlinkSync(join(root, "node_modules/example"), join(root, ".next/server/external"));
     await writeReleaseBuildReceipt(await releaseSourceDigest(root), root);
     return root;
   }
+  it.each(["policy.js", "background.js", "composed.js", "manifest.json"])(
+    "rejects changed public native extension %s without a BUILD_ID change", async (file) => {
+      const root = await buildFixture();
+      const source = await releaseSourceDigest(root);
+      const approved = await assertReleaseBuild(root);
+      writeFileSync(join(root, nativeExtension, file), "tampered native runtime asset");
+      expect(await releaseSourceDigest(root)).not.toBe(source);
+      expect(readFileSync(join(root, ".next/BUILD_ID"), "utf8")).toBe("unchanged-build-id");
+      await expect(assertReleaseBuild(root)).rejects.toThrow("deployment_build_mismatch");
+      await writeReleaseBuildReceipt(await releaseSourceDigest(root), root);
+      expect(await assertReleaseBuild(root)).not.toBe(approved);
+    },
+  );
+  it.each(["package.json", "LICENSE", "dist/assets/stagehand-extension.zip"])(
+    "binds actual pinned Stagehand %s bytes without a BUILD_ID change", async (file) => {
+      const root = await buildFixture();
+      expect(JSON.parse(readFileSync(join(root, stagehand, "package.json"), "utf8")).version).toBe("4.1.0");
+      const source = await releaseSourceDigest(root);
+      const approved = await assertReleaseBuild(root);
+      const path = join(root, stagehand, file);
+      writeFileSync(path, Buffer.concat([readFileSync(path), Buffer.from("\ntampered")]));
+      expect(await releaseSourceDigest(root)).toBe(source);
+      expect(readFileSync(join(root, ".next/BUILD_ID"), "utf8")).toBe("unchanged-build-id");
+      await expect(assertReleaseBuild(root)).rejects.toThrow("deployment_build_mismatch");
+      await writeReleaseBuildReceipt(source, root);
+      expect(await assertReleaseBuild(root)).not.toBe(approved);
+    },
+  );
+  it("packages and fingerprints nested public native JS/JSON, not generated archives or dotenv files", async () => {
+    const root = await buildFixture();
+    mkdirSync(join(root, nativeExtension, "nested"));
+    for (const file of ["nested/runtime.js", "nested/config.json", "generated.zip", ".env", ".env.json"]) {
+      writeFileSync(join(root, nativeExtension, file), "fixture input");
+    }
+    writeFileSync(join(root, "src/unrelated.json"), "not a runtime extension asset");
+    const files = await releaseSourceFiles(root);
+    for (const file of ["policy.js", "background.js", "manifest.json", "nested/runtime.js", "nested/config.json"]) {
+      expect(files).toContain(join(nativeExtension, file));
+    }
+    for (const file of ["generated.zip", ".env", ".env.json"]) {
+      expect(files).not.toContain(join(nativeExtension, file));
+    }
+    expect(files).not.toContain("src/unrelated.json");
+    await writeReleaseBuildReceipt(await releaseSourceDigest(root), root);
+    const approved = await assertReleaseBuild(root);
+    mkdirSync(join(root, "data/private-generated"), { recursive: true });
+    writeFileSync(join(root, "data/private-generated/composed-extension.zip"), "private derived archive");
+    writeFileSync(join(root, nativeExtension, "generated.zip"), "different derived archive");
+    expect(await assertReleaseBuild(root)).toBe(approved);
+  });
+  it("rejects symlinked native runtime assets rather than reading outside source", async () => {
+    const root = await buildFixture();
+    symlinkSync(join(root, "node_modules/example/index.js"), join(root, nativeExtension, "linked.js"));
+    await expect(releaseSourceDigest(root)).rejects.toThrow("deployment_source_symlink");
+    await expect(releaseSourceFiles(root)).rejects.toThrow("deployment_source_symlink");
+  });
   it("rejects compiled artifact tampering even with the same BUILD_ID", async () => {
     const root = await buildFixture();
     expect(await assertReleaseBuild(root)).toMatch(/^[a-f0-9]{64}$/);
@@ -356,6 +424,9 @@ it("keeps packaging context allowlisted, runtime nonroot and host-bound", () => 
   expect(ignore.startsWith("**\n")).toBe(true);
   expect(ignore).not.toContain("!.env");
   expect(ignore).toContain("!.npmrc");
+  expect(ignore).toContain("!src/server/execution/native-policy-extension/**/*.js");
+  expect(ignore).toContain("!src/server/execution/native-policy-extension/**/*.json");
+  expect(ignore).not.toContain("!src/**/*.json");
   expect(readFileSync("Dockerfile", "utf8")).toContain("USER 1000:1000");
   const compose = readFileSync("compose.yaml", "utf8");
   expect(compose).toContain('127.0.0.1:3000:4321');

@@ -1,3 +1,4 @@
+import "server-only";
 import { assertPaidDataNotRestored } from "../src/server/deployment/database";
 
 assertPaidDataNotRestored(process.env.DATA_DIR ?? "/data/private", true);

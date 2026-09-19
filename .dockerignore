@@ -9,6 +9,8 @@
 !src/**/*.ts
 !src/**/*.tsx
 !src/**/*.css
+!src/server/execution/native-policy-extension/**/*.js
+!src/server/execution/native-policy-extension/**/*.json
 !scripts/
 !scripts/worker.ts
 !scripts/deployment*.ts

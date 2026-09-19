@@ -3,18 +3,23 @@ import { createApi, validateApiConfiguration } from "./api";
 import { Repository } from "./repository";
 import { readWorkerPolicy, workerExecutionLimits } from "./worker/config";
 import { createBrowserbaseReplayProvider, createReplayAdapter } from "./reports/replay";
+import { PUBLIC_EXECUTION_IMPLEMENTATION_READY } from "./public-execution-readiness";
 
 let handler: ReturnType<typeof createApi> | undefined;
 export async function handleApi(request: Request): Promise<Response> {
   try {
     if (!handler) {
+      const workerPolicy = readWorkerPolicy(process.env);
       const configuration = {
         origin: process.env.APP_ORIGIN ?? "http://127.0.0.1:3000",
         production: process.env.NODE_ENV === "production",
         accessCode: process.env.FLASH_FLOOD_ACCESS_CODE,
         allowDemoRuns: process.env.ENABLE_DEMO_RUNS === "true",
+        allowPublicRuns: process.env.ENABLE_PUBLIC_RUNS === "true",
+        publicExecutionReady: PUBLIC_EXECUTION_IMPLEMENTATION_READY,
+        publicSessionTimeoutSeconds: workerPolicy.sessionSeconds,
         browserbaseKeyConfigured: !!process.env.BROWSERBASE_API_KEY?.trim(),
-        executionLimits: workerExecutionLimits(readWorkerPolicy(process.env)),
+        executionLimits: workerExecutionLimits(workerPolicy),
       };
       validateApiConfiguration(configuration);
       const segmentOrigins = (process.env.BROWSERBASE_REPLAY_ORIGINS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
