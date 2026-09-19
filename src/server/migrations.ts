@@ -112,4 +112,14 @@ export const migrations = [
     PRIMARY KEY(attempt_id, ordinal)
   );
   `,
+  `
+  CREATE TABLE remote_usage_observations (
+    job_id TEXT NOT NULL REFERENCES jobs(id),
+    session_id TEXT NOT NULL,
+    charged_seconds REAL NOT NULL CHECK(charged_seconds>=0),
+    actual_seconds REAL CHECK(actual_seconds IS NULL OR actual_seconds>=0),
+    terminal INTEGER NOT NULL CHECK(terminal IN (0,1)),
+    PRIMARY KEY(job_id, session_id)
+  );
+  `,
 ] as const;

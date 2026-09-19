@@ -693,17 +693,109 @@ describe("durable worker repository (offline)", () => {
   it("requires every discovered remote session to terminate and conservatively charges missing usage", () => {
     create();
     const initial = claim();
+    const completedId = randomUUID();
+    const pendingId = randomUUID();
     repository.recover(initial, { confirmed: true, sessions: [
-      { sessionId: randomUUID(), status: "COMPLETED", actualBrowserSeconds: 0 },
-      { sessionId: randomUUID(), status: "RUNNING" },
+      { sessionId: completedId, status: "COMPLETED" },
+      { sessionId: pendingId, status: "RUNNING" },
     ] });
     expect(repository.accounting().releasedSeconds).toBe(0);
     time += 2000;
     repository.recover(claim("recovery"), { confirmed: true, sessions: [
-      { sessionId: randomUUID(), status: "COMPLETED" },
-      { sessionId: randomUUID(), status: "TIMED_OUT" },
+      { sessionId: completedId, status: "COMPLETED" },
+      { sessionId: pendingId, status: "TIMED_OUT" },
     ] });
     expect(repository.accounting()).toMatchObject({ consumedSeconds: 480, releasedSeconds: 0, committedSeconds: 480 });
+  });
+
+  it("releases a never-attempted allocation under the current lease without remote proof", () => {
+    configure({ globalConcurrency: 1 });
+    const run = create();
+    const leased = claim();
+    repository.cancelRun(owner, run.id);
+    repository.finish(leased, result("cancelled"), { allocationAttempted: false, reservedSeconds: 240, elapsedSeconds: 1 });
+    expect(repository.getRun(owner, run.id).status).toBe("cancelled");
+    expect(repository.accounting()).toMatchObject({ consumedSeconds: 0, releasedSeconds: 240, committedSeconds: 0 });
+    create(other);
+    expect(claim("new-job").recovery).toBe(false);
+  });
+
+  it.each([undefined, true])("missing/attempted allocation proof %s never refunds an unknown launch", (allocationAttempted) => {
+    configure({ globalConcurrency: 1, recoveryLimit: 1 });
+    const run = create();
+    repository.finish(claim(), result("infrastructure_failed"), { allocationAttempted, reservedSeconds: 240, elapsedSeconds: 1 });
+    expect(repository.getRun(owner, run.id).status).toBe("infrastructure_failed");
+    expect(repository.accounting()).toMatchObject({ consumedSeconds: 0, releasedSeconds: 0, committedSeconds: 240 });
+    create(other);
+    expect(repository.claim("no-duplicate")).toBeNull();
+  });
+
+  it("rejects contradictory no-allocation proof and never lets stale ownership refund", () => {
+    create();
+    const leased = claim();
+    repository.sessionReference(leased, reference());
+    expect(() => repository.finish(leased, result("cancelled"), {
+      allocationAttempted: false, reservedSeconds: 240, elapsedSeconds: 1,
+    })).toThrow("contradictory_allocation_evidence");
+    expect(repository.accounting().releasedSeconds).toBe(0);
+    time += repository.policy.leaseMs;
+    expect(() => repository.finish(leased, result("cancelled"), {
+      allocationAttempted: false, reservedSeconds: 240, elapsedSeconds: 1,
+    })).toThrow(LeaseLostError);
+  });
+
+  it("retains a verified 400-second partial recovery charge before deciding another 240-second admission", () => {
+    configure({ developmentBudgetSeconds: 863 });
+    create();
+    const leased = claim();
+    const waiting = create(other);
+    const sessionId = randomUUID();
+    repository.recover(leased, { confirmed: false, sessions: [{ sessionId, status: "COMPLETED", actualBrowserSeconds: 400 }] });
+    expect(repository.accounting()).toMatchObject({ consumedSeconds: 400, releasedSeconds: 0, committedSeconds: 400 });
+    expect(repository.claim("cannot-spend-1003")).toBeNull();
+    expect(repository.getRun(other, waiting.id).status).toBe("limit_reached");
+    close(repository);
+    repository = open();
+    time += 2000;
+    repository.recover(claim("retry"), { confirmed: false, sessions: [{ sessionId, status: "COMPLETED", actualBrowserSeconds: 400 }] });
+    expect(repository.accounting().consumedSeconds).toBe(400);
+    expect(inspect().prepare("SELECT count(*) AS n FROM remote_usage_observations").get()?.n).toBe(1);
+  });
+
+  it("aggregates disjoint partial sessions once and preserves their maximum observations across retries", () => {
+    create();
+    const a = randomUUID(), b = randomUUID();
+    repository.recover(claim(), { confirmed: false, sessions: [{ sessionId: a, status: "COMPLETED", actualBrowserSeconds: 1.2 }] });
+    time += 2000;
+    repository.recover(claim("b"), { confirmed: false, sessions: [{ sessionId: b, status: "COMPLETED", actualBrowserSeconds: 2.2 }] });
+    expect(repository.accounting()).toMatchObject({ consumedSeconds: 4, releasedSeconds: 0, committedSeconds: 240 });
+    time += 4000;
+    repository.recover(claim("retry-a"), { confirmed: false, sessions: [
+      { sessionId: a, status: "COMPLETED", actualBrowserSeconds: 1 }, { sessionId: a, status: "COMPLETED", actualBrowserSeconds: 1.2 },
+    ] });
+    expect(repository.accounting().consumedSeconds).toBe(4);
+    time += 8000;
+    repository.recover(claim("final"), { confirmed: true, sessions: [
+      { sessionId: a, status: "COMPLETED" }, { sessionId: b, status: "COMPLETED", actualBrowserSeconds: 2.2 },
+    ] });
+    expect(repository.accounting()).toMatchObject({ consumedSeconds: 4, releasedSeconds: 236, committedSeconds: 4 });
+  });
+
+  it("does not lose an outstanding known remote when a later partial list omits it", () => {
+    const run = create();
+    const a = randomUUID(), b = randomUUID();
+    repository.recover(claim(), { confirmed: false, sessions: [{ sessionId: a, status: "RUNNING" }] });
+    time += 2000;
+    repository.recover(claim("partial-list"), { confirmed: true, sessions: [{ sessionId: b, status: "COMPLETED", actualBrowserSeconds: 20 }] });
+    expect(repository.accounting()).toMatchObject({ consumedSeconds: 260, releasedSeconds: 0, committedSeconds: 260 });
+    expect(repository.getRun(owner, run.id).status).toBe("running");
+    time += 4000;
+    repository.recover(claim("both-closed"), { confirmed: true, sessions: [
+      { sessionId: a, status: "COMPLETED", actualBrowserSeconds: 10 }, { sessionId: b, status: "COMPLETED", actualBrowserSeconds: 20 },
+    ] });
+    expect(repository.getRun(owner, run.id).status).toBe("infrastructure_failed");
+    expect(repository.accounting().consumedSeconds).toBe(260);
+    expect(repository.attemptSummaries(owner, run.id)[0].usage?.actualBrowserSeconds).toBe(30);
   });
 
   it("does not infer release from terminal metadata when the recovery adapter cannot confirm cleanup", () => {

@@ -201,8 +201,24 @@ export class WorkerRepository extends Repository {
     const parsed = resultSchema.parse(result);
     this.transaction(() => {
       this.assertLease(claim, true);
-      const confirmed = terminalRemote(usage.remoteStatus);
-      this.settle(claim, usage, confirmed);
+      const launch = this.db.prepare(`SELECT l.session_reference,l.usage,u.consumed_seconds FROM launches l
+        JOIN usage_reservations u ON u.job_id=l.job_id WHERE l.job_id=?`).get(claim.jobId)!;
+      const neverAttempted = usage.allocationAttempted === false;
+      const previousAllocation = launch.usage ? z.object({ allocationAttempted: z.boolean().optional() }).parse(json(launch.usage)).allocationAttempted : undefined;
+      if (neverAttempted && (launch.session_reference || usage.remoteStatus ||
+        previousAllocation === true || z.number().parse(launch.consumed_seconds) > 0 ||
+        (usage.actualBrowserSeconds !== undefined && usage.actualBrowserSeconds !== 0) ||
+        this.db.prepare("SELECT session_id FROM remote_usage_observations WHERE job_id=? LIMIT 1").get(claim.jobId))) {
+        throw new Error("contradictory_allocation_evidence");
+      }
+      const confirmed = neverAttempted || terminalRemote(usage.remoteStatus);
+      if (launch.session_reference && (usage.actualBrowserSeconds !== undefined || confirmed)) {
+        this.observeCharge(claim, {
+          sessionId: referenceSchema.parse(json(launch.session_reference)).sessionId,
+          status: usage.remoteStatus ?? "RUNNING", actualBrowserSeconds: usage.actualBrowserSeconds,
+        });
+      }
+      this.settle(claim, neverAttempted ? { ...usage, actualBrowserSeconds: 0 } : usage, confirmed);
       this.db.prepare("UPDATE launches SET summary=? WHERE job_id=?")
         .run(JSON.stringify(sanitizeEvidence(parsed)), claim.jobId);
       if (!confirmed) {
@@ -216,31 +232,54 @@ export class WorkerRepository extends Repository {
   recover(claim: Claim, outcome: { confirmed: boolean; sessions: { sessionId: string; status: string; actualBrowserSeconds?: number }[] }): void {
     this.transaction(() => {
       this.assertLease(claim, true);
-      const confirmed = outcome.confirmed && outcome.sessions.length > 0 && outcome.sessions.every((s) => terminalRemote(s.status));
+      for (const session of outcome.sessions) this.observeCharge(claim, session);
+      const observed = this.db.prepare(`SELECT count(*) AS n, COALESCE(sum(charged_seconds),0) AS charged,
+        sum(actual_seconds) AS actual, count(actual_seconds) AS measured, min(terminal) AS terminal
+        FROM remote_usage_observations WHERE job_id=?`).get(claim.jobId)!;
+      const charged = z.number().parse(observed.charged);
+      const confirmed = outcome.confirmed && outcome.sessions.length > 0 && observed.terminal === 1 &&
+        outcome.sessions.every((s) => terminalRemote(s.status));
       const usage: CloudUsage = {
         reservedSeconds: this.policy.sessionSeconds, elapsedSeconds: 0,
         ...(confirmed ? { remoteStatus: outcome.sessions[0].status } : {}),
-        ...(confirmed ? { actualBrowserSeconds: outcome.sessions.reduce((sum, s) =>
-          sum + (s.actualBrowserSeconds ?? this.policy.sessionSeconds), 0) } : {}),
+        ...(observed.n && observed.measured === observed.n ? { actualBrowserSeconds: z.number().parse(observed.actual) } : {}),
       };
       // Preserve model counters/startup details from the original process if available.
       const previous = this.db.prepare("SELECT usage FROM launches WHERE job_id=?").get(claim.jobId)?.usage;
       const prior = previous ? z.record(z.string(), z.unknown()).parse(json(previous)) : {};
-      this.settle(claim, { ...prior, ...usage }, confirmed);
+      const recordedUsage: CloudUsage = { ...prior, ...usage };
+      if (observed.n && observed.measured !== observed.n) delete recordedUsage.actualBrowserSeconds;
+      if (!confirmed && terminalRemote(recordedUsage.remoteStatus)) delete recordedUsage.remoteStatus;
+      this.settle(claim, recordedUsage, confirmed, charged);
       if (confirmed) this.end(claim, "infrastructure_failed", "worker_recovery");
       else this.deferRecovery(claim);
     });
   }
 
-  private settle(claim: Claim, usage: CloudUsage, confirmed: boolean): void {
+  private observeCharge(claim: Claim, session: { sessionId: string; status: string; actualBrowserSeconds?: number }): void {
+    z.string().min(1).max(200).parse(session.sessionId);
+    z.enum(["PENDING", "RUNNING", "COMPLETED", "ERROR", "TIMED_OUT"]).parse(session.status);
+    const seconds = session.actualBrowserSeconds;
+    if (seconds !== undefined && (!Number.isFinite(seconds) || seconds < 0 || seconds > Number.MAX_SAFE_INTEGER)) throw new Error("invalid_usage");
+    this.db.prepare(`INSERT INTO remote_usage_observations VALUES(?,?,?,?,?)
+      ON CONFLICT(job_id,session_id) DO UPDATE SET
+      charged_seconds=max(charged_seconds,CASE WHEN excluded.actual_seconds IS NULL AND actual_seconds IS NOT NULL
+        THEN actual_seconds ELSE excluded.charged_seconds END),
+      actual_seconds=CASE WHEN excluded.actual_seconds IS NULL THEN actual_seconds
+        WHEN actual_seconds IS NULL THEN excluded.actual_seconds ELSE max(actual_seconds,excluded.actual_seconds) END,
+      terminal=max(terminal,excluded.terminal)`)
+      .run(claim.jobId, session.sessionId, seconds ?? this.policy.sessionSeconds, seconds ?? null, terminalRemote(session.status) ? 1 : 0);
+  }
+
+  private settle(claim: Claim, usage: CloudUsage, confirmed: boolean, observedCharge = 0): void {
     const seconds = usage.actualBrowserSeconds;
     if (seconds !== undefined && (!Number.isFinite(seconds) || seconds < 0)) throw new Error("invalid_usage");
-    const consumed = Math.ceil(seconds ?? (confirmed ? this.policy.sessionSeconds : 0));
+    const consumed = Math.ceil(Math.max(seconds ?? (confirmed ? this.policy.sessionSeconds : 0), observedCharge));
     this.db.prepare(`UPDATE usage_reservations SET consumed_seconds=max(consumed_seconds,?),
       released_seconds=CASE WHEN ? THEN max(0,reserved_seconds-max(consumed_seconds,?)) ELSE 0 END WHERE job_id=?`)
       .run(consumed, confirmed ? 1 : 0, consumed, claim.jobId);
     this.db.prepare("UPDATE launches SET usage=?,state=? WHERE job_id=?")
-      .run(JSON.stringify(sanitizeEvidence(usage)), confirmed ? "settled" : "recovering", claim.jobId);
+      .run(JSON.stringify(sanitizeEvidence(JSON.parse(JSON.stringify(usage)))), confirmed ? "settled" : "recovering", claim.jobId);
   }
 
   private deferRecovery(claim: Claim): void {

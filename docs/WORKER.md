@@ -86,6 +86,17 @@ block future admissions rather than being truncated. Model counters, elapsed
 time and remote diagnostics are retained privately; they are not invoices or
 proof of free Gateway usage.
 
+Verified per-session charges are persisted even when the overall recovery is
+unconfirmed (for example, a known session reports 400 seconds while metadata
+listing fails). A migration adds idempotent, monotonic observations keyed by
+job/session: retries cannot double-count, disjoint partial lists accumulate,
+and an omitted previously running session prevents settlement. Missing duration
+for a discovered session is conservatively charged its full TTL; that charge
+does not decrease on later retries, while exact available actual duration is
+tracked separately. Unconfirmed recovery never refunds the outstanding
+reservation or frees capacity, but known overruns immediately constrain
+new admissions.
+
 ## Crash windows, cancellation and recovery
 
 The protocol is **not exactly-once across the network**. Intent can commit before
@@ -116,6 +127,18 @@ slot occupied. Backoff is exponential (2 seconds through 60 seconds), capped by
 the configured recovery count. Exhaustion marks the attempt infrastructure
 failed and quarantines its launch; unknown slots and money remain held.
 Remote TTL is a backstop, not sufficient local proof to refund an unknown launch.
+
+There is one distinct safe no-browser case: the trusted live cloud factory can
+return explicit `allocationAttempted:false` after admission rejection or
+cancellation/failure before the creation call (including during extension
+upload). The flag flips synchronously immediately before dispatching the
+single creation POST. Under the current lease, and only without contradictory
+session/usage evidence, that proof settles zero browser cost and releases the
+slot/reservation without a remote query. Missing flags, crashes, attempted
+requests with lost replies and empty metadata remain **unknown**, not proof of
+zero allocation. Local failure before invoking the factory is likewise known
+not to allocate; genuine extension/cleanup failures still retain their failure
+outcome even when browser capacity is safely released.
 
 For a quarantined job, inspect the private SQLite `launches`/`jobs` rows and the
 provider console. Use its job UUID, with the same policy/data configuration:
@@ -262,11 +285,21 @@ metrics, so these are not an invoice. The prior external actual baseline remains
 Private durable evidence contains 153 evidence records and 91 step records.
 No fixture server, worker or tunnel was left running.
 
-Final offline gates: **1066 tests**, lint/types, production build, real HTTP
+Final offline gates: **1078 tests**, lint/types, production build, real HTTP
 demo/cancel/SSE resume/owner smoke and **38 Chromium E2E tests**. Independent
 review found and prompted the allocation-retry and capped-owner fairness fixes;
 a focused allocation follow-up found no remaining significant issues. Public
 target gate #8 and controlled-site generalization #11 remain open.
+
+Coordinator review additionally identified two accounting edge cases: explicit
+pre-allocation cancellation could unnecessarily quarantine a slot, and a failed
+metadata query could discard a known 400-second charge. The no-allocation proof
+and per-session observation migration above fix both. Regressions exercise the
+real pre-aborted cloud factory plus repository, three pre-allocation cancellations
+followed by another claim, contradictory/stale proof rejection, the 400-second
+charge against an 863-second development budget (including baseline), partial
+list unions, repeated observations and omitted outstanding sessions. These
+corrections were verified offline only; no additional paid sessions were run.
 
 One push CI run exposed a timing assumption in the existing scripted coupon +
 completion E2E brain: it requested checkout while the real delivery-summary

@@ -3,9 +3,10 @@ import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { demoCriteria } from "../../lib/demo-run";
+import { configSchema } from "../../lib/config";
 import { personas } from "../../lib/personas";
 import type { ArtifactSinks } from "../execution/artifacts";
-import { CloudStartupError, type CloudUsage, type FixtureExecutionOptions } from "../execution/cloud";
+import { CloudStartupError, createFixtureExecution, type CloudUsage, type FixtureExecutionOptions } from "../execution/cloud";
 import type { ExecutionResult, Observation } from "../execution/types";
 import { executePersona } from "../execution/loop";
 import { WorkerRepository } from "./repository";
@@ -138,6 +139,51 @@ describe("durable worker with injected execution adapters", () => {
     expect(repository.accounting().committedSeconds).toBe(240);
     expect(repository.claim(worker.id)).toBeNull();
     expect(deps.launch).toHaveBeenCalledTimes(1);
+  });
+
+  it("settles real pre-aborted cloud factory proof without a remote lookup or paid allocation", async () => {
+    const run = create();
+    deps.launch = (options) => createFixtureExecution(configSchema.parse({ BROWSERBASE_API_KEY: "offline-unused-key" }), options);
+    const worker = new DurableWorker(repository, deps, 4321);
+    const claim = repository.claim(worker.id)!;
+    await worker.executeClaim(claim, AbortSignal.abort());
+    expect(repository.getRun(owner, run.id).status).toBe("cancelled");
+    expect(repository.accounting()).toMatchObject({ reservedSeconds: 240, consumedSeconds: 0, releasedSeconds: 240, committedSeconds: 0 });
+    expect(deps.recover).not.toHaveBeenCalled();
+    expect(repository.attemptSummaries(owner, run.id)[0].launchState).toBe("settled");
+  });
+
+  it("three cancellations before allocation cannot permanently occupy the three global slots", async () => {
+    deps.launch = async (options) => {
+      repository.cancelRun(owner, options.runId);
+      try { options.assertActive?.(); }
+      catch {
+        throw new CloudStartupError({ status: "closed", errors: [] }, {
+          allocationAttempted: false, reservedSeconds: 240, elapsedSeconds: 1,
+        }, "launch");
+      }
+      throw new Error("cancellation_fence_missing");
+    };
+    const worker = new DurableWorker(repository, deps, 4321);
+    for (let i = 0; i < 3; i++) {
+      const run = create();
+      await worker.executeClaim(repository.claim(worker.id)!, new AbortController().signal);
+      expect(repository.getRun(owner, run.id).status).toBe("cancelled");
+    }
+    expect(repository.accounting()).toMatchObject({ reservedSeconds: 720, consumedSeconds: 0, releasedSeconds: 720, committedSeconds: 0 });
+    create();
+    expect(repository.claim("next")).not.toBeNull();
+  });
+
+  it("releases paid capacity when local artifact initialization fails before the factory is invoked", async () => {
+    const run = create();
+    deps.artifacts = () => { throw new Error("offline_artifact_error"); };
+    const worker = new DurableWorker(repository, deps, 4321);
+    await worker.executeClaim(repository.claim(worker.id)!, new AbortController().signal);
+    expect(deps.launch).not.toHaveBeenCalled();
+    expect(repository.getRun(owner, run.id).status).toBe("infrastructure_failed");
+    expect(repository.accounting().committedSeconds).toBe(0);
+    expect(repository.attemptSummaries(owner, run.id)[0].launchState).toBe("settled");
   });
 
   it("cleans up on an unexpectedly rejecting execution adapter", async () => {

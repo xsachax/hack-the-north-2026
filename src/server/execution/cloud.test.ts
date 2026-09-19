@@ -225,11 +225,21 @@ describe("fixture-only cloud admission", () => {
   it("spends zero SDK/browser/model calls for a pre-aborted signal", async () => {
     const reason = new Error("cancelled before launch");
     await expect(createFixtureExecution(config, options({ signal: AbortSignal.abort(reason) })))
-      .rejects.toBe(reason);
+      .rejects.toMatchObject({ phase: "admission", cleanup: { status: "closed", errors: [] }, usage: { allocationAttempted: false } });
     expect(mocks.sdk).not.toHaveBeenCalled();
     expect(mocks.launch).not.toHaveBeenCalled();
     expect(mocks.create).not.toHaveBeenCalled();
     expect(mocks.connect).not.toHaveBeenCalled();
+  });
+
+  it("provides no-allocation proof when local SDK construction fails", async () => {
+    mocks.sdk.mockImplementationOnce(() => { throw new Error("offline_client_configuration"); });
+    const error = await startupError();
+    expect(error.phase).toBe("client_initialization");
+    expect(error.usage.allocationAttempted).toBe(false);
+    expect(error.cleanup).toEqual({ status: "closed", errors: [] });
+    expect(mocks.extensions.create).not.toHaveBeenCalled();
+    expect(mocks.launch).not.toHaveBeenCalled();
   });
 });
 
@@ -254,6 +264,7 @@ describe("startup and private session setup", () => {
     const error = await startupError(input);
     expect(error.cleanup).toEqual({ status: "failed", errors: ["startup_session_unconfirmed"] });
     expect(error.usage.reservedSeconds).toBe(120);
+    expect(error.usage.allocationAttempted).toBe(true);
     expect(error.usage.actualBrowserSeconds).toBeUndefined();
     expect(input.onSession).not.toHaveBeenCalled();
     expect(outgoingCreationPosts).toBe(1);
@@ -292,6 +303,21 @@ describe("startup and private session setup", () => {
     expect(mocks.launch).not.toHaveBeenCalled();
     expect(mocks.extensions.delete).toHaveBeenCalledOnce();
     expect(result.cleanup.status).toBe("closed");
+    expect(result.usage.allocationAttempted).toBe(false);
+  });
+
+  it("provides explicit zero-allocation proof for cancellation during extension upload", async () => {
+    const controller = new AbortController();
+    mocks.extensions.create.mockImplementationOnce(async () => {
+      controller.abort();
+      return { id: "fake-extension" };
+    });
+    const result = await startupError(options({ signal: controller.signal }));
+    expect(result.usage).toMatchObject({ allocationAttempted: false, reservedSeconds: 120 });
+    expect(result.usage.remoteStatus).toBeUndefined();
+    expect(result.cleanup).toEqual({ status: "closed", errors: [] });
+    expect(mocks.launch).not.toHaveBeenCalled();
+    expect(mocks.extensions.delete).toHaveBeenCalledOnce();
   });
 
   it("attaches bounded layer04 correlation metadata without changing layer03 defaults", async () => {
@@ -308,7 +334,7 @@ describe("startup and private session setup", () => {
 
   it("does not spend on a synchronously revoked launch", async () => {
     await expect(createFixtureExecution(config, options({ assertActive: () => { throw new Error("lease_lost"); } })))
-      .rejects.toThrow("lease_lost");
+      .rejects.toMatchObject({ phase: "admission", usage: { allocationAttempted: false } });
     expect(mocks.launch).not.toHaveBeenCalled();
   });
 
@@ -765,6 +791,7 @@ describe("cleanup fences, accounting, and bounded failures", () => {
       expect(close).toHaveBeenCalledOnce();
     }
     expect(execution.usage).toEqual({
+      allocationAttempted: true,
       reservedSeconds: 120, elapsedSeconds: 4, actualBrowserSeconds: 8,
       remoteStatus: "COMPLETED", modelMetrics: metrics, networkDiagnostics: [],
     });

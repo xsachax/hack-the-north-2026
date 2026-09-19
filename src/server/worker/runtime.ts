@@ -85,6 +85,7 @@ export class DurableWorker {
     }, Math.min(500, Math.floor(this.repository.policy.leaseMs / 3)));
     let usage: CloudUsage = { reservedSeconds: this.repository.policy.sessionSeconds, elapsedSeconds: 0 };
     let launched: Awaited<ReturnType<WorkerDependencies["launch"]>> | undefined;
+    let launchInvoked = false;
     let result: ExecutionResult;
     try {
       if (claim.recovery) {
@@ -116,6 +117,7 @@ export class DurableWorker {
         json: (value) => save(() => raw.json(value), "observation"),
         telemetry: (record) => save(() => raw.telemetry(record), "console"),
       };
+      launchInvoked = true;
       const execution = await this.dependencies.launch({
         mode: "controlled-fixture", runId: claim.runId, personaId: claim.attempt.persona.id,
         correlationToken: claim.correlationToken, assertActive, targetUrl: demoScope.targetUrl,
@@ -183,6 +185,7 @@ export class DurableWorker {
         usage = error.usage;
         result = failedResult(controller.signal.aborted, error.cleanup);
       } else {
+        if (!launchInvoked) usage.allocationAttempted = false;
         result = failedResult(controller.signal.aborted, unexpectedCleanup);
       }
       try { this.repository.finish(claim, result, usage); }

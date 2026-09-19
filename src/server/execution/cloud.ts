@@ -20,6 +20,8 @@ export type PrivateSessionReference = {
   timeoutSeconds: number;
 };
 export type CloudUsage = {
+  /** False is trusted proof that this factory never dispatched session creation. Missing means unknown. */
+  allocationAttempted?: boolean;
   reservedSeconds: number;
   elapsedSeconds: number;
   actualBrowserSeconds?: number;
@@ -52,7 +54,7 @@ export type FixtureExecutionOptions = {
 };
 
 export class CloudStartupError extends Error {
-  constructor(readonly cleanup: CleanupOutcome, readonly usage: CloudUsage, readonly phase = "unknown") {
+  constructor(readonly cleanup: CleanupOutcome, readonly usage: CloudUsage, readonly phase = "unknown", readonly code?: ExecutionError["code"]) {
     super("cloud_startup_failed");
   }
 }
@@ -66,7 +68,7 @@ async function bounded<T>(work: Promise<T>, milliseconds = 10000): Promise<T> {
   } finally { clearTimeout(timer); }
 }
 
-export async function createFixtureExecution(config: AppConfig, options: FixtureExecutionOptions) {
+function validateFixtureOptions(options: FixtureExecutionOptions) {
   // No URL admission bypass or implicit fallback to this mode exists.
   if (options.mode !== "controlled-fixture" || !isFixtureRequest(options.targetUrl, true)
     || options.contextReference !== undefined || (options.actor && options.actor !== "agent")) {
@@ -98,10 +100,23 @@ export async function createFixtureExecution(config: AppConfig, options: Fixture
     options.assertActive?.();
   };
   assertActive();
+  return { fixtures, criteria, userMetadata, source, assertActive };
+}
+
+export async function createFixtureExecution(config: AppConfig, options: FixtureExecutionOptions) {
   const timeoutSeconds = Math.min(config.SESSION_TIMEOUT_SECONDS, 300);
   const started = Date.now();
-  const usage: CloudUsage = { reservedSeconds: timeoutSeconds, elapsedSeconds: 0 };
-  const bb = new Browserbase({ apiKey: config.BROWSERBASE_API_KEY, maxRetries: 0, timeout: 10000 });
+  const usage: CloudUsage = { allocationAttempted: false, reservedSeconds: timeoutSeconds, elapsedSeconds: 0 };
+  let validated: ReturnType<typeof validateFixtureOptions>;
+  try { validated = validateFixtureOptions(options); }
+  catch (error) {
+    throw new CloudStartupError({ status: "closed", errors: [] }, usage, "admission",
+      error instanceof ExecutionError ? error.code : undefined);
+  }
+  const { fixtures, criteria, userMetadata, source, assertActive } = validated;
+  let bb: Browserbase;
+  try { bb = new Browserbase({ apiKey: config.BROWSERBASE_API_KEY, maxRetries: 0, timeout: 10000 }); }
+  catch { throw new CloudStartupError({ status: "closed", errors: [] }, usage, "client_initialization"); }
   let browser: StagehandBrowser | undefined;
   let sessionId: string | undefined;
   let extensionId: string | undefined;
@@ -110,7 +125,6 @@ export async function createFixtureExecution(config: AppConfig, options: Fixture
   let playwright: Browser | undefined;
   let network: Awaited<ReturnType<typeof installFixtureNetwork>> | undefined;
   let closing: Promise<CleanupOutcome> | undefined;
-  let launchAttempted = false;
   let phase = "launch";
   const diagnostic = (operation: string, error: unknown, category?: "unconfirmed") => {
     usage.cleanupDiagnostics ??= [];
@@ -138,7 +152,7 @@ export async function createFixtureExecution(config: AppConfig, options: Fixture
         if (terminal && Number.isFinite(seconds) && seconds >= 0) usage.actualBrowserSeconds = seconds;
       } catch (error) { errors.push("remote_release_unconfirmed"); diagnostic("remote_release_unconfirmed", error); }
     };
-    if (launchAttempted && !sessionId) {
+    if (usage.allocationAttempted && !sessionId) {
       errors.push("startup_session_unconfirmed");
       diagnostic("startup_session_unconfirmed", undefined, "unconfirmed");
     }
@@ -197,7 +211,7 @@ export async function createFixtureExecution(config: AppConfig, options: Fixture
     } finally { archive.destroy(); }
     phase = "launch";
     assertActive();
-    launchAttempted = true;
+    usage.allocationAttempted = true;
     const allocated = await bb.sessions.create({
       projectId: config.BROWSERBASE_PROJECT_ID, extensionId,
       api_timeout: timeoutSeconds, keepAlive: false, proxies: false,
