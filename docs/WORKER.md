@@ -4,7 +4,7 @@ The separate Node process preserves registered controlled-site execution and
 contains a distinct, source-disabled public read-only path. Legacy/unversioned
 website requests remain `blocked_unsupported` without allocating a browser;
 enabling a flag cannot upgrade those stored requests. Release gate #8 remains
-open. There is no fixture fallback or target-validation exception.
+unproved regardless of the issue's GitHub state. There is no fixture fallback or target-validation exception.
 Layer 04b (#11) adds custom structural and evidence-grounded semantic
 criteria for the store and project board before the layer 05 wall. Natural-language
 evaluation is a recorded heuristic, not a deterministic outcome oracle.
@@ -20,6 +20,14 @@ the source-level stop. Queued versioned public jobs finish `blocked_unsupported`
 any launch reservation or public factory call. Re-enablement requires the new
 public-execution plan and a reviewed source change, not configuration changes.
 Historical tests and the standalone broker proof are not acceptance.
+
+The startup path distinguishes controlled and public authorization. Once source
+readiness is approved, a public-only worker can start without enabling demo runs
+or fetching the fixture health page. It skips queued controlled jobs rather than
+spending on them, and does not pump controlled reproduction work. Deployment
+still requires explicit paid confirmation. This future-path wiring does not
+override the current source stop; existing orphan cleanup remains separate from
+authority to launch a new job.
 
 The same source stop suspends automatic and manual public/native reconciliation,
 including restored native-resource or discovery-event rows attached to a launch.
@@ -39,7 +47,7 @@ The #8 [native-policy probe](EXECUTION.md#native-browser-policy-candidate-offlin
 has both offline conformance tests and a production adapter used by the gated
 public factory. Running offline probes uploads no extension and allocates no
 provider browser/model work. A provider proof requires
-fresh coordinator approval and a separately reviewed bounded harness; existing
+fresh explicit user approval and a separately reviewed bounded harness; existing
 API credentials do not grant that approval.
 
 Public sessions are fresh only, with no context save/reuse or takeover. Native
@@ -58,6 +66,14 @@ through remote release. `COMPLETED` is required for clean live acceptance;
 operational retirement of `ERROR`/`TIMED_OUT` requires two independently matched
 identity/status/start/end readbacks and remains a failed outcome. Exact-ID
 authenticated not-found is required to confirm extension deletion.
+
+The native factory uses an exclusive SDK worker thread and the real Browserbase
+session identity; only the parent owns provider release. It never calls branded
+SDK browser close methods. After remote readback, actual thread termination
+settles outstanding SDK RPCs/sockets/retries before recycling the metadata port
+or detaching native/network/Playwright control. A termination failure retains
+attachments and quarantines the extension. Local WSS and synthetic Gateway
+regressions prove these mechanics, not hosted public execution.
 
 The maintained worker/reconciliation commands and deployment supervisor supply
 `--conditions=react-server` before imports. This resolves the server-only broker

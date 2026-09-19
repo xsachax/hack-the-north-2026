@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { readConfig } from "../../lib/config";
-import { readWorkerPolicy } from "../worker/config";
+import { readWorkerPolicy, workerExecutionModes } from "../worker/config";
 
 export function deploymentBindHost(input: string | undefined): "127.0.0.1" | "0.0.0.0" {
   const host = input ?? "0.0.0.0";
@@ -23,10 +23,11 @@ export function deploymentConfig(input: NodeJS.ProcessEnv) {
   }
   if ((env.FLASH_FLOOD_ACCESS_CODE?.trim().length ?? 0) < 32) throw new Error("deployment_access_code_required");
   if (!env.DATA_DIR || !isAbsolute(env.DATA_DIR) || env.DATA_DIR === "/") throw new Error("deployment_private_data_required");
-  for (const name of ["ENABLE_DEMO_RUNS", "DEPLOYMENT_CONFIRM_PAID"]) {
+  for (const name of ["ENABLE_DEMO_RUNS", "ENABLE_PUBLIC_RUNS", "DEPLOYMENT_CONFIRM_PAID"]) {
     if (!["true", "false"].includes(env[name] ?? "false")) throw new Error("deployment_invalid_paid_flag");
   }
-  const paid = env.ENABLE_DEMO_RUNS === "true";
+  const modes = workerExecutionModes(env);
+  const paid = modes.controlled || modes.public;
   if (paid !== (env.DEPLOYMENT_CONFIRM_PAID === "true")) throw new Error("deployment_paid_confirmation_required");
   if (paid) {
     readConfig(env);

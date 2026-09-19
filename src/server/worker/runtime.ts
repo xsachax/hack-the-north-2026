@@ -26,6 +26,7 @@ export type WorkerDependencies = {
     signal?: AbortSignal; executionDeadlineMs?: number;
   }>;
   publicEnabled?: boolean;
+  controlledEnabled?: boolean;
   publicImplementationReady?: boolean;
   recover: ReturnType<typeof createCloudRecovery>["recover"];
   artifacts: (runId: string, attemptId: string) => ArtifactSinks;
@@ -58,6 +59,7 @@ export class DurableWorker {
   private publicAdmission() {
     return {
       enabled: this.dependencies.publicEnabled === true,
+      controlledEnabled: this.dependencies.controlledEnabled !== false,
       implementationReady: PUBLIC_EXECUTION_IMPLEMENTATION_READY &&
         this.dependencies.publicImplementationReady === true && !!this.dependencies.launchPublic,
     };
@@ -69,7 +71,7 @@ export class DurableWorker {
     try {
       while (!combined.aborted) {
         await this.repository.retireContext(this.dependencies.contextProvider);
-        this.repository.pumpReproductions();
+        if (this.dependencies.controlledEnabled !== false) this.repository.pumpReproductions();
         let claim: Claim | null;
         while (!combined.aborted && this.active.size < this.repository.policy.globalConcurrency &&
           (claim = this.repository.claim(this.id, this.publicAdmission()))) {
@@ -168,6 +170,10 @@ export class DurableWorker {
           diagnostic("worker_recovery_failed");
           this.repository.recover(claim, { confirmed: false, sessions: [] });
         }
+        return;
+      }
+      if (claim.executionMode === "controlled-fixture" && this.dependencies.controlledEnabled === false) {
+        this.repository.blockUnsupported(claim);
         return;
       }
       if (claim.executionMode !== "controlled-fixture") {
@@ -407,15 +413,19 @@ export class DurableWorker {
   }
 }
 
-export function productionDependencies(config: AppConfig): WorkerDependencies {
+export function productionDependencies(config: AppConfig, controlledEnabled = false): WorkerDependencies {
   const writer = new ArtifactWriter({ dataDir: config.DATA_DIR, knownSecrets: [config.BROWSERBASE_API_KEY] });
   return {
-    launch: (options) => createFixtureExecution(config, options),
+    launch: (options) => {
+      if (!controlledEnabled) throw new Error("controlled_execution_disabled");
+      return createFixtureExecution(config, options);
+    },
     launchPublic: async (options) => {
       const { createPublicExecution } = await import("../execution/public-cloud");
       return createPublicExecution(config, options);
     },
     publicEnabled: config.ENABLE_PUBLIC_RUNS,
+    controlledEnabled,
     publicImplementationReady: PUBLIC_EXECUTION_IMPLEMENTATION_READY,
     recover: createCloudRecovery(config).recover,
     artifacts: (runId, attemptId) => writer.createSinks(runId, attemptId),

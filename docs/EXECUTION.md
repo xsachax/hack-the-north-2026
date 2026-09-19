@@ -12,22 +12,36 @@ reject before provider operations; there is no approval-file or environment
 override. The legacy controlled factory rejects public targets. This is a release blocker, not a
 claim that the final product no longer needs authorized arbitrary websites.
 
-## Offline checkpoint and deferred public execution
+## Offline integration and deferred public acceptance
 
-The user requested a mergeable checkpoint followed by a new public-browser plan.
-This preserves implemented immutable admission contracts, historical idempotency,
+The integration starts from checkpoint #24 at
+`ccb57a7929c37b9329e1aee0b9305af4c256ed66` and preserves immutable admission contracts, historical idempotency,
 resource journals, native composition, scoped CDP routing, bounded HTTP/Gateway
 transports, source binding and offline regression coverage. Controlled execution
-remains available under its existing gates. Public activation is not part of this
-checkpoint, and #1, #8 and #16 remain open.
+remains available under its existing gates. Public activation is still blocked:
+the issue's GitHub state is not proof that the #8 acceptance requirements are met.
 
-Native factory lifecycle code is an **unreachable prototype**, not approved hosted
-cleanup: pinned Stagehand 4.1's branded browser `close()` can issue independently
-retried provider releases, including late connection results. Do not enable it.
-The separate metadata-only loopback adapter and SDK transport monitor are offline
-prototypes and are not wired into that factory. A successful SDK extraction test
-with synthetic Gateway responses does not establish production WSS startup,
-failure cleanup or a genuine external objective.
+The production native factory now owns pinned Stagehand through an exclusive
+Node worker thread (`native-sdk.ts`, `native-sdk-worker.ts`). It uses the supported
+branded Browserbase connection, the verified Chrome runtime extension identity,
+and the one-use metadata-only loopback adapter. Real session/key attribution is
+preserved. It never invokes branded Browserbase `close()` (which independently
+releases with hidden retries), local-browser `close()` (which sends
+`Browser.close`), or an unbounded Stagehand shutdown RPC. The parent alone sends
+no-retry provider release and verifies the returned identity/status.
+
+Actual worker termination, not an outer deadline, settles SDK connections,
+timers and inner retries before the metadata port or other CDP attachments can
+be retired. Rejected termination retains attachments and quarantines resources.
+The diagnostic-channel transport monitor remains an unintegrated prototype, not
+a lifecycle dependency. No native settings are cleared during teardown.
+
+Owned TLS/WSS fixtures exercise termination during connect, initialization and
+ready states. A full local Chromium test additionally combines the production
+SDK worker, native policy/proxy attestation, real extension Gateway requests and
+synthetic replies. It verifies actual one-key session metadata and SDK metrics.
+Only that fixture's ephemeral certificate is trusted; production TLS validation
+is unchanged. This is not hosted Browserbase conformance or a public objective.
 
 Actual Linux diagnostics measured stopped-trace completion at 5.018–5.145 seconds,
 after the former generic three-second wait had already failed. Trace completion
@@ -38,19 +52,21 @@ unchanged; no retry is added. Refusal acquisition closes its finished owned prob
 before ending the trace and rejects unexpected early completion. Diagnostics
 retain only constant phase/reason codes, never raw NetLog.
 
-Local composed probes have also exhibited native-worker CDP readiness timeouts
-and a strict trace-format rejection whose causes remain unresolved. Offline
-results are not hosted startup-reliability proof. Native-only channel tests now
+Worker readiness uses the trusted vendor wake document before evaluating the
+extension bindings. It adds no page messaging/network bridge. Local startup
+stress is not hosted startup-reliability proof. Native-only channel tests
 require a single owned-sentinel refusal before starting the negative lane:
 `chrome.proxy.settings.set()` completion alone is not a network-service barrier.
 
-Deferred work includes a reviewed supported SDK connection/termination lifecycle,
-settlement of inner HTTP retries before recycling metadata ports, actual hosted
-version/profile/native-policy conformance, and a separately approved external-goal
+Deferred acceptance includes actual hosted version/profile/native-policy
+conformance and a separately approved external-goal
 proof with independently verified accounting and closure. Timer expiry is never
-retirement evidence. No provider reads, uploads, allocations or model calls were
-authorized by this checkpoint. A new plan and source changes are required before
-reconsidering public activation.
+retirement evidence. No provider reads, uploads, allocations or model calls are
+authorized. The existing shared 1,800-second lifetime reservation ledger must be
+identified and reconciled without resetting it. Fresh explicit approval must bind
+source/package/harness/archive/ledger digests; default concurrency is one,
+maximum two, TTL <=300 seconds and failed attempts count. Operator flags cannot
+replace approval or per-session attestation.
 
 ## Public HTTP transport library (offline, not enabled)
 

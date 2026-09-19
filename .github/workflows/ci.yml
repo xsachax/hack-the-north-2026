@@ -60,6 +60,11 @@ jobs:
       - name: Release SQLite queue and budget preflight (offline)
         timeout-minutes: 3
         run: npx --no-install tsx scripts/release-integration.ts --offline-preflight
+      - name: Public source/package/archive receipt (offline, no provider calls)
+        timeout-minutes: 5
+        run: |
+          npm run deployment:build
+          npm run public:integration -- --offline-preflight
       - name: Clean Node deployment package and actual HTTPS restart (offline)
         timeout-minutes: 5
         run: |
@@ -94,6 +99,9 @@ jobs:
       - name: Actual CDP redirect, cookie, CSP and Gateway provenance (synthetic upstream)
         timeout-minutes: 2
         run: npm run test:public-browser
+      - name: Maintained public native CLI (synthetic, no provider calls)
+        timeout-minutes: 2
+        run: npm run public:integration -- --offline-native-probe
       - name: Isolated private addresses and actual DNS answer changes
         timeout-minutes: 5
         run: node node_modules/tsx/dist/cli.mjs scripts/native-policy-linux.ts --ci-sudo

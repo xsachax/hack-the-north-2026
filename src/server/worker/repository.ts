@@ -26,7 +26,7 @@ import { isRecoveredNativeSessionRetired, type CloudRecoveryResult } from "./clo
 import { PUBLIC_EXECUTION_IMPLEMENTATION_READY } from "../public-execution-readiness";
 
 /** Runtime gates can further restrict admission, never override the source-level checkpoint stop. */
-export type PublicWorkerAdmission = { enabled: boolean; implementationReady: boolean };
+export type PublicWorkerAdmission = { enabled: boolean; implementationReady: boolean; controlledEnabled?: boolean };
 
 export class LeaseLostError extends Error {
   constructor() { super("worker_lease_lost"); }
@@ -91,6 +91,7 @@ export class WorkerRepository extends Repository {
         LEFT JOIN context_selections selection ON selection.attempt_id=a.id
         LEFT JOIN browser_contexts context ON context.id=selection.context_id
         WHERE j.status='queued' AND j.cancel_requested_at IS NULL
+        AND (? OR r.execution_mode!='controlled-fixture')
         AND (context.id IS NULL OR context.revoked=1 OR context.expires_at<=?
           OR (context.held_job IS NULL AND
             (context.status!='persisting' OR context.available_after<=?)))
@@ -98,7 +99,8 @@ export class WorkerRepository extends Repository {
           (SELECT count(*) FROM launches occupied JOIN jobs held ON held.id=occupied.job_id
            JOIN runs owned ON owned.id=held.run_id
            WHERE occupied.state!='settled' AND owned.owner_id=r.owner_id) < ?)
-        ORDER BY j.rowid LIMIT 100`).all(this.clock(), this.clock(), this.policy.ownerConcurrency);
+        ORDER BY j.rowid LIMIT 100`).all(publicAdmission?.controlledEnabled === false ? 0 : 1,
+          this.clock(), this.clock(), this.policy.ownerConcurrency);
       for (const row of queued) {
         const attempt = attemptSchema.parse(json(row.snapshot));
         const jobId = z.string().parse(row.id);

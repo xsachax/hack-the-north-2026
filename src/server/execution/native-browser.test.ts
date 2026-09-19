@@ -8,7 +8,7 @@ import {
 import type { NativeResource } from "./native-resources";
 import type { Brain } from "./types";
 
-// Test-only access to the unreachable prototype; all provider bindings below are mocked.
+// Test-only access while hosted acceptance is pending; provider/worker bindings are mocked.
 vi.mock("../public-execution-readiness", () => ({ PUBLIC_EXECUTION_IMPLEMENTATION_READY: true }));
 
 const mocks = vi.hoisted(() => {
@@ -57,7 +57,7 @@ const mocks = vi.hoisted(() => {
   };
   return {
     APIError, page, worker, context, browser, playwright, versionSession, stagehand, verify, policyClose, bundle,
-    sdk: vi.fn(), forbiddenLaunch: vi.fn(), fetch: vi.fn(),
+    sdk: vi.fn(), sdkWorker: vi.fn(), sdkClose: vi.fn<() => Promise<void>>(), forbiddenLaunch: vi.fn(), fetch: vi.fn(),
     delay: vi.fn<(milliseconds: number) => Promise<void>>(),
     toFile: vi.fn(async () => ({ name: "flash-flood-native.zip" })),
     build: vi.fn(async () => bundle),
@@ -94,6 +94,15 @@ vi.mock("@browserbasehq/sdk", () => ({
 vi.mock("@browserbasehq/stagehand", () => ({
   browserbase: { launch: mocks.forbiddenLaunch, connect: mocks.attach },
   Stagehand: { create: mocks.initialize },
+}));
+vi.mock("./native-sdk", () => ({
+  createNativeSdk: (options: unknown) => {
+    mocks.sdkWorker(options);
+    return {
+      connect: mocks.attach, initialize: mocks.initialize, metrics: mocks.stagehand.metrics,
+      close: mocks.sdkClose, selectPage: vi.fn(), extract: mocks.stagehand.extract,
+    };
+  },
 }));
 vi.mock("playwright-core", () => ({ chromium: { connectOverCDP: mocks.connect } }));
 vi.mock("node:timers/promises", async (importOriginal) => ({
@@ -175,6 +184,7 @@ beforeEach(() => {
   mocks.initialize.mockResolvedValue(mocks.stagehand);
   mocks.connect.mockResolvedValue(mocks.playwright);
   mocks.browser.close.mockResolvedValue(undefined);
+  mocks.sdkClose.mockResolvedValue(undefined);
   mocks.stagehand.close.mockResolvedValue(undefined);
   mocks.playwright.close.mockResolvedValue(undefined);
   mocks.playwright.version.mockReturnValue("145.0.7632.6");
@@ -198,6 +208,8 @@ beforeEach(() => {
 
 afterEach(() => {
   expect(mocks.forbiddenLaunch).not.toHaveBeenCalled();
+  expect(mocks.browser.close).not.toHaveBeenCalled();
+  expect(mocks.stagehand.close).not.toHaveBeenCalled();
   expect(mocks.fetch).not.toHaveBeenCalled();
   expect(mocks.page.goto).not.toHaveBeenCalled();
   expect(mocks.stagehand.extract).not.toHaveBeenCalled();
@@ -226,11 +238,13 @@ describe("offline fresh native browser admission", () => {
         runId: input.runId, personaId: input.personaId, correlationToken, purpose: COMPOSED_POLICY_VERSION,
       },
     });
-    expect(mocks.attach).toHaveBeenCalledExactlyOnceWith({ apiKey: "unit-test-native-key", sessionId });
-    expect(mocks.initialize).toHaveBeenCalledExactlyOnceWith({
-      browser: mocks.browser, apiKey: "unit-test-native-key", model: { modelName: config.STAGEHAND_MODEL },
-      cache: false, selfHeal: false, logging: { level: "off" },
-    });
+    expect(mocks.sdkWorker).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      session: { id: sessionId, connectUrl: running.connectUrl, region: undefined },
+      apiKey: "unit-test-native-key", model: config.STAGEHAND_MODEL,
+      assertActive: expect.any(Function), signal: expect.any(AbortSignal), onLost: expect.any(Function),
+    }));
+    expect(mocks.attach).toHaveBeenCalledExactlyOnceWith();
+    expect(mocks.initialize).toHaveBeenCalledExactlyOnceWith();
     expect(mocks.connect).toHaveBeenCalledExactlyOnceWith(running.connectUrl, { timeout: 10000 });
     expect(mocks.attest).toHaveBeenCalledWith({
       context: mocks.context, worker: mocks.worker, files: mocks.bundle.files,
@@ -524,7 +538,7 @@ describe("offline native absolute execution deadline", () => {
     expect(mocks.extensions.delete).toHaveBeenCalledOnce();
   });
 
-  it.each(["browser", "stagehand"])("closes a late %s connector after the execution deadline initiates cleanup", async (kind) => {
+  it.each(["browser", "stagehand"])("terminates SDK ownership without closing a late %s handle after the deadline", async (kind) => {
     const late = deferred<typeof mocks.stagehand>();
     const attachment = { ...mocks.stagehand, close: vi.fn(async () => {}) };
     if (kind === "browser") mocks.attach.mockReturnValue(late.promise);
@@ -539,8 +553,9 @@ describe("offline native absolute execution deadline", () => {
     const error = await result;
     await vi.advanceTimersByTimeAsync(0);
     expect(error.phase).toBe(kind === "browser" ? "native_browser_connect" : "native_stagehand_create");
-    expect(attachment.close).toHaveBeenCalledOnce();
-    expect(mocks.connect).not.toHaveBeenCalled();
+    expect(attachment.close).not.toHaveBeenCalled();
+    expect(mocks.sdkClose).toHaveBeenCalledOnce();
+    expect(mocks.connect).toHaveBeenCalledOnce();
     expect(mocks.sessions.debug).not.toHaveBeenCalled();
     expect(mocks.sessions.create).toHaveBeenCalledOnce();
   });
@@ -712,9 +727,8 @@ describe("offline native startup failures", () => {
     expect(mocks.sessions.debug).not.toHaveBeenCalled();
     expect(mocks.worker.once).toHaveBeenCalledExactlyOnceWith("close", expect.any(Function));
     expect(mocks.policyClose).toHaveBeenCalledOnce();
-    expect(mocks.stagehand.close).toHaveBeenCalledOnce();
+    expect(mocks.sdkClose).toHaveBeenCalledOnce();
     expect(mocks.playwright.close).toHaveBeenCalledOnce();
-    expect(mocks.browser.close).toHaveBeenCalledOnce();
     expect(mocks.extensions.delete).toHaveBeenCalledOnce();
   });
 
@@ -743,7 +757,7 @@ describe("offline native startup failures", () => {
     }
   });
 
-  it.each(["browser", "stagehand"])("closes a %s attachment resolving after startup timeout", async (kind) => {
+  it.each(["browser", "stagehand"])("terminates SDK work without closing a %s handle resolving after timeout", async (kind) => {
     const late = deferred<typeof mocks.browser>();
     if (kind === "browser") mocks.attach.mockReturnValue(late.promise);
     else mocks.initialize.mockReturnValue(late.promise as Promise<typeof mocks.stagehand>);
@@ -754,8 +768,9 @@ describe("offline native startup failures", () => {
     const attachment = { close: vi.fn(async () => {}) };
     late.resolve(attachment);
     await vi.advanceTimersByTimeAsync(0);
-    expect(attachment.close).toHaveBeenCalledOnce();
-    expect(mocks.connect).not.toHaveBeenCalled();
+    expect(attachment.close).not.toHaveBeenCalled();
+    expect(mocks.sdkClose).toHaveBeenCalledOnce();
+    expect(mocks.connect).toHaveBeenCalledOnce();
     expect(mocks.sessions.debug).not.toHaveBeenCalled();
   });
 
@@ -773,6 +788,38 @@ describe("offline native startup failures", () => {
 });
 
 describe("offline native ownership and cleanup", () => {
+  it("retains network, policy and Playwright attachments until actual SDK worker settlement", async () => {
+    const execution = await createNativeBrowser(config, options());
+    const exit = deferred<void>();
+    mocks.sdkClose.mockReturnValue(exit.promise);
+    const networkClose = vi.fn(async () => {});
+    execution.attachNetwork(networkClose);
+    const closing = execution.close();
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(mocks.sdkClose).toHaveBeenCalledOnce();
+    expect(networkClose).not.toHaveBeenCalled();
+    expect(mocks.policyClose).not.toHaveBeenCalled();
+    expect(mocks.playwright.close).not.toHaveBeenCalled();
+    expect(mocks.extensions.delete).not.toHaveBeenCalled();
+    exit.resolve(undefined);
+    expect(await closing).toEqual({ status: "closed", errors: [] });
+    expect(networkClose).toHaveBeenCalledOnce();
+    expect(mocks.extensions.delete).toHaveBeenCalledOnce();
+  });
+
+  it("quarantines and retains attachments if local SDK retirement is unconfirmed", async () => {
+    const execution = await createNativeBrowser(config, options());
+    mocks.sdkClose.mockRejectedValue(new Error("worker termination failed"));
+    const networkClose = vi.fn(async () => {});
+    execution.attachNetwork(networkClose);
+    expect((await execution.close()).errors).toContain("native_sdk_close");
+    expect(execution.usage.nativeResource?.state).toBe("quarantined");
+    expect(networkClose).not.toHaveBeenCalled();
+    expect(mocks.policyClose).not.toHaveBeenCalled();
+    expect(mocks.playwright.close).not.toHaveBeenCalled();
+    expect(mocks.extensions.delete).not.toHaveBeenCalled();
+  });
+
   it("drains Gateway and reads metrics before remote release while all attachments remain installed", async () => {
     const execution = await createNativeBrowser(config, options());
     const events: string[] = [];
@@ -803,9 +850,8 @@ describe("offline native ownership and cleanup", () => {
     });
     mocks.sessions.update.mockImplementation(async () => { events.push("request-release"); });
     mocks.policyClose.mockImplementation(async () => { events.push("native-control"); });
-    mocks.stagehand.close.mockImplementation(async () => { events.push("stagehand"); });
+    mocks.sdkClose.mockImplementation(async () => { events.push("sdk-worker-exit"); });
     mocks.playwright.close.mockImplementation(async () => { events.push("playwright"); });
-    mocks.browser.close.mockImplementation(async () => { events.push("browser"); });
     mocks.extensions.delete.mockImplementation(async () => { events.push("delete-extension"); });
     mocks.extensions.retrieve.mockImplementation(async () => {
       events.push("confirm-404"); throw new mocks.APIError(404);
@@ -818,7 +864,7 @@ describe("offline native ownership and cleanup", () => {
     expect(await closing).toEqual({ status: "closed", errors: [] });
     expect(events).toEqual([
       "drain", "metrics", "retrieve-running", "request-release", "retrieve-completed",
-      "network", "native-control", "stagehand", "playwright", "browser", "delete-extension", "confirm-404",
+      "sdk-worker-exit", "network", "native-control", "playwright", "delete-extension", "confirm-404",
     ]);
     expect(mocks.sessions.update).toHaveBeenCalledExactlyOnceWith(sessionId, {
       status: "REQUEST_RELEASE", projectId: config.BROWSERBASE_PROJECT_ID,
@@ -1177,9 +1223,8 @@ describe("offline native ownership and cleanup", () => {
     mocks.policyClose.mockRejectedValue(new Error("native control detach failed"));
     expect(await execution.close()).toEqual({ status: "failed", errors: ["native_control_close"] });
     expect(mocks.policyClose).toHaveBeenCalledOnce();
-    expect(mocks.stagehand.close).toHaveBeenCalledOnce();
+    expect(mocks.sdkClose).toHaveBeenCalledOnce();
     expect(mocks.playwright.close).toHaveBeenCalledOnce();
-    expect(mocks.browser.close).toHaveBeenCalledOnce();
     expect(mocks.extensions.delete).toHaveBeenCalledOnce();
     expect(execution.usage.nativeResource?.state).toBe("deleted");
   });

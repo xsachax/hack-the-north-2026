@@ -1,5 +1,13 @@
 import { z } from "zod";
 import type { ExecutionLimits } from "../../lib/contracts";
+import { PUBLIC_EXECUTION_IMPLEMENTATION_READY } from "../public-execution-readiness";
+
+export function workerExecutionModes(env: NodeJS.ProcessEnv) {
+  return {
+    controlled: env.ENABLE_DEMO_RUNS === "true",
+    public: env.ENABLE_PUBLIC_RUNS === "true" && PUBLIC_EXECUTION_IMPLEMENTATION_READY,
+  };
+}
 
 export const workerPolicySchema = z.strictObject({
   globalConcurrency: z.int().min(1).max(12).default(3),

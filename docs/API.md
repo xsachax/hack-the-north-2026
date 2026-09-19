@@ -9,6 +9,9 @@ The combined [native/public execution path](EXECUTION.md#native-browser-policy-c
 remains disabled pending integrated acceptance. Unversioned website `/runs`
 requests retain `blocked_unsupported` without allocation. New public opt-in is a
 distinct immutable contract; `/capabilities` must report its actual readiness.
+The isolated SDK lifecycle integration does not change admission: the source
+readiness constant remains false, and neither an operator flag nor passing local
+WSS/synthetic Gateway tests enables paid public work.
 
 ### Explicit public opt-in (not enabled by default)
 

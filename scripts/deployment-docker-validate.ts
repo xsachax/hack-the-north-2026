@@ -163,6 +163,8 @@ try {
   check(!docker(["top", container]).includes("deployment-worker.ts"), "paid_worker_started_offline");
   docker(["exec", container, "node", "--import", "tsx", "scripts/deployment-cdp-check.ts"]);
   console.log("offline_real_playwright_cdp_scratch_pass");
+  docker(["exec", container, "node", "--conditions=react-server", "--import", "tsx", "scripts/deployment-sdk-check.ts"]);
+  console.log("offline_packaged_sdk_worker_loading_and_retirement_pass");
   console.log("offline_nonroot_volume_migrations_health_pass");
   compose(["stop", "--timeout", "90", "app"]);
   inspectExit(container);

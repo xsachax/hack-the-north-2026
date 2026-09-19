@@ -13,10 +13,9 @@ vi.mock("../public-execution-readiness", () => ({ PUBLIC_EXECUTION_IMPLEMENTATIO
 const mocks = vi.hoisted(() => {
   const order: string[] = [];
   const page = { goto: vi.fn(async () => { order.push("navigate"); }), url: () => "https://example.com/" };
-  const stagehandPage = { url: async () => "https://example.com/" };
   const native = {
-    page, context: {}, stagehand: {}, extensionOrigin: `chrome-extension://${"a".repeat(32)}`,
-    browser: { context: { pages: async () => [stagehandPage], setActivePage: vi.fn(async () => {}) } },
+    page, context: {}, sdk: { selectPage: vi.fn(async () => {}), extract: vi.fn() },
+    extensionOrigin: `chrome-extension://${"a".repeat(32)}`,
     usage: { allocationAttempted: true, reservedSeconds: 120, elapsedSeconds: 0 },
     signal: new AbortController().signal,
     assertActive: vi.fn(),
