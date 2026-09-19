@@ -20,15 +20,28 @@ import { controlledRunSchema, resolveControlledScope, type ControlledRun } from 
 import { isLegacyCriterion } from "../lib/criteria";
 import { attemptSummarySchema, sessionViewSchema, type AttemptSummary, type SessionView } from "../lib/ui-contracts";
 import { workerExecutionLimits, workerPolicySchema } from "./worker/config";
+import { runReportSchema, type RunReport } from "../lib/report-contracts";
+import { sanitizeEvidence } from "./execution/artifacts";
+import { publicPageUrl } from "./public-page-url";
 
 type Row = Record<string, SQLOutputValue>;
 const parseJson = (value: unknown): unknown => JSON.parse(z.string().parse(value));
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 const notFound = () => new ServiceError("not_found", 404);
 const conflict = () => new ServiceError("conflict", 409);
-const publicEvidenceText = (value: string) => value.replace(/[a-f0-9]{64}/gi, "[PRIVATE_ARTIFACT]");
+const publicEvidenceText = (value: string) => String(sanitizeEvidence(value)).replace(/[a-f0-9]{64}/gi, "[PRIVATE_ARTIFACT]");
 export type OwnerSession = { ownerId: string; csrf: string; expiresAt: number };
 export type Page<T> = { items: T[]; nextCursor: number | null };
+export type StoredEvidence = { metadata: Evidence; storageKey: string };
+export type ReportSource = {
+  run: Run;
+  attempts: Attempt[];
+  summaries: AttemptSummary[];
+  events: RunEvent[];
+  evidence: StoredEvidence[];
+  results: { attemptId: string; result: z.infer<typeof resultSchema> }[];
+  sequence: number;
+};
 
 function readRun(row: Row): Run {
   return runSchema.parse({
@@ -42,7 +55,7 @@ function readRun(row: Row): Run {
 
 export class Repository {
   protected readonly db: DatabaseSync;
-  constructor(dataDir: string, protected readonly clock = () => Date.now()) {
+  constructor(readonly dataDir: string, protected readonly clock = () => Date.now()) {
     const dir = resolve(dataDir);
     if (dir === resolve("/")) throw new Error("A dedicated private data directory is required");
     mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -248,15 +261,21 @@ export class Repository {
 
   attempts(owner: string, runId: string): Attempt[] {
     this.getRun(owner, runId);
-    return this.db.prepare("SELECT snapshot FROM attempts WHERE run_id=? ORDER BY rowid").all(runId)
-      .map((row) => attemptSchema.parse(parseJson(row.snapshot)));
+    return this.db.prepare("SELECT id,status,snapshot FROM attempts WHERE run_id=? ORDER BY rowid").all(runId)
+      .map((row) => {
+        const attempt = attemptSchema.parse(parseJson(row.snapshot));
+        if (attempt.id !== row.id || attempt.runId !== runId || attempt.status !== row.status) throw notFound();
+        return attempt;
+      });
   }
 
   sessionViews(owner: string, runId: string): SessionView[] {
     const run = this.getRun(owner, runId);
-    return this.db.prepare(`SELECT j.attempt_id,j.lease_expires_at,a.status,l.state,l.session_reference FROM launches l
-      JOIN jobs j ON j.id=l.job_id JOIN attempts a ON a.id=j.attempt_id WHERE j.run_id=?`).all(runId).map((row) => {
+    return this.db.prepare(`SELECT j.id,j.attempt_id,j.lease_expires_at,a.status,l.state,l.session_reference FROM launches l
+      JOIN jobs j ON j.id=l.job_id JOIN attempts a ON a.id=j.attempt_id AND a.run_id=j.run_id WHERE j.run_id=?`).all(runId).map((row) => {
       const reference = row.session_reference ? referenceSchema.parse(parseJson(row.session_reference)) : null;
+      if (reference && this.db.prepare("SELECT job_id FROM browser_session_bindings WHERE session_id=?")
+        .get(reference.sessionId)?.job_id !== row.id) throw notFound();
       const active = row.state === "active" && row.status === "running" && !run.cancelRequestedAt &&
         typeof row.lease_expires_at === "string" && row.lease_expires_at > this.now();
       return sessionViewSchema.parse({
@@ -271,7 +290,7 @@ export class Repository {
     this.getRun(owner, runId);
     return this.db.prepare(`SELECT j.attempt_id,a.status,l.state,l.summary,l.usage,
       u.reserved_seconds,u.consumed_seconds,u.released_seconds
-      FROM jobs j JOIN attempts a ON a.id=j.attempt_id JOIN usage_reservations u ON u.job_id=j.id
+      FROM jobs j JOIN attempts a ON a.id=j.attempt_id AND a.run_id=j.run_id JOIN usage_reservations u ON u.job_id=j.id
       LEFT JOIN launches l ON l.job_id=j.id WHERE j.run_id=? ORDER BY j.rowid`).all(runId).map((row) => {
       const privateSummary = row.summary ? resultSchema.parse(parseJson(row.summary)) : null;
       const summary = privateSummary ? publicAttemptSummarySchema.parse({
@@ -289,6 +308,7 @@ export class Repository {
               ).get(screenshotKey, runId, row.attempt_id!) : undefined;
               return {
                 ...citation, excerpt: publicEvidenceText(citation.excerpt),
+                pageUrl: publicPageUrl(citation.pageUrl) ?? "https://redacted.invalid/",
                 ...(evidence ? { evidenceId: evidence.id } : {}),
               };
             }),
@@ -422,10 +442,20 @@ export class Repository {
   }
 
   getEvidence(owner: string, id: string): Evidence {
+    return this.storedEvidence(owner, id).metadata;
+  }
+
+  storedEvidence(owner: string, id: string, runId?: string, attemptId?: string): StoredEvidence {
     idSchema.parse(id);
-    const row = this.db.prepare("SELECT e.metadata FROM evidence e JOIN runs r ON r.id=e.run_id WHERE e.id=? AND r.owner_id=?").get(id, owner);
+    const row = this.db.prepare(`SELECT e.id,e.run_id,e.attempt_id,e.storage_key,e.metadata
+      FROM evidence e JOIN runs r ON r.id=e.run_id
+      JOIN attempts a ON a.id=e.attempt_id AND a.run_id=e.run_id
+      WHERE e.id=? AND r.owner_id=?`).get(id, owner);
     if (!row) throw notFound();
-    return evidenceSchema.parse(parseJson(row.metadata));
+    const metadata = evidenceSchema.parse(parseJson(row.metadata));
+    if (metadata.id !== row.id || metadata.runId !== row.run_id || metadata.attemptId !== row.attempt_id ||
+      (runId !== undefined && metadata.runId !== runId) || (attemptId !== undefined && metadata.attemptId !== attemptId)) throw notFound();
+    return { metadata, storageKey: z.string().regex(/^[a-f0-9]{64}$/).parse(row.storage_key) };
   }
 
   recordFinding(owner: string, input: Omit<Finding, "id" | "createdAt">): Finding {
@@ -447,8 +477,93 @@ export class Repository {
 
   getFinding(owner: string, id: string): Finding {
     idSchema.parse(id);
-    const row = this.db.prepare("SELECT f.finding FROM findings f JOIN runs r ON r.id=f.run_id WHERE f.id=? AND r.owner_id=?").get(id, owner);
+    const row = this.db.prepare(`SELECT f.id,f.run_id,f.attempt_id,f.finding FROM findings f
+      JOIN runs r ON r.id=f.run_id JOIN attempts a ON a.id=f.attempt_id AND a.run_id=f.run_id
+      WHERE f.id=? AND r.owner_id=?`).get(id, owner);
     if (!row) throw notFound();
-    return findingSchema.parse(parseJson(row.finding));
+    const finding = findingSchema.parse(parseJson(row.finding));
+    if (finding.id !== row.id || finding.runId !== row.run_id || finding.attemptId !== row.attempt_id) throw notFound();
+    for (const evidenceId of finding.evidenceIds) this.storedEvidence(owner, evidenceId, finding.runId, finding.attemptId);
+    return finding;
+  }
+
+  reportSource(owner: string, runId: string): ReportSource {
+    return this.transaction(() => {
+      const run = this.getRun(owner, runId);
+      const attempts = this.attempts(owner, runId);
+      const attemptIds = new Set(attempts.map(({ id }) => id));
+      const rows = this.db.prepare("SELECT id FROM evidence WHERE run_id=? ORDER BY rowid").all(runId);
+      if (rows.length > 12 * 128) throw new ServiceError("too_large", 413);
+      const evidence = rows.map((row) => this.storedEvidence(owner, z.string().parse(row.id), runId));
+      const ownedEvidence = new Map(evidence.map(({ metadata }) => [metadata.id, metadata]));
+      const events = this.db.prepare("SELECT sequence,event FROM events WHERE run_id=? ORDER BY sequence LIMIT 5001").all(runId)
+        .map((row) => {
+          const event = eventSchema.parse(parseJson(row.event));
+          if (event.runId !== runId || event.sequence !== row.sequence ||
+            (event.attemptId !== null && !attemptIds.has(event.attemptId))) throw notFound();
+          if (event.data.evidenceId && ownedEvidence.get(event.data.evidenceId)?.attemptId !== event.attemptId) {
+            const { evidenceId: _evidenceId, ...data } = event.data;
+            void _evidenceId;
+            return { ...event, data };
+          }
+          return event;
+        });
+      if (events.length > 5000) throw new ServiceError("too_large", 413);
+      const results = this.db.prepare(`SELECT j.attempt_id,l.summary FROM launches l
+        JOIN jobs j ON j.id=l.job_id JOIN attempts a ON a.id=j.attempt_id AND a.run_id=j.run_id
+        WHERE j.run_id=? AND l.summary IS NOT NULL`).all(runId).map((row) => ({
+        attemptId: z.string().parse(row.attempt_id), result: resultSchema.parse(parseJson(row.summary)),
+      }));
+      return {
+        run, attempts, summaries: this.attemptSummaries(owner, runId), events, evidence, results,
+        sequence: z.number().parse(this.db.prepare("SELECT next_sequence FROM runs WHERE id=?").get(runId)?.next_sequence),
+      };
+    });
+  }
+
+  persistReport(owner: string, report: RunReport, sequence: number): void {
+    runReportSchema.parse(report);
+    this.transaction(() => {
+      this.getRun(owner, report.runId);
+      if (this.db.prepare("SELECT next_sequence FROM runs WHERE id=?").get(report.runId)?.next_sequence !== sequence) return;
+      this.db.prepare(`INSERT INTO report_snapshots VALUES(?,?,?)
+        ON CONFLICT(run_id) DO UPDATE SET revision=excluded.revision,report=excluded.report`)
+        .run(report.runId, report.revision, JSON.stringify(report));
+    });
+  }
+
+  recordingSession(owner: string, runId: string, attemptId: string): { sessionId: string; active: boolean } | null {
+    const attempt = this.attempts(owner, runId).find(({ id }) => id === attemptId);
+    if (!attempt) throw notFound();
+    const row = this.db.prepare(`SELECT l.session_reference,l.state,j.id FROM launches l
+      JOIN jobs j ON j.id=l.job_id JOIN attempts a ON a.id=j.attempt_id AND a.run_id=j.run_id
+      WHERE j.run_id=? AND j.attempt_id=?`).get(runId, attemptId);
+    if (!row?.session_reference) return null;
+    const reference = referenceSchema.parse(parseJson(row.session_reference));
+    const binding = this.db.prepare("SELECT job_id FROM browser_session_bindings WHERE session_id=?").get(reference.sessionId);
+    if (binding?.job_id !== row.id) throw notFound();
+    return { sessionId: reference.sessionId, active: row.state === "active" || row.state === "intent" };
+  }
+
+  authorizeReplay(owner: string, runId: string, attemptId: string): { token: string; expiresAt: number } {
+    return this.transaction(() => {
+      const session = this.recordingSession(owner, runId, attemptId);
+      if (!session) throw notFound();
+      this.db.prepare("DELETE FROM replay_grants WHERE expires_at<=?").run(this.clock());
+      const token = randomBytes(32).toString("base64url");
+      const expiresAt = this.clock() + 15 * 60_000;
+      this.db.prepare(`INSERT INTO replay_grants VALUES(?,?,?,?,?)
+        ON CONFLICT(owner_id,attempt_id) DO UPDATE SET session_id=excluded.session_id,token_hash=excluded.token_hash,expires_at=excluded.expires_at`)
+        .run(owner, attemptId, session.sessionId, digest(token), expiresAt);
+      return { token, expiresAt };
+    });
+  }
+
+  replayAuthorized(owner: string, runId: string, attemptId: string, token: string): boolean {
+    const session = this.recordingSession(owner, runId, attemptId);
+    if (!session || !/^[A-Za-z0-9_-]{43}$/.test(token)) return false;
+    return !!this.db.prepare(`SELECT owner_id FROM replay_grants
+      WHERE owner_id=? AND attempt_id=? AND session_id=? AND token_hash=? AND expires_at>?`)
+      .get(owner, attemptId, session.sessionId, digest(token), this.clock());
   }
 }

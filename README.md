@@ -2,7 +2,7 @@
 
 User testing before you have users. A crowd of AI personas uses an authorized web app in real Browserbase browsers, with a live wall and evidence-backed bug and friction reports.
 
-**Current phase: functional launch flow and owner-only live wall, not the full MVP.** Enter a goal, choose a scoped target and select predefined or saved custom personas. The Next.js interface uses the canonical schemas, private SQLite persistence and owner-scoped APIs. The [worker runbook](docs/WORKER.md) covers separate app/worker startup, transactional quotas, fenced leases, crash reconciliation, cancellation, spending and resumable events. The [execution reference](docs/EXECUTION.md) describes the Browserbase/Stagehand Gateway loop and the distinction between structural checks and evidence-grounded semantic judgment. **Arbitrary-target execution remains disabled pending proven browser egress enforcement (#8).** The website mode saves an explicitly blocked intended request; the separate controlled-demo mode can queue paid work. No browser is launched inside an HTTP handler or during rendering.
+**Current phase: functional launch, owner-only live wall and persisted evidence reports, not the full MVP.** Enter a goal, choose a scoped target and select predefined or saved custom personas. The Next.js interface uses the canonical schemas, private SQLite persistence and owner-scoped APIs. The [worker runbook](docs/WORKER.md) covers separate app/worker startup, transactional quotas, fenced leases, crash reconciliation, cancellation, spending and resumable events. The [execution reference](docs/EXECUTION.md) describes the Browserbase/Stagehand Gateway loop and the distinction between structural checks and evidence-grounded semantic judgment. **Arbitrary-target execution remains disabled pending proven browser egress enforcement (#8).** The website mode saves an explicitly blocked intended request; the separate controlled-demo mode can queue paid work. No browser is launched inside an HTTP handler or during rendering.
 
 The synthetic gift store at `/demo` supports browse/cart/fake checkout. Configure six independent broken/fixed variants and reset tab-local state at `/demo-fixtures`, outside the shopping flow. See the [fixture matrix and next-layer handoff](docs/DEMO.md) for deterministic setup, scoped objectives, evidence distinctions and authorized cloud reachability. No real purchases, accounts or payments.
 
@@ -15,8 +15,9 @@ citations, not deterministic proof or calibrated confidence statistics.
 
 The [delivery plan](docs/DELIVERY_PLAN.md) defines the architecture, sequential PR layers, acceptance gates, capability matrix and accountability ledger for the end-to-end build.
 
-Layer04b (issue #11 / PR #17) is merged. Layer05 (issue #12) adds the launch and
-live wall on those backend contracts, not a declaration that public-target gate #8 is solved.
+Layer04b (issue #11 / PR #17) and layer05 (issue #12 / PR #18) are merged.
+Layer06 (issue #13) adds [owner-only reports and evidence](docs/REPORTS.md);
+none of these changes declares that public-target gate #8 is solved.
 
 ## Launch and watch
 
@@ -42,8 +43,12 @@ not fabricated footage. This is visualization, **not managed human takeover**.
 The wall follows resumable ordered events and keeps checking unresolved cleanup
 after a terminal outcome. Cancellation intent is not proof of release;
 infrastructure failure, recovery, quarantine and uncertain cleanup remain visible.
-Criterion results retain all five states. Evidence IDs/metadata are available,
-but protected full reports, downloads, replay and grouped findings belong to layer06.
+Criterion results retain all five states. **Reports & evidence** opens
+`/runs/:id/reports`, with per-agent criteria, cited timelines, grouped findings
+and explicit tested/not-tested cohorts. Reveal private screenshots deliberately:
+their pixels are not redacted. JSON/Markdown exports retain evidence references,
+not embedded private media or provider URLs. Recording availability and supported
+playback limitations are explicit; see [recording integration](docs/REPLAY.md).
 
 ## Local development
 
@@ -85,6 +90,10 @@ npm run controlled:integration -- --confirm-paid
 npm run ui:integration -- --confirm-paid
 # Same HTTPS/UI admission path, separate test-only storage, no cloud or worker:
 npm run ui:integration -- --offline-preflight
+# Owner-authenticated report/evidence proof; separate non-refundable 1,200-second cap:
+npm run report:integration -- --offline-preflight
+# Only after offline gates and explicit operator authorization:
+npm run report:integration -- --confirm-paid
 ```
 
 The `browserbase:smoke` command creates **one browser**, requests a maximum **120-second session lifetime**, and calls `extract` and `observe` once each through Model Gateway. It reads the heading on `example.com`, replays one observed click with `act`, verifies the IANA destination, and saves a screenshot, token metrics, and session references under `data/smoke/<run-id>/`. Browserbase/provider-internal retries may still occur; these are operational limits, not a dollar-spend guarantee. Each AI operation has a 30-second timeout.
@@ -113,6 +122,7 @@ gh secret set BROWSERBASE_API_KEY --repo xsachax/hack-the-north-2026
 | --- | --- | --- |
 | `BROWSERBASE_API_KEY` | Required for cloud smoke | Server-only credential |
 | `BROWSERBASE_PROJECT_ID` | Inferred by Browserbase | Optional UUID to choose a project |
+| `BROWSERBASE_REPLAY_ORIGINS` | Empty (embedded replay unsupported) | Server-only comma-separated exact HTTPS media origins explicitly approved by the operator; provider-selected provenance is not proof of CDN ownership; no wildcards or user-supplied destinations |
 | `STAGEHAND_MODEL` | `google/gemini-2.5-flash` | Supported configuration: this model, `openai/gpt-5`, or `anthropic/claude-sonnet-4-6` |
 | `MAX_CONCURRENT_SESSIONS` | `3` | Durable shared global cap, 1..12; does not increase account quota |
 | `MAX_STEPS_PER_PERSONA` | `12` (worker: `14`) | Safety ceiling, 1..30, separate from persona patience |
@@ -147,13 +157,13 @@ The application and separate orchestrator use Node/TypeScript. Keep long-running
 - Zod is pinned to Stagehand's exact version to avoid expensive/incompatible cross-version schema type comparisons.
 - [Metadata](https://docs.browserbase.com/platform/browser/core-features/session-metadata): use `userMetadata`, under 512 characters. Sessions are tagged with run and persona IDs.
 - [Live views](https://docs.browserbase.com/platform/browser/observability/session-live-view): `sessions.debug(id).debuggerFullscreenUrl`; use URL search parameters to set `navbar=false`. Treat live links as access-bearing data. Many-view performance and account concurrency need a real demo rehearsal.
-- [Recordings](https://docs.browserbase.com/platform/browser/observability/session-replay): enable recording; use the dashboard inspector now. Future embedded replay uses `sessions.replays` through an authorized backend, never a browser-side API key. MP4 assembly is a separate asynchronous API.
+- [Recordings](https://docs.browserbase.com/platform/browser/observability/session-replay): pinned SDK 2.20 supports HLS replay metadata and per-page playlists. The [protected adapter](docs/REPLAY.md) rewrites media to owner/consent-checked same-origin paths; keys and signed URLs stay server-side. Missing verified CDN configuration is explicitly unsupported, with an operator-dashboard fallback. Deprecated rrweb recording retrieval is not used.
 - [Computer use](https://docs.stagehand.dev/v3/best-practices/computer-use): screenshot-based CUA exists in v3, but its agent API is gone in v4. Standard `act`/`observe` are DOM-based. Layer03 constrains actions to measured visible candidates, but Stagehand extraction still sees DOM as well as screenshots; no screenshot-only/human-realism claim.
 - Account credits, concurrency, Gateway availability and screenshot-agent support need confirmation with Browserbase before an unattended crowd run.
 
 ## MVP direction
 
-The controlled demo store has six independently switchable planted problems and deterministic browser regressions. The bounded persona loop supports measured actions, short in-character commentary, patience, stalls, private screenshots and observed criterion checks. Autonomous coverage is limited to the explicitly recorded integration scenarios, not all six problems. Layer04b adds reusable controlled-site execution/evaluation (#11), and layer05 adds its real launch flow and live wall (#12). Evidence-backed grouped reports are next. HTTP 4xx responses alone are not confirmed bugs.
+The controlled demo store has six independently switchable planted problems and deterministic browser regressions. The bounded persona loop supports measured actions, short in-character commentary, patience, stalls, private screenshots and observed criterion checks. Autonomous coverage is limited to the explicitly recorded integration scenarios, not all six problems. Layer04b adds reusable controlled-site execution/evaluation (#11), layer05 adds its real launch flow and live wall (#12), and layer06 adds persisted evidence-backed reports (#13). HTTP 4xx responses alone are not confirmed bugs.
 
 The minimum complete demo is the store, crowd wall and grouped evidence report. Human takeover, reproduction minimization/test generation and rerun comparison follow. A reproduction reducer must re-check the same failure signature in fresh sessions; never promise globally shortest steps without proving them.
 

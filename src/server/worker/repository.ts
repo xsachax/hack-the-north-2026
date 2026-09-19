@@ -166,6 +166,9 @@ export class WorkerRepository extends Repository {
       if (row.session_reference && referenceSchema.parse(json(row.session_reference)).sessionId !== reference.sessionId) {
         throw new Error("launch_session_changed");
       }
+      const binding = this.db.prepare("SELECT job_id FROM browser_session_bindings WHERE session_id=?").get(reference.sessionId);
+      if (binding && binding.job_id !== claim.jobId) throw new Error("launch_session_mismatch");
+      this.db.prepare("INSERT OR IGNORE INTO browser_session_bindings VALUES(?,?)").run(reference.sessionId, claim.jobId);
       this.db.prepare("UPDATE launches SET session_reference=?,state='active' WHERE job_id=?")
         .run(JSON.stringify(reference), claim.jobId);
     });

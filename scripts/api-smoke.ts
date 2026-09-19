@@ -124,7 +124,7 @@ try {
   assert.equal(demo.status, 201);
   const run = (await demo.json()).data;
   assert.equal(run.executionMode, "controlled-fixture");
-  for (const suffix of ["sessions", "summaries", "events", "events/stream"]) {
+  for (const suffix of ["sessions", "summaries", "events", "events/stream", "reports", "exports/json", "exports/markdown"]) {
     assert.equal((await request(`/runs/${run.id}/${suffix}`, { headers: other })).status, 404);
   }
   assert.equal((await request(`/runs/${run.id}/cancel`, {
@@ -142,6 +142,22 @@ try {
   assert(!streamed.includes("browserbase.com"));
   const summaries = (await (await request(`/runs/${run.id}/summaries`, { headers: owner })).json()).data.items;
   assert.equal(summaries[0].reservedSeconds, 0);
+  const reportResponse = await request(`/runs/${run.id}/reports`, { headers: owner });
+  assert.equal(reportResponse.status, 200);
+  const report = (await reportResponse.json()).data;
+  assert.equal(report.version, "report-v1");
+  assert.equal(report.status, "cancelled");
+  assert.equal(report.agents[0].criteria[0].status, "not_observed");
+  assert.deepEqual(report.groups, []);
+  assert.equal((await request(`/runs/${run.id}/attempts/${report.agents[0].attemptId}/report`, { headers: owner })).status, 200);
+  for (const format of ["json", "markdown"]) {
+    const exported = await request(`/runs/${run.id}/exports/${format}`, { headers: owner });
+    assert.equal(exported.status, 200);
+    assert.match(exported.headers.get("content-disposition") ?? "", /^attachment;/);
+    assert.equal(exported.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(exported.headers.get("cache-control"), "no-store");
+    assert(!(await exported.text()).includes("browserbase.com"));
+  }
   const controlledBody = {
     authorizationAcknowledged: true, controlledSiteId: "project-board",
     assignments: [{
@@ -171,7 +187,7 @@ try {
   assert.equal((await request(`/runs/${boardRun.id}/cancel`, {
     method: "POST", headers: { ...owner, ...jsonHeaders }, body: "{}",
   })).status, 200);
-  console.log("Offline production HTTP smoke passed: TLS-proxy Host, sessions, CSRF, CRUD, demo/controlled admission and cancellation, SSE replay and owner isolation. Zero cloud calls.");
+  console.log("Offline production HTTP smoke passed: TLS-proxy Host, sessions, CSRF, CRUD, controlled admission/cancellation, SSE, reports/exports and owner isolation. Zero cloud calls.");
 } finally {
   server.kill("SIGTERM");
   const stopped = await Promise.race([exited.then(() => true), delay(5000).then(() => false)]);

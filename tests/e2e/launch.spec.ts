@@ -49,7 +49,7 @@ async function offlineApi(page: Page, directory: string) {
     repository, get owner() { return latestOwner; }, get submissions() { return submissions; },
     loseNextReply() { loseReply = true; }, rejectNextLaunch(status = 400) { rejectLaunch = status; },
     async close() {
-      try { if (!page.isClosed()) await page.unroute("**/api/v1/**", route); }
+      try { if (!page.isClosed()) await page.unrouteAll({ behavior: "wait" }); }
       finally { repository.close(); }
     },
   };

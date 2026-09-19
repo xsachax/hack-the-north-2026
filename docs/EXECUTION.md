@@ -180,8 +180,9 @@ milestone. Plain non-legacy strings default to current-page semantic conditions.
 under the private data directory. The current CLI persists events/evidence and
 session/accounting manifests there; it does not mutate queued repository jobs.
 Layer04 maps keys to owner-scoped repository evidence and reserves before
-launch. Layer06 will classify/group findings; this layer makes no grouped-bug
-or globally shortest reproduction claims.
+launch. Layer06 deterministically classifies/groups those persisted records;
+see [REPORTS.md](REPORTS.md). Execution itself makes no grouped-bug or globally
+shortest reproduction claims.
 
 ## Perception and behavior
 
@@ -402,4 +403,5 @@ site explicitly, and show immutable criteria, five-way verdicts, method,
 heuristic confidence, owner evidence references and operation counts. It must
 not present ordinary public URLs as executable, semantic judgments as
 deterministic proof, the dashboard preview as a live wall, or disabled browser
-capabilities as implemented. Report/takeover/context features remain later layers.
+capabilities as implemented. Layer06 reports preserve these distinctions;
+takeover/context/reproduction features remain later layers.

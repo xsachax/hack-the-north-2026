@@ -86,8 +86,20 @@ longer-lived admission limits may not clear after one minute.
 | GET | `/runs/:id/events/stream?after=0` | Owner-scoped SSE; exclusive cursor or `Last-Event-ID`, bounded connection lifetime |
 | GET | `/runs/:id/summaries` | `{items}`: attempt/launch states, cleanup/count summary, remote usage and reservation/consumption/refund |
 | GET | `/runs/:id/sessions` | `{items:[{attemptId,available,liveViewUrl}]}`; authorized active live-view metadata only |
+| GET | `/runs/:id/reports` | Versioned persisted-source report, per-agent criteria/timeline/evidence, grouped findings and explicit denominators |
+| GET | `/runs/:id/attempts/:attemptId/report` | Same report's per-agent detail; attempt must actually belong to this run |
+| GET | `/runs/:id/groups/:signature` | Evidence-backed group for this run; versioned 64-character comparison signature |
+| GET | `/runs/:id/exports/json` | Safe owner-only JSON attachment with stable evidence references, no private media |
+| GET | `/runs/:id/exports/markdown` | Escaped Markdown attachment; no reproduction-test claim |
+| POST | `/runs/:id/attempts/:attemptId/replay/authorize` | CSRF-protected `{acknowledgeSensitiveVideo:true}`; 15-minute opaque HttpOnly sensitive-playback grant scoped to this attempt |
+| GET | `/runs/:id/attempts/:attemptId/replay` | Browser-safe HLS readiness and same-origin opaque page playlist paths; no provider read without consent |
+| GET | `/runs/:id/attempts/:attemptId/replay/pages/:index/playlist` | Rewritten protected M3U8; validated owner, actual session binding and consent on every request |
+| GET | `/runs/:id/attempts/:attemptId/replay/pages/:index/segments/:index` | Bounded protected MP4 media; one explicit bounded byte range supported, unsupported ranges return `416` |
+| GET | `/runs/:id/attempts/:attemptId/replay/dashboard` | Consent-protected fixed-origin redirect to this actual session; requires a separate Browserbase operator account |
 | POST | `/runs/:id/cancel` | Empty JSON object; idempotent cancellation request |
 | GET | `/evidence/:id` | Private owner-scoped metadata only, no file path, browser session URL or file download |
+| GET | `/evidence/:id/detail` | Bounded redacted structured detail and same-attempt nested evidence references, or explicit missing state |
+| GET | `/evidence/:id/content` | Protected registered screenshot or sanitized JSON attachment; never arbitrary active HTML/SVG |
 | GET | `/findings/:id` | Finding with references to same-attempt evidence |
 
 Pagination is exclusive `after`, integer `0..Number.MAX_SAFE_INTEGER`, and
@@ -220,7 +232,8 @@ precise browser duration. Infrastructure failure is not a target bug.
 The `/sessions` response is itself private, access-bearing metadata: use only for
 the owning wall, do not log/cache/share it. It does not expose an API key, CDP
 connection or replay URL. References are unavailable once cancellation,
-recovery or completion begins. Protected evidence downloads/replays come later.
+recovery or completion begins. Protected reports and evidence are separate
+layer06 routes; see [REPORTS.md](REPORTS.md) and [REPLAY.md](REPLAY.md).
 
 ### Controlled sites and custom objectives (layer04b / UI05)
 
@@ -419,11 +432,12 @@ retain slots/reservations even after an infrastructure-failed terminal result.
 Evidence records use server-generated IDs and internal 64-character hex storage
 keys, never caller-supplied file paths. Finding references must exist, belong to
 the same owner/run/attempt, and remain durable. Storage keys are never returned
-over HTTP. This API stores references/metadata only. Layer03 adds an internal bounded
+over HTTP. Layer03 adds an internal bounded
 private artifact writer and execution engine, described in [EXECUTION.md](EXECUTION.md);
 layer04 maps its immutable artifacts to fenced step/evidence records. Protected
-artifact streaming remains later work. Untrusted summaries must be escaped on
-display and are not trusted policy.
+artifact reads in layer06 verify the actual registered run/attempt relationship,
+private filesystem boundary and permitted format. Untrusted summaries are
+escaped on display and are not trusted policy.
 
 ## Persisted abuse controls
 

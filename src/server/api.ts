@@ -11,6 +11,11 @@ import { createEventStreamHandler, type EventStreamOptions } from "./event-strea
 import { TargetPolicyError, validateTargetScope, type PolicyOptions } from "./target-policy";
 import { capabilitiesSchema, type Capabilities } from "../lib/ui-contracts";
 import { workerExecutionLimits, workerPolicySchema } from "./worker/config";
+import { ReportService, type EvidenceLoader } from "./reports/service";
+import { exportReport } from "./reports/exports";
+import { ArtifactReader, artifactDownloadResponse, getRawArtifactJson } from "./reports/artifacts";
+import { ReplayError, type createReplayAdapter, type AuthorizedReplayAssociation } from "./reports/replay";
+import type { ReplayReport } from "../lib/replay-contracts";
 
 export type ApiConfiguration = {
   origin: string;
@@ -26,6 +31,10 @@ type Dependencies = {
   configuration: ApiConfiguration;
   validateScope?: typeof validateTargetScope;
   eventStream?: EventStreamOptions;
+  evidenceLoader?: EvidenceLoader;
+  evidenceContent?: (owner: string, evidenceId: string, request: Request) => Response;
+  reportSecrets?: readonly string[];
+  replay?: ReturnType<typeof createReplayAdapter>;
 };
 const bootstrapSchema = z.strictObject({ accessCode: z.string().min(1).max(512).optional() });
 const cookieName = (production: boolean) => production ? "__Host-ff_owner" : "ff_owner";
@@ -107,12 +116,45 @@ function pagination(url: URL) {
   return parseInput(paginationSchema, Object.fromEntries(entries));
 }
 
-export function createApi({ repository, configuration, validateScope = validateTargetScope, eventStream }: Dependencies) {
+export function createApi({
+  repository, configuration, validateScope = validateTargetScope, eventStream,
+  evidenceLoader, evidenceContent, reportSecrets, replay,
+}: Dependencies) {
   const streamEvents = createEventStreamHandler(repository, eventStream);
+  const reader = new ArtifactReader({ dataDir: repository.dataDir, knownSecrets: reportSecrets });
+  const loadEvidence: EvidenceLoader = evidenceLoader ?? ((stored) => {
+    const result = reader.read({
+      evidence: stored.metadata, storageKey: stored.storageKey,
+      runId: stored.metadata.runId, attemptId: stored.metadata.attemptId,
+    });
+    return {
+      ...stored,
+      state: result.status === "redacted" ? "unavailable" :
+        result.status === "unavailable" && result.reason === "unsupported-kind" ? "unsupported" : result.status,
+      data: getRawArtifactJson(result),
+    };
+  });
+  const reports = new ReportService(repository, loadEvidence, reportSecrets);
+  const content = evidenceContent ?? ((owner: string, id: string, request: Request) => {
+    const stored = repository.storedEvidence(owner, id);
+    if (stored.metadata.kind === "screenshot") return artifactDownloadResponse(reader.read({
+      evidence: stored.metadata, storageKey: stored.storageKey, runId: stored.metadata.runId, attemptId: stored.metadata.attemptId,
+    }), { range: request.headers.get("range") });
+    if (request.headers.has("range")) fail("invalid_request", 416);
+    const detail = reports.detail(owner, id);
+    if (detail.evidence.state !== "available") fail("not_found", 404);
+    return new Response(JSON.stringify(detail), { headers: {
+      "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store",
+      "Content-Disposition": `attachment; filename="evidence-${id}.json"`,
+      "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
+      "Content-Security-Policy": "sandbox; default-src 'none'", "Vary": "Cookie, Origin",
+    } });
+  });
   return async function handle(request: Request): Promise<Response> {
     const headers = new Headers({
       "Cache-Control": "no-store", "Content-Type": "application/json",
       "X-Content-Type-Options": "nosniff", "Vary": "Cookie, Origin",
+      "Referrer-Policy": "no-referrer",
     });
     const respond = (data: unknown, status = 200) => new Response(JSON.stringify({ data }), { status, headers });
     try {
@@ -211,6 +253,99 @@ export function createApi({ repository, configuration, validateScope = validateT
         }
         if (path.length >= 2) {
           const id = parseInput(idSchema, path[1]);
+          if (path.length >= 5 && path[2] === "attempts" && path[4] === "replay") {
+            if (url.search) fail("invalid_request", 400);
+            const attemptId = parseInput(idSchema, path[3]);
+            const associated = repository.recordingSession(owner, id, attemptId);
+            const basePath = `/api/v1/runs/${id}/attempts/${attemptId}/replay`;
+            const name = configuration.production ? "__Secure-ff_replay" : "ff_replay";
+            if (path.length === 6 && path[5] === "authorize" && request.method === "POST") {
+              parseInput(z.strictObject({ acknowledgeSensitiveVideo: z.literal(true) }), await readJson(request));
+              const grant = repository.authorizeReplay(owner, id, attemptId);
+              headers.set("Set-Cookie", `${name}=${grant.token}; HttpOnly; SameSite=Strict; Path=${basePath}; Max-Age=900${configuration.production ? "; Secure" : ""}`);
+              return respond({ authorized: true, expiresAt: grant.expiresAt });
+            }
+            if (request.method !== "GET") fail("not_found", 404);
+            const cookies = (request.headers.get("cookie") ?? "").split(";").map((item) => item.trim())
+              .filter((item) => item.startsWith(`${name}=`));
+            const approved = cookies.length === 1 &&
+              repository.replayAuthorized(owner, id, attemptId, cookies[0].slice(name.length + 1));
+            const association: AuthorizedReplayAssociation | null = associated ? {
+              sessionId: associated.sessionId, state: associated.active ? "running" : "ended",
+              recordingEnabled: true, sensitivePlaybackAuthorized: approved, playbackBasePath: basePath,
+            } : null;
+            if (path.length === 5) {
+              if (request.headers.has("range")) fail("invalid_request", 400);
+              const unavailable: ReplayReport = {
+                status: "unavailable", format: "hls", sensitive: true, fallback: "operator-dashboard", pages: [],
+              };
+              return respond(association && replay ? await replay.inspect(association) : unavailable);
+            }
+            if (!association || !approved) fail("not_found", 404);
+            if (path.length === 6 && path[5] === "dashboard") {
+              if (request.headers.has("range")) fail("invalid_request", 400);
+              return new Response(null, { status: 303, headers: {
+                "Location": `https://www.browserbase.com/sessions/${association.sessionId}`,
+                "Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer",
+                "X-Content-Type-Options": "nosniff", "Vary": "Cookie, Origin",
+              } });
+            }
+            if (!replay) fail("unavailable", 503);
+            const index = (value: string) => {
+              if (!/^(?:0|[1-9]\d{0,3})$/.test(value)) fail("invalid_request", 400);
+              return Number(value);
+            };
+            try {
+              if (path.length === 8 && path[5] === "pages" && path[7] === "playlist") {
+                if (request.headers.has("range")) fail("invalid_request", 416);
+                const playlist = await replay.playlist(association, index(path[6]));
+                return new Response(playlist, { headers: {
+                  "Content-Type": "application/vnd.apple.mpegurl", "Cache-Control": "private, no-store",
+                  "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "Vary": "Cookie, Origin",
+                } });
+              }
+              if (path.length === 9 && path[5] === "pages" && path[7] === "segments") {
+                const media = await replay.segment(association, index(path[6]), index(path[8]), request.headers.get("range") ?? undefined);
+                return new Response(Buffer.from(media.body), { status: media.status, headers: {
+                  "Content-Type": media.contentType, "Content-Length": String(media.body.byteLength),
+                  "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+                  "Referrer-Policy": "no-referrer", "Vary": "Cookie, Origin",
+                  ...(media.contentRange ? { "Content-Range": media.contentRange } : {}),
+                } });
+              }
+            } catch (error) {
+              if (!(error instanceof ReplayError)) throw error;
+              return new Response(JSON.stringify({ error: { code: `replay_${error.status}`, message: error.status } }), {
+                status: request.headers.has("range") && error.status === "unsupported" ? 416 : error.status === "expired" ? 410 : 503,
+                headers,
+              });
+            }
+            fail("not_found", 404);
+          }
+          if (request.method === "GET" && (
+            (path.length === 3 && path[2] === "reports") ||
+            (path.length === 5 && path[2] === "attempts" && path[4] === "report") ||
+            (path.length === 4 && path[2] === "groups") ||
+            (path.length === 4 && path[2] === "exports" && ["json", "markdown"].includes(path[3]))
+          )) {
+            if (url.search || request.headers.has("range")) fail("invalid_request", 400);
+            repository.getRun(owner, id);
+            const report = reports.report(owner, id);
+            if (path[2] === "exports") return exportReport(report, path[3] === "json" ? "json" : "markdown");
+            if (path[2] === "attempts") {
+              const attemptId = parseInput(idSchema, path[3]);
+              const agent = report.agents.find((entry) => entry.attemptId === attemptId);
+              if (!agent) fail("not_found", 404);
+              return respond(agent);
+            }
+            if (path[2] === "groups") {
+              if (!/^[a-f0-9]{64}$/.test(path[3])) fail("invalid_request", 400);
+              const group = report.groups.find((entry) => entry.signature === path[3]);
+              if (!group) fail("not_found", 404);
+              return respond(group);
+            }
+            return respond(report);
+          }
           if (path.length === 2 && request.method === "GET") {
             if (url.search) fail("invalid_request", 400);
             return respond(repository.getRun(owner, id));
@@ -236,6 +371,15 @@ export function createApi({ repository, configuration, validateScope = validateT
             return respond(repository.cancelRun(owner, id));
           }
         }
+      }
+      if (path.length === 3 && path[0] === "evidence" && request.method === "GET" && ["detail", "content"].includes(path[2])) {
+        if (url.search) fail("invalid_request", 400);
+        const id = parseInput(idSchema, path[1]);
+        repository.storedEvidence(owner, id);
+        if (path[2] === "content") {
+          return content(owner, id, request);
+        }
+        return respond(reports.detail(owner, id));
       }
       if (path.length === 2 && request.method === "GET" && ["evidence", "findings"].includes(path[0])) {
         if (url.search) fail("invalid_request", 400);

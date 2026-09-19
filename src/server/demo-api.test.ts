@@ -315,6 +315,8 @@ describe("demo runtime opt-in", () => {
     vi.resetModules();
     vi.stubEnv("ENABLE_DEMO_RUNS", flag);
     vi.stubEnv("FLASH_FLOOD_ACCESS_CODE", accessCode);
+    vi.stubEnv("BROWSERBASE_API_KEY", "");
+    vi.stubEnv("BROWSERBASE_REPLAY_ORIGINS", "");
     const create = vi.fn(() => async () => Response.json({ data: {} }));
     vi.doMock("server-only", () => ({}));
     vi.doMock("./api", () => ({ createApi: create, validateApiConfiguration: vi.fn() }));
@@ -324,6 +326,8 @@ describe("demo runtime opt-in", () => {
     expect(create).toHaveBeenCalledWith({
       repository: expect.any(Object),
       configuration: expect.objectContaining({ allowDemoRuns: flag === "true", accessCode }),
+      reportSecrets: [accessCode],
+      replay: undefined,
     });
   });
 });

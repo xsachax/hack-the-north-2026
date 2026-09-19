@@ -5,6 +5,7 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { z } from "zod";
 
 export const ARTIFACT_LIMITS = Object.freeze({
   screenshotBytes: 2 * 1024 * 1024,
@@ -59,6 +60,13 @@ const defaultCodes: Record<TelemetryKind, string> = {
   policy_block: "POLICY_BLOCK",
 };
 const diagnosticCodes = new Set([...Object.values(defaultCodes), "FF_DEMO_SECOND_COUPON"]);
+const telemetryBatchSchema = z.strictObject({
+  telemetry: z.array(z.strictObject({
+    timestamp: z.string(), pageId: z.string(), actionId: z.string(),
+    kind: z.enum(["console", "pageerror", "requestfailure", "http_error", "slow_request", "policy_block"]),
+    code: z.string(), url: z.string().optional(), status: z.number().optional(), durationMs: z.number().optional(),
+  })).max(256),
+});
 
 function fail(message: string): never {
   throw new Error(message);
@@ -184,7 +192,7 @@ export class ArtifactWriter {
   private readonly knownSecrets: readonly string[];
 
   constructor(options: { dataDir?: string; knownSecrets?: readonly string[] } = {}) {
-    this.dataDir = resolve(options.dataDir ?? process.env.DATA_DIR ?? "./data");
+    this.dataDir = resolve(/* turbopackIgnore: true */ options.dataDir ?? process.env.DATA_DIR ?? "./data");
     this.knownSecrets = [...(options.knownSecrets ?? [])];
   }
 
@@ -208,7 +216,12 @@ export class ArtifactWriter {
     try { serialized = JSON.stringify(value); } catch { fail("Invalid JSON evidence"); }
     if (serialized === undefined || Buffer.byteLength(serialized) > ARTIFACT_LIMITS.jsonBytes)
       fail("JSON evidence exceeds artifact limit");
-    const bytes = Buffer.from(JSON.stringify(sanitizeEvidence(JSON.parse(serialized), this.knownSecrets)));
+    const parsed: unknown = JSON.parse(serialized);
+    const telemetry = telemetryBatchSchema.safeParse(parsed);
+    const sanitized = telemetry.success
+      ? { telemetry: telemetry.data.telemetry.map((entry) => sanitizeTelemetry(entry, this.knownSecrets)) }
+      : sanitizeEvidence(parsed, this.knownSecrets);
+    const bytes = Buffer.from(JSON.stringify(sanitized));
     if (bytes.byteLength > ARTIFACT_LIMITS.jsonBytes) fail("JSON evidence exceeds artifact limit");
     return this.write(runId, attemptId, "json", bytes);
   }
@@ -229,7 +242,7 @@ export class ArtifactWriter {
     privateDirectory(this.dataDir, true);
     let path = this.dataDir;
     for (const segment of ["execution", runId.toLowerCase(), attemptId.toLowerCase()]) {
-      path = join(path, segment);
+      path = join(/* turbopackIgnore: true */ path, segment);
       privateDirectory(path);
     }
     return path;
@@ -248,7 +261,7 @@ export class ArtifactWriter {
       while (lock === undefined) {
         // Exclusive lock also serializes independent writers/processes and budget checks.
         this.attemptDirectory(runId, attemptId);
-        try { lock = openSync(lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600); }
+        try { lock = openSync(/* turbopackIgnore: true */ lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600); }
         catch (error) {
           if (!hasCode(error, "EEXIST")) throw error;
           try { privateFile(lockPath); } catch (checkError) {
