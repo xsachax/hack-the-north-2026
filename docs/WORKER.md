@@ -14,6 +14,13 @@ until the native deny boundary and combined real browser/transport proof are
 accepted. Future integration must bind its immutable authorization and abort
 signal to the durable lease and drain/close it during teardown.
 
+The #8 [native-policy probe](EXECUTION.md#native-browser-policy-candidate-offline-phase-a)
+is offline-only. It is not imported by the worker/cloud factory and changes no
+admission, returning-context, recovery or budget behavior. Running it uploads no
+extension and allocates no provider browser/model work. A provider proof requires
+fresh coordinator approval and a separately reviewed bounded harness; existing
+API credentials do not grant that approval.
+
 Layer07 adds [advanced controlled workflows](ADVANCED_WORKFLOWS.md) on this same
 worker: private context creation/adoption/retirement, acknowledged exclusive
 human control, immutable reruns and deterministic bounded reproduction jobs.

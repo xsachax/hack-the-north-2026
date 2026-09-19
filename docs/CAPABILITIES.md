@@ -15,6 +15,7 @@ run of every feature on the release head.
 | --- | --- | --- |
 | Authorized URL, scope and objective input | `src/lib/contracts.ts`, `target-scope.ts`; `src/server/target-policy.ts`, `api.ts` | `target-policy.test.ts`, `api.test.ts`, `launch.spec.ts`; validates/stores public requests but worker blocks them before allocation |
 | Public HTTP(S) transport library, not enabled | `src/server/execution/public-transport.ts`; shared `public-address.ts` | `public-transport.test.ts`; offline stateful DNS, pinned lookup, owned HTTP/TLS, per-hop redirects, header provenance, bounds and cancellation. No public factory or native-browser security claim; [contract and remaining gates](EXECUTION.md#public-http-transport-library-offline-not-enabled) |
+| Native public-egress policy candidate | `src/server/execution/native-policy-extension/`, `native-policy-attestation.ts` | Nine actual full-Chromium native-channel tests plus hosted isolated Linux private/link-local/IPv6 and same-process DNS-change proof at `be1c18f`; no interception, provider proof, broker, or runtime admission. See EXECUTION.md; **#8 remains open** |
 | Real controlled execution | `src/lib/controlled-sites.ts`; `src/server/execution/cloud.ts`, `fixture-network.ts` | `controlled-api.test.ts`, `cloud.test.ts`, `controlled-sites.spec.ts`, `controlled-worker.spec.ts`; store and board only; historical cloud board proof in WORKER.md |
 | Predefined and saved custom personas | `src/lib/personas.ts`, `contracts.ts`; repository/API; `src/components/persona-editor.tsx` | `repository.test.ts`, `api.test.ts`, `launch.spec.ts`; immutable attempt snapshots, bounded persona data not executable prompts |
 | One-key model decisions | `src/server/execution/gateway.ts`, `budget.ts`, `loop.ts` | `gateway.test.ts`, `budget.test.ts`, `loop.test.ts`; real Gateway `google/gemini-2.5-flash` evidence in EXECUTION.md/WORKER.md, no invented generic model endpoint |
@@ -69,6 +70,8 @@ proof. Ten private screenshots and the playable local backup video were
 inspected; no new context/takeover/reduction proof or all-six-defect discovery is
 claimed. See [layer08 accounting](WORKER.md#layer08-release-rehearsal).
 
-The refreshed [#8 provider/operator checklist](EXECUTION.md#layer08-prerequisite-refresh-2026-09-19)
-is a required external decision. Neither this audit, a secure container nor
-fixture routing establishes arbitrary-site egress enforcement.
+The [#8 provider/operator checklist](EXECUTION.md#layer08-prerequisite-refresh-2026-09-19)
+and [native policy candidate](EXECUTION.md#native-browser-policy-candidate-offline-phase-a)
+describe alternative enforcement paths and their remaining proof gates.
+Neither this audit, a secure container, fixture routing nor local extension
+readback establishes arbitrary-site execution in Browserbase.

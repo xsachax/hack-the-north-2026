@@ -92,6 +92,200 @@ must include caches rather than silently excluding the location of a leak.
 Turbopack's root is the build working directory so a nested clean package cannot
 silently select the developer checkout's outer lockfile.
 
+## Native-policy Linux namespace acceptance
+
+The dedicated native-policy job is independent of the application and container
+gates. It evaluates the native Chromium extension hypothesis with owned local
+listeners, not Playwright request interception. It requires Linux and fails
+rather than skipping when namespaces, IPv6, DNS, or browser dependencies are
+unavailable. macOS lint/type checks are not Linux acceptance evidence.
+
+### Installation and invocation
+
+Use the repository's Node 22 runtime (at least 22.18), locked Playwright 1.58.2,
+and Ubuntu `iproute2`, `util-linux`, and `procps`. Install the **full Chromium
+build**: the ordinary e2e `--only-shell` installation is insufficient for
+extension loading.
+
+```sh
+umask 077
+mkdir -p data/ci-scratch
+export TMPDIR="$PWD/data/ci-scratch"
+npm ci --no-audit --no-fund
+sudo apt-get update
+sudo apt-get install -y iproute2 util-linux procps
+npx --no-install playwright install --with-deps chromium
+CI=true node node_modules/tsx/dist/cli.mjs scripts/native-policy-linux.ts --ci-sudo
+```
+
+The explicit CI-only switch requires passwordless `sudo --non-interactive`.
+It creates network, mount, and PID namespaces with `unshare`, then launches
+Playwright as the original invoking UID/GID, not host root. The default local
+Linux mode instead uses `unshare --user --map-root-user`:
+
+```sh
+node node_modules/tsx/dist/cli.mjs scripts/native-policy-linux.ts
+```
+
+Both modes invoke `playwright.native-policy-linux.config.ts` with one worker
+and no retries. Directly invoking that configuration is unsupported: the test
+requires the launcher's namespace identity information and isolated resolver.
+No Docker daemon, provider credentials, environment-secret files, external
+target probes, host interfaces, routes, or firewall changes are needed.
+Dependency/browser provisioning uses package mirrors; the acceptance run has
+only namespace-local loopback and no external interface.
+
+### Startup, isolation, and bounded cleanup
+
+Before executing any network setup, the launcher verifies that both its
+network and mount namespace identities differ from the parent's recorded
+identities and that loopback is the namespace's only interface. It makes
+mount propagation private, brings up loopback, and assigns exactly
+`10.77.0.1/32`, `169.254.77.1/32`, and `fd00::1/128` there. IPv6 loopback `::1`
+must also be usable. There is no attempt to repair or reconfigure host
+networking if any prerequisite fails.
+
+A mode-0700 scratch directory in the checkout contains the resolver file,
+private browser profiles, and browser temporary files. The private mount
+namespace bind-mounts that same owned directory at the existing `/mnt` as a
+short browser scratch alias, verifying identical device/inode identity. The host's `/mnt`
+is neither modified nor used as backing storage; namespace teardown removes
+the alias. `/run` is deliberately not overlaid because `/etc/resolv.conf`
+can be a symlink into it. This avoids Chromium's Linux process-singleton Unix socket
+exceeding the 108-byte `sockaddr_un.sun_path` limit when `TMPDIR` contains the
+long hosted checkout path. The launcher checks the expected short socket
+path length and logs only its length and process/user IDs. Chromium stderr
+logging is enabled to retain useful startup diagnostics without changing any
+network policy or sandbox flags.
+
+The first hosted namespace attempt at commit `96137d4` died during Chromium
+startup with `SIGTRAP`, before browser probes ran; its checkout-backed temporary
+path would produce a 131-byte process-singleton socket path. Crashpad's missing CPU-frequency
+sysfs messages were not evidence that CPU scaling caused the crash. The
+short namespace-private `/mnt` alias addresses that concrete path-length hazard.
+With that change, commit `be1c18f` successfully started Chromium and completed
+the namespace acceptance on hosted Linux. This resolves the observed startup
+failure but does not independently prove that path length was its sole cause.
+
+`/etc/resolv.conf` is
+bind-mounted in the private mount namespace to use only `127.0.0.1`; its
+host contents are never edited. The network-namespaced
+`net.ipv4.ip_unprivileged_port_start=0` setting permits the unprivileged test
+process to bind its local UDP DNS listener on port 53. The test independently
+rechecks namespace identities and the resolver contents before binding.
+
+Each namespace setup command has a 10-second timeout. Browser launch is
+bounded at 15 seconds, initial extension-worker discovery at 10 seconds,
+navigation at 5 seconds, and each trusted browser cache-control click at
+3 seconds. The test has a 120-second timeout and the Playwright
+run a 150-second global timeout; the inner runner and outer launcher add
+180- and 210-second hard-stop bounds. The PID namespace and
+`unshare --kill-child=SIGKILL` contain surviving descendants when the namespace
+runner exits. Normal `finally` cleanup closes browser contexts, removes
+profiles, destroys tracked accepted sockets, closes HTTP/DNS servers, and
+removes the scratch directory. Namespace teardown removes its addresses,
+mounts, and namespaced sysctl changes. Abrupt termination of the outer launcher
+can still leave checkout scratch files; an ephemeral CI runner is the final
+cleanup boundary, not proof that JavaScript `finally` ran after a job kill.
+
+### Listener, policy, and DNS guarantees
+
+The fixture binds HTTP servers specifically to `10.77.0.1`, `169.254.77.1`,
+`::1`, and `fd00::1`, using one shared dynamically allocated destination port.
+Each address must pass a real Chromium positive control: after clearing only
+the proxy setting through the extension's trusted service worker, navigation
+must return HTTP 200, the correct address-specific body, and an increased TCP
+connection count. The cleared proxy readback must no longer be extension
+controlled and must be in direct or system mode.
+
+The deny proxy is **not** one of those destination listeners. Before every
+browser launch and after every blocked lane, an independent check verifies
+that the HTTP, HTTPS, and SOCKS5 fallback configurations all reference
+`127.0.0.1:65534`, successfully binds and closes that exact TCP endpoint, and
+requires a subsequent native TCP connection attempt to fail with
+`ECONNREFUSED` within two seconds. A functioning endpoint, bind conflict, or
+timeout fails the test. This check never records proxy-port activity as
+destination-listener traffic.
+
+Every browser starts with a fresh persistent profile and waits for the
+extension's `ready: true`, `fault: null` state plus proxy/privacy readback:
+the fixed proxy, `disable_non_proxied_udp`, and disabled network prediction
+must all be controlled by the extension. Each enabled-policy lane performs
+two rounds of navigations to all four literal addresses and the controlled
+DNS name. Each must fail with `ERR_PROXY_CONNECTION_FAILED`. The test then
+rechecks policy and the closed proxy, requiring **zero additional accepted TCP
+connections and zero HTTP requests** at every destination sentinel. It uses
+no CDP interception, request routing, `route.abort`, or simulated responses.
+
+The local UDP DNS responder returns TTL-zero A records for exactly
+`owned-rebind.test`, first pointing to `10.77.0.1`, then to `169.254.77.1`.
+It returns no AAAA data for that name and NXDOMAIN for other names. Two
+separate Chromium processes are launched once: one positive-control browser
+with the proxy cleared, and one browser retaining its native policy. **Both
+stay alive, with the same profiles, contexts, and target pages, across the DNS
+answer flip.** No browser restart is used to clear resolver state.
+
+In each phase the fixture explicitly destroys and awaits closure of its
+accepted TCP sockets; HTTP responses also carry `Connection: close` and
+`Cache-Control: no-store`. The trusted harness visits
+`chrome://net-internals/#sockets` and clicks `#sockets-view-flush-button`,
+then visits `chrome://net-internals/#dns` and clicks `#dns-view-clear-cache`
+in each existing browser. These actual DOM controls were inspected and
+successfully clicked locally in the pinned full Chromium build
+145.0.7632.6. Missing controls, failed clicks, or navigation failures fail the
+acceptance test; there is no silent fallback, skipped assertion, resolver
+mapping, or new security-relaxing browser flag.
+
+After each cache clear the positive-control page navigates to the **exact
+same URL**, `http://owned-rebind.test:<port>/same-process-rebind`. Each
+navigation must produce a new observed A response containing the current
+owned IP, an increased connection count at that IP's sentinel, HTTP 200, and
+the correct address-specific body. Thus a successful run proves real
+same-process resolution to both owned listeners on new TCP connections,
+not merely successful cache-button clicks or different fresh profiles.
+After the control finishes, its fixture sockets are closed again. The
+still-policy-enabled browser attempts that identical URL twice in each
+phase, as well as the literal address controls, and must leave all destination
+connection and request counters unchanged.
+
+This covers **same-process, harness-forced DNS answer changes on
+navigation**, with an independently retained native-policy process denying
+that hostname before and after the answer switch. The blocked proxy can
+reject before resolving the destination, so blocked lanes are deliberately
+not required to query DNS or consume its current answer. Do not describe
+them as observing a rebinding response under policy. The test does not prove
+unassisted TTL expiry, malicious-page access to privileged cache controls,
+same-document fetch rebinding, retained HTTP/2 connections, or a transition
+from an initially permitted public address to a denied private address.
+Both DNS answers are deliberately owned and private; no public or provider
+destination is probed. Local macOS inspection validates the internal-page
+control mechanism only; the `be1c18f` hosted runs documented below supply the actual
+Linux DNS and namespace acceptance for this scenario.
+
+This focused lane covers HTTP navigation, repeated proxy failure, those four
+owned addresses, and forced same-process DNS answer changes only. It does not
+establish HTTPS/TLS or QUIC coverage, WebRTC/STUN/TURN transport behavior,
+workers/subresource behavior, IPv6 link-local scope-ID handling, every address
+representation, UDP/TCP DNS fallback, provider execution, or deployment
+isolation. Privacy readback is configuration evidence, not a substitute for
+transport-specific tests. The separate native-policy suite owns additional
+browser-surface tests; neither suite alone proves a complete production
+network sandbox or safe provider rollout.
+
+### Hosted acceptance evidence
+
+On 2026-09-19, both push and PR `native-policy` jobs passed at `be1c18f`.
+The [push job 105923619650](https://github.com/xsachax/hack-the-north-2026/actions/runs/35453119450/job/105923619650)
+reported all nine standard native-policy tests passing in 44.9 seconds, then
+Linux Chromium **145.0.7632.6** exercising same-process DNS phases
+`10.77.0.1` and `169.254.77.1`. The namespace test passed in 3 seconds
+(4.3 seconds total for its Playwright run). The PR
+[run 35453120781](https://github.com/xsachax/hack-the-north-2026/actions/runs/35453120781)
+also completed `check`, `native-policy`, and `container` successfully.
+This is actual hosted Linux evidence for that commit, not an inference from
+macOS static checks or local inspection. Later source changes need their own
+exact-head acceptance; the behavioral limits above still apply.
+
 ## Pinned Actions runtime
 
 Both official actions run on **Node 24**, independently of the application's
