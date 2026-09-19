@@ -71,7 +71,11 @@ preserved. One checked IP is pinned to the actual Node lookup callback (or liter
 destination), with its family, `autoSelectFamily:false` and `agent:false`.
 There is no second resolver or pooled connection. HTTPS retains the original
 hostname for SNI and certificate identity; verification is explicitly on, including
-for IP SANs. Certificate failures do not trigger another address or downgrade.
+for IP SANs. IP identities use OpenSSL-backed `X509Certificate.checkIP` on the
+peer's raw certificate (never DNS CN fallback); DNS names use Node's standard
+identity matcher. This avoids Node 22.23's legacy matcher passing bare IPv6
+through DNS-only IDNA conversion. CA-chain verification remains enabled.
+Certificate failures do not trigger another address or downgrade.
 
 Responses contain the original request `url`, actual `status`, a `Buffer` body,
 and frozen header tuples preserving repeated Set-Cookie, MIME, CSP, CORS and other

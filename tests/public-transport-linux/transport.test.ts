@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { X509Certificate } from "node:crypto";
 import { spawn, execFileSync } from "node:child_process";
 import { createServer, request as nodeRequest, type Server } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
@@ -118,9 +119,13 @@ test("real pinned sockets, same-instance DNS flip and reachable private controls
       "-addext", `subjectAltName=DNS:example.com,IP:${public4},IP:${public6}`,
       "-keyout", keyFile, "-out", certFile,
     ], { stdio: "ignore" });
+    const certificate = new X509Certificate(await readFile(certFile));
+    expect(certificate.checkIP(public4)).toBe(public4);
+    expect(certificate.checkIP(public6)).toBe(public6);
+    expect(certificate.checkIP("2606:4700:4700::1112")).toBeUndefined();
     const sni: string[] = [];
     const tlsHits: string[] = [];
-    for (const ip of [public4, public6]) {
+    for (const ip of [public4, public6, "2606:4700:4700::1112"]) {
       const server = createHttpsServer({ key: await readFile(keyFile), cert: await readFile(certFile) }, (req, res) => {
         assert.equal(req.socket.localAddress, ip);
         tlsHits.push(req.url ?? "");

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { connect, getCACertificates } from "node:tls";
+import { checkServerIdentity, connect, getCACertificates } from "node:tls";
+import { X509Certificate } from "node:crypto";
+import { isIP } from "node:net";
 import { subscribe, unsubscribe } from "node:diagnostics_channel";
 import { ClientRequest } from "node:http";
 import { createPublicTransport, PUBLIC_TRANSPORT_LIMITS } from "../../src/server/execution/public-transport";
@@ -17,7 +19,8 @@ const observeError = (message: unknown) => {
 };
 subscribe("http.client.request.start", observeError);
 const broker = createPublicTransport({
-  authorize: ({ url }) => ["https://example.com", "https://wrong.example.com", "https://93.184.216.34", "https://[2606:4700:4700::1111]"].includes(new URL(url).origin),
+  authorize: ({ url }) => ["https://example.com", "https://wrong.example.com", "https://93.184.216.34",
+    "https://[2606:4700:4700::1111]", "https://[2606:4700:4700::1112]"].includes(new URL(url).origin),
   assertActive: () => {},
   signal: new AbortController().signal,
   limits: { ...PUBLIC_TRANSPORT_LIMITS, requestMs: 2000 },
@@ -28,9 +31,19 @@ try {
     await assert.rejects(request("https://example.com/tls-untrusted"), { code: "network_failure" });
   } else {
     assert(getCACertificates("extra").length > 0, "Owned extra CA must load in the fresh Node process");
-    for (const host of ["93.184.216.34", "2606:4700:4700::1111"]) {
+    for (const [host, servername] of [
+      ["93.184.216.34", "example.com"], ["2606:4700:4700::1111", ""],
+      // The negative alias is reachable and its chain/DNS name valid; it is
+      // intentionally absent from the IP SANs tested by the broker below.
+      ["2606:4700:4700::1112", "example.com"],
+    ]) {
       await new Promise<void>((resolve, reject) => {
-        const socket = connect({ host, port: 443, servername: host.includes(":") ? "" : "example.com", rejectUnauthorized: true });
+        const socket = connect({
+          host, port: 443, servername, rejectUnauthorized: true,
+          checkServerIdentity: (name, certificate) => isIP(name)
+            ? new X509Certificate(certificate.raw).checkIP(name) ? undefined : new Error("owned_ip_san_mismatch")
+            : checkServerIdentity(name, certificate),
+        });
         socket.once("secureConnect", () => {
           assert(socket.authorized, "Independent owned TLS control must verify the certificate");
           socket.end();
@@ -48,6 +61,7 @@ try {
       assert.equal(result.body.toString(), "owned TLS");
     }
     await assert.rejects(request("https://wrong.example.com/tls-wrong-name"), { code: "network_failure" });
+    await assert.rejects(request("https://[2606:4700:4700::1112]/tls-wrong-ip-san"), { code: "network_failure" });
   }
   console.log(trusted ? "trusted_tls_controls_passed" : "untrusted_tls_control_passed");
 } finally {

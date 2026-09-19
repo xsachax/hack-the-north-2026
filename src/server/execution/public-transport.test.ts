@@ -424,6 +424,11 @@ describe("real owned TLS and hostile response framing", () => {
     expect((await transport().request({ ...input, url: `https://${host}/docs` })).status).toBe(200);
     expect(state.dispatches[0].servername).toBe("");
   });
+  it("rejects a mismatched IPv6 SAN rather than accepting a DNS CN or another IP SAN", async () => {
+    state.port = tlsPort;
+    await expect(transport().request({ ...input, url: "https://[2606:4700:4700::1112]/docs" }))
+      .rejects.toMatchObject({ code: "network_failure" });
+  });
   it("rejects an untrusted certificate issuer, not only a mismatched hostname", async () => {
     state.port = tlsPort;
     const ca = state.ca;

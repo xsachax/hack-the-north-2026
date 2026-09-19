@@ -1,4 +1,5 @@
 import "server-only";
+import { X509Certificate } from "node:crypto";
 import { Resolver } from "node:dns/promises";
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { request as httpsRequest, type RequestOptions } from "node:https";
@@ -345,7 +346,15 @@ export function createPublicTransport(options: PublicTransportOptions): PublicTr
           family: address.family, autoSelectFamily: false,
           maxHeaderSize: limits.headerBytes, insecureHTTPParser: false,
           rejectUnauthorized: true, servername: isIP(host) ? "" : host,
-          checkServerIdentity: (_hostname, certificate) => checkServerIdentity(host, certificate),
+          checkServerIdentity: (_hostname, certificate) => {
+            if (!isIP(host)) return checkServerIdentity(host, certificate);
+            // Node 22.23's legacy matcher IDNA-converts bare IPv6 to an empty
+            // name. OpenSSL's IP SAN matcher avoids that DNS-only conversion.
+            try {
+              if (new X509Certificate(certificate.raw).checkIP(host)) return undefined;
+            } catch { return failure("network_failure"); }
+            return failure("network_failure");
+          },
           lookup: (_hostname, _options, callback) => {
             try { check(); callback(null, address.address, address.family); }
             catch { callback(reason ?? terminal ?? failure("aborted"), "", address.family); }

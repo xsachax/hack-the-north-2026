@@ -10,7 +10,7 @@ const tsx = resolve("node_modules/tsx/dist/cli.mjs");
 const playwright = resolve("node_modules/@playwright/test/cli.js");
 const vitest = resolve("node_modules/vitest/vitest.mjs");
 const addresses = ["10.77.0.1/32", "169.254.77.1/32", "fd00::1/128"];
-const publicAliases = ["93.184.216.34/32", "2606:4700:4700::1111/128"];
+const publicAliases = ["93.184.216.34/32", "2606:4700:4700::1111/128", "2606:4700:4700::1112/128"];
 
 function command(binary: string, args: string[]) {
   const result = spawnSync(binary, args, { encoding: "utf8", timeout: 10_000 });

@@ -146,7 +146,8 @@ node node_modules/tsx/dist/cli.mjs scripts/native-policy-linux.ts --public-trans
 ```
 
 This selects `vitest.public-transport-linux.config.ts`, not an arbitrary elevated
-command. It adds `93.184.216.34/32` and `2606:4700:4700::1111/128` **only inside
+command. It adds `93.184.216.34/32`, `2606:4700:4700::1111/128` and the wrong-SAN
+control `2606:4700:4700::1112/128` **only inside
 the already verified private namespace**; the ordinary native suite's aliases and
 command are unchanged. Namespace-local HTTP/80, HTTPS/443 and UDP DNS/53 run after
 the UID/GID drop. The existing namespace-only low-port sysctl permits those owned
@@ -164,8 +165,10 @@ literals, private redirect rejection and in-flight read cancellation are covered
 
 Ephemeral owned TLS material remains in mode-0700 namespace scratch. Fresh
 unprivileged Node children test an untrusted CA failure, explicit local CA trust
-via `NODE_EXTRA_CA_CERTS`, hostname SNI, IPv4/IPv6 SANs and a wrong-hostname
-failure. Certificate verification remains on. No CA is installed into the host
+via `NODE_EXTRA_CA_CERTS`, hostname SNI, IPv4/IPv6 SANs, a wrong-hostname failure
+and a reachable IPv6 alias absent from the IP SANs. The independent IP control and broker both require OpenSSL-backed
+X509 IP SAN matching, avoiding the Node 22.23 legacy matcher's IPv6/IDNA regression;
+CA-chain verification remains on. No CA is installed into the host
 trust store, and no TLS bypass or mocked socket is used. The suite fails rather
 than skipping when isolation, IPv6, port binding or DNS is unavailable. The
 credential-free CI `native-policy` job runs both suites sequentially and uploads
