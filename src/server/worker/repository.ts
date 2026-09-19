@@ -12,6 +12,7 @@ import { workerPolicySchema, type WorkerPolicy } from "./config";
 import { referenceSchema } from "./session-reference";
 import { resultSchema } from "./result";
 import { targetScopeSchema, type TargetScope } from "../../lib/target-scope";
+import { publicPageUrl } from "../public-page-url";
 
 export class LeaseLostError extends Error {
   constructor() { super("worker_lease_lost"); }
@@ -200,7 +201,11 @@ export class WorkerRepository extends Repository {
       const ordinal = z.number().parse(this.db.prepare("SELECT COALESCE(max(ordinal),0)+1 AS n FROM attempt_steps WHERE attempt_id=?").get(claim.attempt.id)?.n);
       if (ordinal > 100) throw new Error("step_event_limit");
       this.db.prepare("INSERT INTO attempt_steps VALUES(?,?,?,?)").run(claim.attempt.id, ordinal, kind, evidenceId);
-      this.append(claim.runId, claim.attempt.id, `attempt.${kind}`, { ...data, actor: "agent", evidenceId });
+      const { pageUrl: rawPageUrl, ...safeData } = data;
+      const pageUrl = rawPageUrl ? publicPageUrl(rawPageUrl) : undefined;
+      this.append(claim.runId, claim.attempt.id, `attempt.${kind}`, {
+        ...safeData, ...(pageUrl ? { pageUrl } : {}), actor: "agent", evidenceId,
+      });
     });
   }
 

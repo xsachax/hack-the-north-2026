@@ -2,7 +2,7 @@
 
 User testing before you have users. A crowd of AI personas uses an authorized web app in real Browserbase browsers, with a live wall and evidence-backed bug and friction reports.
 
-**Current phase: scoped controlled-site execution and user-defined criteria, not the full MVP.** This repository includes a Next.js dashboard preview, twelve persona profiles, canonical runtime schemas, private SQLite persistence and owner-scoped APIs. The [worker runbook](docs/WORKER.md) covers separate app/worker startup, transactional quotas, fenced leases, crash reconciliation, cancellation, spending and resumable events. The [execution reference](docs/EXECUTION.md) describes the Browserbase/Stagehand Gateway loop and the distinction between structural checks and evidence-grounded semantic judgment. **Arbitrary-target execution remains disabled pending proven browser egress enforcement (#8).** The UI does not start sessions or display fabricated results. Protected explicit controlled-site admission can queue paid work; no browser is launched inside an HTTP handler.
+**Current phase: functional launch flow and owner-only live wall, not the full MVP.** Enter a goal, choose a scoped target and select predefined or saved custom personas. The Next.js interface uses the canonical schemas, private SQLite persistence and owner-scoped APIs. The [worker runbook](docs/WORKER.md) covers separate app/worker startup, transactional quotas, fenced leases, crash reconciliation, cancellation, spending and resumable events. The [execution reference](docs/EXECUTION.md) describes the Browserbase/Stagehand Gateway loop and the distinction between structural checks and evidence-grounded semantic judgment. **Arbitrary-target execution remains disabled pending proven browser egress enforcement (#8).** The website mode saves an explicitly blocked intended request; the separate controlled-demo mode can queue paid work. No browser is launched inside an HTTP handler or during rendering.
 
 The synthetic gift store at `/demo` supports browse/cart/fake checkout. Configure six independent broken/fixed variants and reset tab-local state at `/demo-fixtures`, outside the shopping flow. See the [fixture matrix and next-layer handoff](docs/DEMO.md) for deterministic setup, scoped objectives, evidence distinctions and authorized cloud reachability. No real purchases, accounts or payments.
 
@@ -15,8 +15,35 @@ citations, not deterministic proof or calibrated confidence statistics.
 
 The [delivery plan](docs/DELIVERY_PLAN.md) defines the architecture, sequential PR layers, acceptance gates, capability matrix and accountability ledger for the end-to-end build.
 
-Layer04b (issue #11 / PR #17) follows merged durable-worker PR #15. It is the
-backend prerequisite for UI05, not a declaration that public-target gate #8 is solved.
+Layer04b (issue #11 / PR #17) is merged. Layer05 (issue #12) adds the launch and
+live wall on those backend contracts, not a declaration that public-target gate #8 is solved.
+
+## Launch and watch
+
+Open `/`, unlock with the deployment access code if required, then choose **Your
+website** or **Controlled demo** explicitly. Expand scope and criteria to narrow
+navigation and add structural assertions or heuristic semantic checks. Each
+selected persona can override the shared objective, criteria and bounded execution
+limits. Custom profiles can be created, edited, deleted and selected; existing
+attempts retain immutable snapshots. No provider key is entered in the browser.
+
+The durable launch key and canonical pending request are kept together in this
+tab's session storage before submission, bound to its owner. After an uncertain
+reply or refresh, **Reconcile saved launch** replays the same request; it never
+automatically retries a paid submission. Input is retained after validation or
+transient errors. Access codes and live-view URLs are never stored there.
+An owner-cookie change blocks replay instead of silently creating another run.
+Closing the tab clears this local recovery record; check your saved runs before
+starting another request. Anonymous owner cookies are not recoverable accounts.
+
+`/runs/:id` reloads persisted attempts, events, summaries and authorized session
+metadata. Open up to three live viewers; a queued attempt shows a placeholder,
+not fabricated footage. This is visualization, **not managed human takeover**.
+The wall follows resumable ordered events and keeps checking unresolved cleanup
+after a terminal outcome. Cancellation intent is not proof of release;
+infrastructure failure, recovery, quarantine and uncertain cleanup remain visible.
+Criterion results retain all five states. Evidence IDs/metadata are available,
+but protected full reports, downloads, replay and grouped findings belong to layer06.
 
 ## Local development
 
@@ -37,7 +64,7 @@ chmod 600 .env.local
 # Edit .env.local and add your Browserbase key.
 ```
 
-If `.env.local` already exists, keep it rather than copying over it. Open http://127.0.0.1:3000. The app binds to loopback by default. `/api/health` is a liveness endpoint; it does not contact Browserbase. The dashboard shows configuration validity, not proof that credentials work.
+If `.env.local` already exists, keep it rather than copying over it. Open http://127.0.0.1:3000. The app binds to loopback by default. `/api/health` is a liveness endpoint; it does not contact Browserbase. Safe capability booleans and operator ceilings are configuration, not proof of connectivity or a running worker. Controlled admission also requires `ENABLE_DEMO_RUNS=true`, a strong access code, and a separately confirmed worker; see [startup](docs/WORKER.md#clean-startup).
 
 ```sh
 npm run check              # Lint, types, offline tests; no Browserbase credits
@@ -54,6 +81,10 @@ npm run worker -- --confirm-paid
 npm run worker:integration -- --confirm-paid
 # Separate one-browser, cumulative-20-minute controlled-site proof:
 npm run controlled:integration -- --confirm-paid
+# UI-originated, two-persona proof; separate persistent lifetime 1,800-second cap:
+npm run ui:integration -- --confirm-paid
+# Same HTTPS/UI admission path, separate test-only storage, no cloud or worker:
+npm run ui:integration -- --offline-preflight
 ```
 
 The `browserbase:smoke` command creates **one browser**, requests a maximum **120-second session lifetime**, and calls `extract` and `observe` once each through Model Gateway. It reads the heading on `example.com`, replays one observed click with `act`, verifies the IANA destination, and saves a screenshot, token metrics, and session references under `data/smoke/<run-id>/`. Browserbase/provider-internal retries may still occur; these are operational limits, not a dollar-spend guarantee. Each AI operation has a 30-second timeout.
@@ -122,7 +153,7 @@ The application and separate orchestrator use Node/TypeScript. Keep long-running
 
 ## MVP direction
 
-The controlled demo store has six independently switchable planted problems and deterministic browser regressions. The bounded persona loop supports measured actions, short in-character commentary, patience, stalls, private screenshots and observed criterion checks. Autonomous coverage is limited to the explicitly recorded integration scenarios, not all six problems. Layer04b adds reusable controlled-site execution/evaluation (#11); next are the real live wall and evidence-backed grouped reports. HTTP 4xx responses alone are not confirmed bugs.
+The controlled demo store has six independently switchable planted problems and deterministic browser regressions. The bounded persona loop supports measured actions, short in-character commentary, patience, stalls, private screenshots and observed criterion checks. Autonomous coverage is limited to the explicitly recorded integration scenarios, not all six problems. Layer04b adds reusable controlled-site execution/evaluation (#11), and layer05 adds its real launch flow and live wall (#12). Evidence-backed grouped reports are next. HTTP 4xx responses alone are not confirmed bugs.
 
 The minimum complete demo is the store, crowd wall and grouped evidence report. Human takeover, reproduction minimization/test generation and rerun comparison follow. A reproduction reducer must re-check the same failure signature in fresh sessions; never promise globally shortest steps without proving them.
 

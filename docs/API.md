@@ -2,7 +2,8 @@
 
 Base path: `/api/v1`. These handlers **never launch a browser or call a model**;
 explicit demo/controlled-site admission queues paid work for a separately running worker.
-The dashboard is still a preview; it is not wired to these endpoints.
+The operator dashboard consumes these owner-scoped endpoints; mock preview data
+is separate from durable worker execution.
 
 ## Deployment and identity
 
@@ -70,6 +71,7 @@ longer-lived admission limits may not clear after one minute.
 | Method | Path | Input / result |
 | --- | --- | --- |
 | POST | `/session` | Bootstrap described above |
+| GET | `/capabilities` | Unauthenticated safe readiness booleans and public execution ceilings; same Host/Origin protections |
 | GET | `/personas` | `{items:[...]}`: twelve predefined profiles and up to 50 owned custom profiles |
 | POST | `/personas` | Full custom profile; returns new server-generated UUID |
 | PUT | `/personas/:id` | Full replacement of owned custom profile, not a partial patch |
@@ -127,6 +129,53 @@ the original run (`200`, versus `201` on creation); a changed request returns
 `409`. Different owners have independent keys. Validation/DNS admission is
 rechecked on every create request, including retries; target unavailability can
 therefore temporarily prevent an otherwise idempotent replay.
+
+### Assignment execution limits
+
+All three admission endpoints accept an optional assignment `limits` object:
+`{maxSteps?:1..30,maxModelCalls?:1..30,maxDurationMs?:1000..240000}`. Values must
+be integers; unknown fields are rejected. Each field is independently optional.
+The immutable attempt JSON snapshot persists the requested limits, including
+through reopening, cancellation and worker settlement. Existing snapshots with
+no limits remain valid; no SQL-column migration or history rewrite is needed.
+At execution each requested limit is clamped to the persisted worker policy.
+Duration is additionally capped at `max(1000,(sessionSeconds-60)*1000)`, retaining
+cleanup headroom. These limits never increase operator caps, change allocation
+reservations, authorize website execution, or create a retry/relaunch path.
+
+### Safe capabilities and browser contracts
+
+`GET /capabilities` needs no owner cookie or access code; it rejects query
+parameters, foreign Host/Origin and cross-site Fetch Metadata and disables
+caching. Its complete `data` shape is:
+
+```ts
+{
+  controlledRunsEnabled: boolean;
+  websiteExecutionEnabled: false;
+  maxActiveViews: 3;
+  accessCodeConfigured: boolean;
+  browserbaseKeyConfigured: boolean;
+  executionLimits: { maxSteps: number; maxModelCalls: number; maxDurationMs: number };
+  executionLimitsSource: "persisted-worker-policy" | "configuration" | "defaults";
+}
+```
+
+Admission readiness means the operator flag and sufficiently long access code
+are configured, not that a worker, fixture server or provider is reachable.
+Key readiness only reports presence, never validity or the key itself. Persisted
+worker caps take precedence; an uninitialized worker reports a clearly labelled
+configuration/default ceiling. No secret, private configuration error, budget
+accounting, owner identifier, or session metadata is included. Canonical
+browser-safe schemas/types for this response and session/summary item lists are
+exported from `src/lib/ui-contracts.ts`; clients must not import server modules.
+
+Public observation, decision and action events may include `data.pageUrl`.
+This is the latest observed page (for actions, the source page, not an asserted
+destination). It excludes userinfo, query strings and fragments and redacts
+known secrets and common sensitive path segments. Malformed/non-HTTP URLs are
+omitted. Historical events without the optional field remain readable. Session
+and replay links never populate this field.
 
 ### Explicit demo admission and UI handoff
 

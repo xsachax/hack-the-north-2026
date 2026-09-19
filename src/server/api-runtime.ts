@@ -1,6 +1,7 @@
 import "server-only";
 import { createApi, validateApiConfiguration } from "./api";
 import { Repository } from "./repository";
+import { readWorkerPolicy, workerExecutionLimits } from "./worker/config";
 
 let handler: ReturnType<typeof createApi> | undefined;
 export async function handleApi(request: Request): Promise<Response> {
@@ -11,6 +12,8 @@ export async function handleApi(request: Request): Promise<Response> {
         production: process.env.NODE_ENV === "production",
         accessCode: process.env.FLASH_FLOOD_ACCESS_CODE,
         allowDemoRuns: process.env.ENABLE_DEMO_RUNS === "true",
+        browserbaseKeyConfigured: !!process.env.BROWSERBASE_API_KEY?.trim(),
+        executionLimits: workerExecutionLimits(readWorkerPolicy(process.env)),
       };
       validateApiConfiguration(configuration);
       handler = createApi({

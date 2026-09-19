@@ -200,6 +200,83 @@ history. The wall obtains live-view metadata only from the protected
 access-bearing: never persist them in analytics, public logs or shared reports.
 Protected evidence download and replay delivery remain later-layer work.
 
+## Launch UI and live wall (layer 05)
+
+The homepage now performs owner bootstrap, validates canonical scoped assignments,
+and submits through the ordinary protected APIs. Website mode states the #8
+execution block before submission; controlled-demo mode is an explicit separate
+choice. Per-assignment step, shared model-call and duration limits are immutable
+snapshots and can only reduce the operator's policy. Patience is a separate
+persona behavior limit, not a fabricated completion percentage.
+
+The owner wall loads persisted history and snapshots, then consumes resumable
+SSE. Viewers are opt-in, owner-authorized Browserbase live views, bounded to three;
+queued or unavailable sessions show placeholders. Viewers are visualization,
+not managed takeover. Cancel intent hides the viewers immediately, while the
+durable cleanup/recovery state remains visible. Terminal streams close, but
+unresolved recovery and quarantine retain paced summary refreshes. No pending
+remote session is represented as confirmed closed.
+
+`npm run ui:integration -- --confirm-paid` is a separate trusted, UI-originated
+rehearsal, not a CI task. It retains a persistent ledger in `data/ui-rehearsal`,
+uses a **1,800-second lifetime cumulative reservation cap**, at most three
+concurrent browsers and 300 seconds per remote TTL, and includes an external
+baseline of **852 seconds**. Failed attempts count toward the same ceiling;
+never delete the ledger to regain budget. It owns a local HTTPS proxy, app,
+worker and browser, drives the actual launch form, requires rendered live-view
+evidence and matching persisted steps, and independently verifies the exact
+correlated remote session set. Screenshots, live URLs, identifiers, TLS material
+and detailed proof stay private in ignored storage. Run only after offline
+acceptance and a clean focused review; the project allowance does not increase
+this layer's explicitly authorized lifetime cap.
+
+### Layer05 UI proof (2026-09-19)
+
+The first paid UI rehearsal passed after the full offline gate and focused review.
+It originated in the real HTTPS launch form, created a custom persona alongside
+the careful-first-timer preset, and traversed owner API -> durable worker ->
+Browserbase / Gateway -> authorized live wall. Both personas created the scoped
+synthetic Garden planning project; each recorded four decisions and four actions.
+The wall's event sequences, timestamps, observed pages, actions and commentary
+matched the durable records. The terminal criterion and independent persisted
+board observation both confirmed the project was listed.
+
+| Persona | Durable outcome | Actual browser seconds | Cumulative reservation |
+| --- | --- | --- | --- |
+| Careful first timer | succeeded; cleanup closed | 48.693 | 300 |
+| Custom garden organizer | succeeded; cleanup closed | 44.145 | 300 |
+
+**Layer05 total: 92.838 actual browser seconds / 600 lifetime reserved seconds
+of the 1,800-second cap.** The durable ledger charged 94 whole seconds and
+refunded 506; the non-refundable cumulative reservation remains 600. Peak
+concurrency was two, below the application cap of three. Available Gateway
+counters were 36,240 prompt and 2,207 completion tokens across eight decisions;
+no semantic evaluation was requested by this structural-criterion rehearsal.
+These counters are not a price estimate or invoice.
+
+Both exact persisted session references were independently retrieved and
+correlated with provider metadata, and each was remotely **COMPLETED**. The
+remote exact-set proof passed; no launches remain unsettled and no jobs remain
+queued or leased. The owned worker, app, HTTPS proxy and browser stopped, ports
+4323/4324 were released, and the exclusive lock was removed. No further paid
+calls were made after this proof.
+
+Actual Browserbase canvas pixels and private iframe screenshots showed the
+registered project board, not merely iframe URLs/load events. The two-view
+desktop wall showed live persisted step activity, and the mobile terminal wall
+showed two succeeded attempts with viewers removed. Desktop/mobile launch,
+live/terminal wall, pixel diagnostics, immutable observations and exact closure
+proof remain under ignored private storage; no images, session identifiers or
+live URLs were published.
+
+The previous tracked project actual was 851.070 seconds; adding this layer gives
+**943.908 actual seconds** (rounded-up external baseline for later manual work:
+944). This proof's own policy retained the authorized 852-second external
+baseline throughout. Offline HTTPS preflights used separate test-only storage,
+no worker or cloud calls, and zero reservations. Offline coverage also exercises
+lost-response replay, owner changes, cancellation/recovery/quarantine, stream
+gaps, same-owner reauthorization, and terminal-history summary races.
+
 ## Verification and paid rehearsal
 
 Ordinary CI runs `npm run check`, build, HTTP smoke and Chromium E2E with no paid
