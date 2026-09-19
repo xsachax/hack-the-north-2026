@@ -44,7 +44,7 @@ jobs:
           BROWSERBASE_PROJECT_ID: ${{ secrets.BROWSERBASE_PROJECT_ID }}
           SCENARIO: ${{ inputs.scenario }}
         run: |
-          npm run start -- --port 4321 > /tmp/flash-flood-fixture.log 2>&1 &
+          ./node_modules/.bin/next start --hostname 127.0.0.1 --port 4321 > /tmp/flash-flood-fixture.log 2>&1 &
           fixture_pid=$!
           trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
           for attempt in $(seq 1 30); do
