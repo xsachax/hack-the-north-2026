@@ -1,0 +1,55 @@
+name: Persona integration (paid, manual)
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_paid_run:
+        description: "Authorize one <=240 second browser and <=14 Gateway decisions"
+        type: boolean
+        required: true
+        default: false
+      scenario:
+        description: "Trusted fixture setup, not included in the persona prompt"
+        type: choice
+        options: [fixed, second-coupon]
+        default: fixed
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: persona-integration-paid
+  cancel-in-progress: false
+
+jobs:
+  integration:
+    if: inputs.confirm_paid_run && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+      - name: Run bounded fixture persona
+        env:
+          BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
+          BROWSERBASE_PROJECT_ID: ${{ secrets.BROWSERBASE_PROJECT_ID }}
+          SCENARIO: ${{ inputs.scenario }}
+        run: |
+          npm run start -- --port 4321 > /tmp/flash-flood-fixture.log 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:4321/demo/category/home > /dev/null; then break; fi
+            sleep 1
+          done
+          npm run persona:integration -- --confirm-paid "--scenario=$SCENARIO"
+      # No public uploads of artifacts, browser references, screenshots or logs.
