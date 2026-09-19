@@ -1,5 +1,8 @@
 import { z } from "zod";
 import { assignmentSchema, personaSchema } from "../../lib/contracts";
+import { criterionKey } from "../../lib/criteria";
+import { ModelBudget } from "./budget";
+import { deterministicCheck, inconclusive, mergeCriterionCheck, unsupported, validateSemanticChecks } from "./evaluator";
 import {
   decisionSchema, ExecutionError,
   type BrowserAction, type CleanupOutcome, type CriterionCheck, type Decision,
@@ -30,7 +33,7 @@ function freeze<T>(value: T): T {
 }
 
 class InternalFailure extends Error {
-  constructor(readonly kind: "brain" | "event") {
+  constructor(readonly kind: "brain" | "event" | "evaluator") {
     super(kind);
   }
 }
@@ -39,7 +42,9 @@ function terminal(error: unknown): TerminalOutcome {
   if (error instanceof InternalFailure) {
     return {
       status: "infrastructure_failed",
-      reason: error.kind === "brain" ? "Brain failed" : "Event sink failed",
+      reason: {
+        brain: "Brain failed", event: "Event sink failed", evaluator: "Semantic evaluation failed",
+      }[error.kind],
     };
   }
   if (error instanceof ExecutionError) {
@@ -66,7 +71,7 @@ function validateDecision(raw: Decision, observation: Observation): Decision {
   const { action, candidateId, value } = decision;
   const targeted = ["click", "type", "select"].includes(action);
   if (targeted) {
-    if (!candidateId || !observation.candidates.some((candidate) => candidate.id === candidateId)) {
+    if (!candidateId || !observation.candidates.some((candidate) => candidate.id === candidateId && !candidate.disabled)) {
       throw new ExecutionError("unsupported", "Action references an unknown candidate");
     }
   } else if (candidateId !== null) {
@@ -105,8 +110,9 @@ export async function executePersona(
   let deadline: ReturnType<typeof setTimeout> | undefined;
   let cancelled = false;
   let expired = false;
+  let modelCleanupFailed = false;
   let steps = 0;
-  let modelCalls = 0;
+  let budget: ModelBudget | undefined;
   let outcome: TerminalOutcome = { status: "infrastructure_failed", reason: "Execution did not start" };
   let cleanup: CleanupOutcome = { status: "failed", errors: ["Cleanup did not finish"] };
   const errors: string[] = [];
@@ -163,13 +169,14 @@ export async function executePersona(
     const assignment = assignmentSchema.parse({
       personaId: persona.id, goal: input.goal, criteria: input.criteria,
     });
-    if (new Set(assignment.criteria).size !== assignment.criteria.length) {
+    if (new Set(assignment.criteria.map(criterionKey)).size !== assignment.criteria.length) {
       throw new ExecutionError("infra", "Criteria must be unique");
     }
     const goal = assignment.goal;
     const criteria = freeze(assignment.criteria);
     const limits = limitsSchema.parse(input.limits ?? {});
-    for (const criterion of criteria) checks.set(criterion, freeze({ criterion, passed: false, evidence: "" }));
+    budget = new ModelBudget(limits.maxModelCalls, controller.signal);
+    for (const criterion of criteria) checks.set(criterionKey(criterion), freeze({ criterion: criterionKey(criterion), passed: false, evidence: "" }));
     input.signal?.addEventListener("abort", cancel, { once: true });
     if (input.signal?.aborted) cancel();
     deadline = setTimeout(() => { expired = true; controller.abort(); }, limits.maxDurationMs);
@@ -179,26 +186,59 @@ export async function executePersona(
     await emit({ kind: "started", actor: "agent", personaId: persona.id });
     let observation = freeze(structuredClone(await operation(() => deps.driver.observe(controller.signal))));
     while (true) {
-      await emit({ kind: "observation", actor: "agent", observation });
+      const semantic = [];
+      const observedChecks: CriterionCheck[] = [];
+      let verificationFailure: ExecutionError | InternalFailure | undefined;
       for (const criterion of criteria) {
-        const matching = observation.checks.filter((check) => check.criterion === criterion);
-        if (!matching.length) continue;
-        const valid = matching.every((check) => check.passed === true && check.evidence.trim().length > 0);
-        checks.set(criterion, freeze({
-          criterion, passed: valid,
-          evidence: matching.map((check) => check.evidence.trim()).filter(Boolean).join("\n"),
-        }));
+        const check = deterministicCheck(criterion, observation);
+        if (check) {
+          observedChecks.push(check);
+          checks.set(criterionKey(criterion), freeze(mergeCriterionCheck(criterion, checks.get(criterionKey(criterion)), check)));
+        }
+        else semantic.push(criterion);
       }
       const failure = observation.signals.find((signal) => signal.kind === "functional_failure");
       if (failure) {
+        observation = freeze({ ...observation, checks: observedChecks });
+        await emit({ kind: "observation", actor: "agent", observation });
         outcome = { status: "target_failed", reason: "Trusted observation reported functional failure" };
         break;
       }
+      if (semantic.length) {
+        const evaluator = deps.evaluator ?? (deps.brain.evaluate ? deps.brain : undefined);
+        const evaluationInput = freeze({ criteria: semantic, observation, step: steps });
+        let evaluated = semantic.map(unsupported);
+        if (evaluator?.evaluate) {
+          try {
+            evaluated = validateSemanticChecks(await operation(async () => {
+              if (!evaluator.managesModelBudget) budget!.charge("evaluation", controller.signal);
+              return evaluator.evaluate!(evaluationInput, controller.signal, budget);
+            }), evaluationInput);
+          } catch (error) {
+            evaluated = semantic.map((criterion) => inconclusive(criterion,
+              error instanceof ExecutionError && error.code === "limit" ? "Model-call budget exhausted" : "Semantic evaluation failed"));
+            for (let index = 0; index < semantic.length; index++) {
+              checks.set(criterionKey(semantic[index]), freeze(evaluated[index]));
+            }
+            if (controller.signal.aborted) throw error;
+            verificationFailure = error instanceof ExecutionError && error.code === "limit"
+              ? error : new InternalFailure("evaluator");
+          }
+        }
+        for (let index = 0; index < semantic.length; index++) {
+          const criterion = semantic[index];
+          observedChecks.push(evaluated[index]);
+          checks.set(criterionKey(criterion), freeze(mergeCriterionCheck(criterion, checks.get(criterionKey(criterion)), evaluated[index])));
+        }
+      }
+      observation = freeze({ ...observation, checks: observedChecks });
+      await emit({ kind: "observation", actor: "agent", observation });
+      if (verificationFailure) throw verificationFailure;
       if ([...checks.values()].every((check) => check.passed)) {
         outcome = { status: "succeeded", reason: "All criteria have trusted evidence" };
         break;
       }
-      if (steps >= limits.maxSteps || modelCalls >= limits.maxModelCalls) {
+      if (steps >= limits.maxSteps || budget.total >= limits.maxModelCalls) {
         outcome = { status: "limit_reached", reason: "Step or model-call limit reached" };
         break;
       }
@@ -206,17 +246,18 @@ export async function executePersona(
         outcome = { status: "gave_up", reason: "Persona patience exhausted" };
         break;
       }
-      modelCalls++;
       const decision = validateDecision(await operation(async () => {
         try {
+          if (!deps.brain.managesModelBudget) budget!.charge("decision", controller.signal);
           return await deps.brain.decide(freeze({
             persona, goal, criteria, observation, history: [...history],
-          }), controller.signal);
-        } catch {
+          }), controller.signal, budget);
+        } catch (error) {
+          if (error instanceof ExecutionError && error.code === "limit") throw error;
           throw new InternalFailure("brain");
         }
       }), observation);
-      await emit({ kind: "decision", actor: "agent", decision, modelCalls });
+      await emit({ kind: "decision", actor: "agent", decision, modelCalls: budget.total });
       if (decision.action === "done" || decision.action === "give_up") {
         outcome = {
           status: "gave_up",
@@ -242,8 +283,8 @@ export async function executePersona(
       history.push(freeze({ observation, decision }));
       if (history.length > limits.historyLimit) history.shift();
       await emit({ kind: "action", actor: "agent", action, steps });
-      // Always verify an action, including the last permitted action, without
-      // spending another model call.
+      // Always observe the final action. Semantic verification still requires
+      // inference budget; deterministic verification does not.
       observation = freeze(structuredClone(await operation(() => deps.driver.observe(controller.signal))));
     }
   } catch (error) {
@@ -255,6 +296,13 @@ export async function executePersona(
     if (deadline) clearTimeout(deadline);
     input.signal?.removeEventListener("abort", cancel);
     controller.abort();
+    budget?.close();
+    const drainers = new Set([deps.brain, deps.evaluator].filter((value) => value?.drain));
+    const drained = await Promise.allSettled([...drainers].map((value) => Promise.resolve().then(() => value!.drain!())));
+    if (drained.some((result) => result.status === "rejected")) {
+      modelCleanupFailed = true;
+      errors.push("Model cleanup failed");
+    }
     try {
       const raw = await deps.driver.close();
       const parsed = z.strictObject({
@@ -274,9 +322,12 @@ export async function executePersona(
   const originalTerminal = freeze({ ...outcome });
   if (cleanup.status === "failed" || cleanup.errors.length) {
     outcome = { status: "infrastructure_failed", reason: "Driver cleanup failed" };
+  } else if (modelCleanupFailed) {
+    outcome = { status: "infrastructure_failed", reason: "Model cleanup failed" };
   }
   let result: ExecutionResult = freeze({
-    ...outcome, originalTerminal, checks: [...checks.values()], steps, modelCalls,
+    ...outcome, originalTerminal, checks: [...checks.values()], steps, modelCalls: budget?.total ?? 0,
+    modelOperations: budget?.snapshot() ?? { decision: 0, evaluation: 0, retry: 0, total: 0 },
     durationMs: Math.max(0, Date.now() - startedAt), cleanup, errors: [...errors],
   });
   if (deps.onEvent) {

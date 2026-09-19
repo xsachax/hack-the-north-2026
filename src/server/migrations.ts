@@ -122,4 +122,8 @@ export const migrations = [
     PRIMARY KEY(job_id, session_id)
   );
   `,
+  `
+  ALTER TABLE runs ADD COLUMN controlled_site_id TEXT
+    CHECK(controlled_site_id IN ('store','project-board'));
+  `,
 ] as const;

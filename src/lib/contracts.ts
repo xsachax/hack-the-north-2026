@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { targetScopeSchema } from "./target-scope";
+import { citationSchema, criterionCheckSchema, criterionKey, criterionSchema } from "./criteria";
 
 const text = (max: number) => z.string().trim().min(1).max(max).refine(
   (value) => !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value),
@@ -29,10 +30,14 @@ export const statusSchema = z.enum([
 export const terminalStatusSchema = statusSchema.exclude(["queued", "running"]);
 export type Status = z.infer<typeof statusSchema>;
 export type TerminalStatus = z.infer<typeof terminalStatusSchema>;
+const criteriaSchema = z.array(criterionSchema).min(1).max(12).refine(
+  (criteria) => new Set(criteria.map(criterionKey)).size === criteria.length,
+  "Criteria must have unique identities",
+);
 export const assignmentSchema = z.strictObject({
   personaId: personaIdSchema,
   goal: text(2000),
-  criteria: z.array(text(500)).min(1).max(12),
+  criteria: criteriaSchema,
 });
 export const createRunSchema = z.strictObject({
   authorizationAcknowledged: z.literal(true),
@@ -51,6 +56,7 @@ export const runSchema = z.strictObject({
   updatedAt: timestampSchema,
   cancelRequestedAt: timestampSchema.nullable(),
   executionMode: z.enum(["website", "controlled-fixture"]).default("website"),
+  controlledSiteId: z.enum(["store", "project-board"]).optional(),
 });
 export type Run = z.infer<typeof runSchema>;
 export const attemptSchema = z.strictObject({
@@ -58,7 +64,8 @@ export const attemptSchema = z.strictObject({
   runId: idSchema,
   persona: personaSchema,
   goal: text(2000),
-  criteria: z.array(text(500)).min(1).max(12),
+  // Historical website snapshots may contain duplicates; uniqueness belongs to admission.
+  criteria: z.array(criterionSchema).min(1).max(12),
   status: statusSchema,
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
@@ -130,3 +137,33 @@ export const paginationSchema = z.strictObject({
 });
 export type Pagination = z.infer<typeof paginationSchema>;
 export const idempotencyKeySchema = z.string().regex(/^[A-Za-z0-9_-]{16,128}$/);
+
+export const publicAttemptSummarySchema = z.strictObject({
+  steps: z.int().min(0).max(30),
+  modelCalls: z.int().min(0).max(30),
+  modelOperations: z.strictObject({
+    decision: z.int().min(0).max(30), evaluation: z.int().min(0).max(30),
+    retry: z.int().min(0).max(30), total: z.int().min(0).max(30),
+  }).optional(),
+  durationMs: z.number().nonnegative(),
+  cleanup: z.strictObject({ status: z.enum(["closed", "failed"]) }),
+  checks: z.array(criterionCheckSchema.safeExtend({
+    citations: z.array(citationSchema.omit({ screenshotKey: true }).extend({
+      evidenceId: idSchema.optional(),
+    })).max(12).optional(),
+  })).max(12),
+});
+
+const gatewayCounter = z.number().finite().nonnegative().optional();
+export const gatewayMetricsSchema = z.strictObject({
+  actPromptTokens: gatewayCounter, actCompletionTokens: gatewayCounter,
+  actReasoningTokens: gatewayCounter, actCachedInputTokens: gatewayCounter, actInferenceTimeMs: gatewayCounter,
+  extractPromptTokens: gatewayCounter, extractCompletionTokens: gatewayCounter,
+  extractReasoningTokens: gatewayCounter, extractCachedInputTokens: gatewayCounter, extractInferenceTimeMs: gatewayCounter,
+  observePromptTokens: gatewayCounter, observeCompletionTokens: gatewayCounter,
+  observeReasoningTokens: gatewayCounter, observeCachedInputTokens: gatewayCounter, observeInferenceTimeMs: gatewayCounter,
+  agentPromptTokens: gatewayCounter, agentCompletionTokens: gatewayCounter,
+  agentReasoningTokens: gatewayCounter, agentCachedInputTokens: gatewayCounter, agentInferenceTimeMs: gatewayCounter,
+  totalPromptTokens: gatewayCounter, totalCompletionTokens: gatewayCounter,
+  totalReasoningTokens: gatewayCounter, totalCachedInputTokens: gatewayCounter, totalInferenceTimeMs: gatewayCounter,
+});

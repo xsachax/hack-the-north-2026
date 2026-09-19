@@ -1,16 +1,310 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { personas } from "../../lib/personas";
+import { legacyDemoCriteria, type CriterionCheck, type Criterion } from "../../lib/criteria";
 import { executePersona } from "./loop";
 import {
   decisionSchema, ExecutionError,
   type Brain, type BrainInput, type BrowserDriver, type CleanupOutcome, type Decision,
   type ExecutePersonaInput, type ExecutionDependencies, type ExecutionEvent,
-  type Observation,
+  type Observation, type EvaluationInput, type Evaluator,
 } from "./types";
 
-const criterion = "Confirmation is visible";
-const check = (name = criterion, evidence = "Confirmation text in DOM", passed = true) => ({
+const criterion = legacyDemoCriteria[1];
+const firstCriterion = legacyDemoCriteria[0];
+const check = (name: string = criterion, evidence = "Confirmation text in DOM", passed = true) => ({
   criterion: name, passed, evidence,
+});
+
+function semanticCheck(value: EvaluationInput, passed = true): CriterionCheck[] {
+  return value.criteria.map((criterion) => ({
+    criterion: typeof criterion === "string" ? criterion : criterion.id,
+    passed, status: passed ? "met" : "not_met", method: "semantic", evidence: "",
+    confidence: 0.8, uncertainty: "",
+    citations: [{
+      observationId: value.observation.id, pageUrl: value.observation.url,
+      step: value.step, excerpt: value.observation.text,
+      ...(value.observation.screenshotKey ? { screenshotKey: value.observation.screenshotKey } : {}),
+    }],
+  }));
+}
+
+describe("semantic verification, shared budgets, and lifecycle", () => {
+  it("persists grounded negative and positive semantic verdicts in their own observation events", async () => {
+    const f = fixture([
+      observation({ id: "before", text: "No projects yet" }),
+      observation({ id: "after", text: "Garden planning Design" }),
+    ]);
+    const result = await executePersona(input({ criteria: ["Garden planning is categorized as Design"] }), {
+      ...f.deps, evaluator: { evaluate: async (value) => semanticCheck(value, value.step === 1) },
+    });
+    expect(result.status).toBe("succeeded");
+    const observations = f.onEvent.mock.calls.map(([event]) => event).filter((event) => event.kind === "observation");
+    expect(observations.map((event) => event.observation.checks[0].status)).toEqual(["not_met", "met"]);
+    for (const [step, event] of observations.entries()) {
+      const citation = event.observation.checks[0].citations![0];
+      expect(citation).toMatchObject({ observationId: event.observation.id, pageUrl: event.observation.url, step });
+      expect(event.observation.text).toContain(citation.excerpt);
+    }
+  });
+  it("accepts initial semantic success at zero actions but charges the evaluation", async () => {
+    const f = fixture();
+    const evaluate = vi.fn<Evaluator["evaluate"]>(async (value) => semanticCheck(value));
+    const result = await executePersona(input({ criteria: ["Find helpful support"] }), { ...f.deps, evaluator: { evaluate } });
+    expect(result).toMatchObject({
+      status: "succeeded", steps: 0, modelCalls: 1,
+      modelOperations: { decision: 0, evaluation: 1, retry: 0, total: 1 },
+      checks: [{ passed: true, method: "semantic", evidence: "Continue" }],
+    });
+    expect(f.decide).not.toHaveBeenCalled();
+    expect(f.act).not.toHaveBeenCalled();
+  });
+  it("uses brain.evaluate without additional driver wiring", async () => {
+    const f = fixture();
+    const result = await executePersona(input({ criteria: ["Helpful support"] }), {
+      ...f.deps, brain: { decide: f.decide, evaluate: async (value) => semanticCheck(value) },
+    });
+    expect(result).toMatchObject({ status: "succeeded", modelCalls: 1 });
+  });
+  it("does not accept arbitrary string checks from drivers or model done as success", async () => {
+    const f = fixture([observation({ checks: [check("Custom criterion")] })], [decision({ action: "done", candidateId: null })]);
+    const result = await executePersona(input({ criteria: ["Custom criterion"] }), f.deps);
+    expect(result).toMatchObject({ status: "gave_up", modelCalls: 1, checks: [{ status: "unsupported", passed: false }] });
+  });
+  it.each([
+    { maxModelCalls: 1, expectedSteps: 0, evaluations: 1, decisions: 0 },
+    { maxModelCalls: 2, expectedSteps: 1, evaluations: 1, decisions: 1 },
+    { maxModelCalls: 3, expectedSteps: 1, evaluations: 2, decisions: 1 },
+  ])("shares cap $maxModelCalls across initial evaluation, decision, and final verification", async (config) => {
+    const f = fixture([observation(), observation({ text: "Confirmed" })]);
+    const evaluate = vi.fn<Evaluator["evaluate"]>(async (value) => semanticCheck(value, value.observation.text === "Confirmed"));
+    const result = await executePersona(input({
+      criteria: ["Confirmed objective"], limits: { maxModelCalls: config.maxModelCalls, maxSteps: 1 },
+    }), { ...f.deps, evaluator: { evaluate } });
+    expect(result.status).toBe(config.maxModelCalls === 3 ? "succeeded" : "limit_reached");
+    expect(result.steps).toBe(config.expectedSteps);
+    expect(result.modelOperations).toEqual({ decision: config.decisions, evaluation: config.evaluations, retry: 0, total: config.maxModelCalls });
+    expect(evaluate).toHaveBeenCalledTimes(config.evaluations);
+    if (config.maxModelCalls === 2) expect(result.checks[0]).toMatchObject({ status: "inconclusive", uncertainty: "Model-call budget exhausted" });
+  });
+  it("terminates on a persistently failing evaluator instead of dispatching a brain done decision", async () => {
+    const f = fixture(undefined, [decision({ action: "done", candidateId: null })]);
+    const evaluate = vi.fn<Evaluator["evaluate"]>(async () => { throw new Error("secret SDK payload"); });
+    const result = await executePersona(input({ criteria: ["Semantic objective"] }), { ...f.deps, evaluator: { evaluate } });
+    expect(result).toMatchObject({
+      status: "infrastructure_failed", reason: "Semantic evaluation failed", steps: 0, modelCalls: 1,
+      originalTerminal: { status: "infrastructure_failed", reason: "Semantic evaluation failed" },
+      modelOperations: { decision: 0, evaluation: 1, retry: 0, total: 1 },
+      checks: [{ status: "inconclusive", uncertainty: "Semantic evaluation failed" }],
+      errors: ["Semantic evaluation failed"],
+    });
+    expect(JSON.stringify(result)).not.toContain("secret");
+    expect(evaluate).toHaveBeenCalledOnce();
+    expect(f.decide).not.toHaveBeenCalled();
+    expect(f.act).not.toHaveBeenCalled();
+    expect(f.close).toHaveBeenCalledOnce();
+    expect(f.onEvent.mock.calls.map(([event]) => event.kind)).toEqual(["started", "observation", "finished"]);
+    expect(f.onEvent.mock.calls[1][0]).toMatchObject({
+      kind: "observation", observation: { checks: [{
+        status: "inconclusive", passed: false, method: "semantic", uncertainty: "Semantic evaluation failed",
+      }] },
+    });
+  });
+  it.each([
+    new Error("private transport failure"),
+    new TypeError("private schema failure"),
+    new ExecutionError("infra", "private provider failure"),
+    new ExecutionError("unsupported", "private tool failure"),
+  ])("classifies thrown evaluator errors as infrastructure failure even on the last budgeted call: %s", async (error) => {
+    const f = fixture();
+    const evaluate = vi.fn<Evaluator["evaluate"]>(async () => { throw error; });
+    const result = await executePersona(input({ criteria: ["Semantic objective"], limits: { maxModelCalls: 1 } }), {
+      ...f.deps, evaluator: { evaluate },
+    });
+    expect(result).toMatchObject({
+      status: "infrastructure_failed", reason: "Semantic evaluation failed", modelCalls: 1,
+      checks: [{ status: "inconclusive", passed: false }],
+    });
+    expect(JSON.stringify(result)).not.toContain("private");
+    expect(f.decide).not.toHaveBeenCalled();
+    expect(evaluate).toHaveBeenCalledOnce();
+  });
+  it("stops after final verification throws instead of dispatching a subsequent done decision", async () => {
+    const f = fixture(
+      [observation({ text: "No project yet" }), observation({ text: "Project created" })],
+      [decision(), decision({ action: "done", candidateId: null })],
+    );
+    const evaluate = vi.fn<Evaluator["evaluate"]>()
+      .mockImplementationOnce(async (value) => semanticCheck(value, false))
+      .mockRejectedValue(new Error("private model failure"));
+    const result = await executePersona(input({ criteria: ["Project created"] }), { ...f.deps, evaluator: { evaluate } });
+    expect(result).toMatchObject({
+      status: "infrastructure_failed", steps: 1,
+      modelOperations: { decision: 1, evaluation: 2, retry: 0, total: 3 },
+      checks: [{ status: "inconclusive", uncertainty: "Semantic evaluation failed" }],
+    });
+    expect(f.decide).toHaveBeenCalledOnce();
+    expect(f.act).toHaveBeenCalledOnce();
+    expect(evaluate).toHaveBeenCalledTimes(2);
+    expect(f.close).toHaveBeenCalledOnce();
+    const events = f.onEvent.mock.calls.map(([event]) => event);
+    expect(events.filter((event) => event.kind === "observation").map((event) =>
+      event.observation.checks[0].status)).toEqual(["not_met", "inconclusive"]);
+    expect(events.at(-1)).toMatchObject({ kind: "finished", result: { status: "infrastructure_failed" } });
+  });
+  it("preserves cancellation precedence when an evaluator throws during cancellation", async () => {
+    const f = fixture();
+    const controller = new AbortController();
+    const result = await executePersona(input({ criteria: ["Semantic objective"], signal: controller.signal }), {
+      ...f.deps, evaluator: { evaluate: async () => {
+        controller.abort(new Error("lease revoked or cancelled"));
+        throw new Error("private evaluator failure");
+      } },
+    });
+    expect(result).toMatchObject({ status: "cancelled", modelCalls: 1, checks: [{ status: "inconclusive" }] });
+    expect(f.decide).not.toHaveBeenCalled();
+    expect(f.act).not.toHaveBeenCalled();
+    expect(f.close).toHaveBeenCalledOnce();
+  });
+  it("preserves evaluator limit errors and emits the inconclusive observation before terminating", async () => {
+    const f = fixture();
+    const result = await executePersona(input({ criteria: ["Semantic objective"] }), {
+      ...f.deps, evaluator: { evaluate: async () => { throw new ExecutionError("limit", "private budget failure"); } },
+    });
+    expect(result).toMatchObject({
+      status: "limit_reached", modelCalls: 1,
+      checks: [{ status: "inconclusive", uncertainty: "Model-call budget exhausted" }],
+    });
+    expect(f.onEvent.mock.calls[1][0]).toMatchObject({
+      kind: "observation", observation: { checks: [{ status: "inconclusive" }] },
+    });
+    expect(f.decide).not.toHaveBeenCalled();
+    expect(f.act).not.toHaveBeenCalled();
+    expect(f.close).toHaveBeenCalledOnce();
+  });
+  it("requires charged explicit retries and does not double-charge budget-aware evaluators", async () => {
+    const f = fixture();
+    const result = await executePersona(input({ criteria: ["Semantic objective"], limits: { maxModelCalls: 2 } }), {
+      ...f.deps, evaluator: {
+        managesModelBudget: true,
+        evaluate: async (value, signal, budget) => {
+          budget!.charge("evaluation", signal);
+          budget!.charge("retry", signal);
+          return semanticCheck(value);
+        },
+      },
+    });
+    expect(result).toMatchObject({ status: "succeeded", modelOperations: { decision: 0, evaluation: 1, retry: 1, total: 2 } });
+  });
+  it("rejects forged and ambiguous evaluator success before considering done", async () => {
+    const f = fixture(undefined, [decision({ action: "done", candidateId: null })]);
+    const result = await executePersona(input({ criteria: ["Semantic objective"] }), {
+      ...f.deps, evaluator: { evaluate: async (value) => semanticCheck(value).map((check) => ({
+        ...check, citations: [{ ...check.citations![0], step: 99 }],
+      })) },
+    });
+    expect(result).toMatchObject({ status: "gave_up", modelCalls: 2, checks: [{ status: "inconclusive", passed: false }] });
+  });
+  it("shares the abort fence with evaluation and waits for its real RPC drain before driver close", async () => {
+    const f = fixture();
+    const pending = deferred<CriterionCheck[]>();
+    const controller = new AbortController();
+    const evaluate = vi.fn<Evaluator["evaluate"]>(() => pending.promise);
+    const draining = vi.fn(async () => { await pending.promise; });
+    const running = executePersona(input({ criteria: ["Semantic objective"], signal: controller.signal }), {
+      ...f.deps, evaluator: { evaluate, drain: draining },
+    });
+    await vi.waitFor(() => expect(evaluate).toHaveBeenCalledOnce());
+    controller.abort();
+    await vi.waitFor(() => expect(draining).toHaveBeenCalledOnce());
+    expect(f.close).not.toHaveBeenCalled();
+    pending.resolve([]);
+    expect(await running).toMatchObject({ status: "cancelled", modelCalls: 1, checks: [{ status: "inconclusive" }] });
+    expect(f.decide).not.toHaveBeenCalled();
+    expect(f.close).toHaveBeenCalledOnce();
+  });
+  it("treats semantic RPC cleanup failure as infrastructure failure even after verified success", async () => {
+    const f = fixture();
+    const result = await executePersona(input({ criteria: ["Semantic objective"] }), {
+      ...f.deps, evaluator: {
+        evaluate: async (value) => semanticCheck(value),
+        drain: async () => { throw new Error("sensitive transport detail"); },
+      },
+    });
+    expect(result).toMatchObject({ status: "infrastructure_failed", reason: "Model cleanup failed", originalTerminal: { status: "succeeded" } });
+    expect(f.close).toHaveBeenCalledOnce();
+    expect(JSON.stringify(result)).not.toContain("sensitive");
+  });
+  it.each(["milestone", "current"] as const)("honors %s relevance across routes without model calls", async (semantics) => {
+    const first: Criterion = { id: "first", description: "Help observed", kind: "visible_text", semantics, paths: ["/help"], text: "Help", match: "exact" };
+    const second: Criterion = { id: "second", description: "Finish", kind: "url", semantics: "current", path: "/done" };
+    const f = fixture([
+      observation({ url: "https://site.example/help", text: "Help" }),
+      observation({ url: "https://site.example/done", text: "Done" }),
+    ]);
+    const result = await executePersona(input({ criteria: [first, second], limits: { maxSteps: 1 } }), f.deps);
+    expect(result.status).toBe(semantics === "milestone" ? "succeeded" : "limit_reached");
+    expect(result.checks[0].status).toBe(semantics === "milestone" ? "met" : "not_observed");
+    expect(result.modelOperations).toMatchObject({ decision: 1, evaluation: 0 });
+  });
+  it("invalidates milestones on relevant contradictions instead of accumulating sticky success", async () => {
+    const first: Criterion = { id: "first", description: "Help", kind: "visible_text", semantics: "milestone", paths: ["/help"], text: "Help", match: "exact" };
+    const second: Criterion = { id: "second", description: "Ready", kind: "visible_text", semantics: "current", text: "Ready", match: "exact" };
+    const f = fixture([
+      observation({ url: "https://site.example/help", text: "Help" }),
+      observation({ url: "https://site.example/help", text: "Ready" }),
+    ]);
+    const result = await executePersona(input({ criteria: [first, second], limits: { maxSteps: 1 } }), f.deps);
+    expect(result).toMatchObject({ status: "limit_reached", checks: [{ status: "not_met" }, { status: "met" }] });
+  });
+  it("rejects duplicated canonical criterion IDs before any inference", async () => {
+    const f = fixture();
+    const criterion: Criterion = { id: "same", description: "Help", kind: "semantic", semantics: "current" };
+    const result = await executePersona(input({ criteria: [criterion, { ...criterion, description: "Different" }] }), f.deps);
+    expect(result.status).toBe("infrastructure_failed");
+    expect(f.observe).not.toHaveBeenCalled();
+  });
+  it.each(["milestone", "current"] as const)("does not spend verification calls on unrelated routes for a semantic %s", async (semantics) => {
+    const criterion: Criterion = {
+      id: "support", description: "Helpful support", kind: "semantic", semantics, paths: ["/help"],
+    };
+    const f = fixture([
+      observation({ url: "https://site.example/help", text: "Contact support" }),
+      observation({ url: "https://site.example/done", text: "Done" }),
+    ]);
+    const evaluate = vi.fn<Evaluator["evaluate"]>(async (value) => semanticCheck(value));
+    const result = await executePersona(input({
+      criteria: [criterion, { id: "done", description: "Done route", kind: "url", semantics: "current", path: "/done" }],
+      limits: { maxSteps: 1, maxModelCalls: 2 },
+    }), { ...f.deps, evaluator: { evaluate } });
+    expect(result.status).toBe(semantics === "milestone" ? "succeeded" : "limit_reached");
+    expect(result.modelOperations).toEqual({ decision: 1, evaluation: 1, retry: 0, total: 2 });
+    expect(evaluate).toHaveBeenCalledOnce();
+  });
+  it("revokes semantic milestones for relevant contradictory or ambiguous subsequent evidence", async () => {
+    for (const contradiction of ["not_met", "inconclusive"] as const) {
+      const criterion: Criterion = {
+        id: "support", description: "Helpful support", kind: "semantic", semantics: "milestone", paths: ["/help"],
+      };
+      const f = fixture([
+        observation({ url: "https://site.example/help", text: "Support is available" }),
+        observation({ url: "https://site.example/help", text: "Ready" }),
+      ]);
+      const result = await executePersona(input({
+        criteria: [criterion, { id: "ready", description: "Ready", kind: "visible_text", semantics: "current", text: "Ready", match: "exact" }],
+        limits: { maxSteps: 1, maxModelCalls: 3 },
+      }), {
+        ...f.deps, evaluator: {
+          evaluate: async (value) => value.step === 0 ? semanticCheck(value) : semanticCheck(value, false).map((check) => ({
+            ...check, status: contradiction, uncertainty: contradiction === "inconclusive" ? "Ambiguous evidence" : "",
+          })),
+        },
+      });
+      expect(result).toMatchObject({
+        status: "limit_reached", modelCalls: 3,
+        checks: [{ status: contradiction, passed: false }, { status: "met", passed: true }],
+      });
+    }
+  });
 });
 const decision = (overrides: Partial<Decision> = {}): Decision => ({
   action: "click", candidateId: "next", value: null, commentary: "Continue", ...overrides,
@@ -75,17 +369,17 @@ describe("trusted objectives and observations", () => {
     const result = await executePersona(input(), f.deps);
     const events = f.onEvent.mock.calls.map(([event]) => event);
     const observations = events.filter((event) => event.kind === "observation");
-    expect(observations.at(-1)?.observation).toEqual(final);
+    expect(observations.at(-1)?.observation).toMatchObject(final);
     expect(result.checks[0].evidence).toBe("private-artifact-key: confirmation visible");
     expect(events.at(-1)).toMatchObject({ kind: "finished", result: { status: "succeeded" } });
   });
 
   it("requires exact coverage and allows trusted criteria observed across states", async () => {
     const f = fixture([
-      observation({ checks: [check("First")] }),
-      observation({ checks: [check("Second")] }),
+      observation({ checks: [check(firstCriterion)] }),
+      observation({ checks: [check(criterion)] }),
     ]);
-    const result = await executePersona(input({ criteria: ["First", "Second"] }), f.deps);
+    const result = await executePersona(input({ criteria: [firstCriterion, criterion] }), f.deps);
     expect(result.status).toBe("succeeded");
     expect(result.checks).toHaveLength(2);
   });
@@ -105,10 +399,10 @@ describe("trusted objectives and observations", () => {
 
   it("invalidates a previous success check when subsequent trusted evidence contradicts it", async () => {
     const f = fixture([
-      observation({ checks: [check("First")] }),
-      observation({ checks: [check("First", "No longer visible", false), check("Second")] }),
+      observation({ checks: [check(firstCriterion)] }),
+      observation({ checks: [check(firstCriterion, "No longer visible", false), check(criterion)] }),
     ]);
-    const result = await executePersona(input({ criteria: ["First", "Second"], limits: { maxSteps: 1 } }), f.deps);
+    const result = await executePersona(input({ criteria: [firstCriterion, criterion], limits: { maxSteps: 1 } }), f.deps);
     expect(result.status).toBe("limit_reached");
     expect(result.checks[0].passed).toBe(false);
   });
@@ -174,6 +468,11 @@ describe("trusted objectives and observations", () => {
 });
 
 describe("untrusted decisions and driver policy", () => {
+  it("does not allow a targeted action on an observed disabled control", async () => {
+    const f = fixture([observation({ candidates: [{ id: "next", kind: "button", label: "Continue", disabled: true }] })]);
+    expect(await executePersona(input(), f.deps)).toMatchObject({ status: "blocked", modelCalls: 1 });
+    expect(f.act).not.toHaveBeenCalled();
+  });
   it.each([
     { ...decision(), action: "eval" },
     { ...decision(), code: "process.exit()" },

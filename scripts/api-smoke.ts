@@ -112,7 +112,6 @@ try {
   });
   assert.equal(updated.status, 200);
   assert.equal((await updated.json()).data.name, "Edited fixture");
-  assert.equal((await request(`/personas/${persona.id}`, { method: "DELETE", headers: owner })).status, 200);
   assert.equal((await request("/runs", { headers: owner })).status, 200);
   assert.equal((await request("/personas", { headers: { ...owner, origin: "https://foreign.invalid" } })).status, 403);
   const demo = await request("/demo-runs", {
@@ -143,7 +142,36 @@ try {
   assert(!streamed.includes("browserbase.com"));
   const summaries = (await (await request(`/runs/${run.id}/summaries`, { headers: owner })).json()).data.items;
   assert.equal(summaries[0].reservedSeconds, 0);
-  console.log("Offline production HTTP smoke passed: TLS-proxy Host, sessions, CSRF, CRUD, demo admission/cancel, SSE replay and owner isolation. Zero cloud calls.");
+  const controlledBody = {
+    authorizationAcknowledged: true, controlledSiteId: "project-board",
+    assignments: [{
+      personaId: persona.id, goal: "Create a synthetic garden project",
+      criteria: ["The garden project is visibly listed."],
+    }],
+  };
+  const controlled = await request("/controlled-runs", {
+    method: "POST", headers: { ...owner, ...jsonHeaders, "idempotency-key": "offline-board-run-0001" },
+    body: JSON.stringify(controlledBody),
+  });
+  assert.equal(controlled.status, 201);
+  const boardRun = (await controlled.json()).data;
+  assert.equal(new URL(boardRun.scope.targetUrl).hostname, "board.flash-flood.invalid");
+  const attempts = (await (await request(`/runs/${boardRun.id}/attempts`, { headers: owner })).json()).data.items;
+  assert.deepEqual(attempts[0].criteria, controlledBody.assignments[0].criteria);
+  assert.equal(attempts[0].persona.name, "Edited fixture");
+  assert.equal((await request(`/personas/${persona.id}`, { method: "DELETE", headers: owner })).status, 200);
+  const immutable = (await (await request(`/runs/${boardRun.id}/attempts`, { headers: owner })).json()).data.items;
+  assert.deepEqual(immutable[0].persona, attempts[0].persona);
+  assert.equal((await request(`/runs/${boardRun.id}`, { headers: other })).status, 404);
+  const badTarget = await request("/controlled-runs", {
+    method: "POST", headers: { ...owner, ...jsonHeaders, "idempotency-key": "offline-board-run-0002" },
+    body: JSON.stringify({ ...controlledBody, targetUrl: "https://example.com" }),
+  });
+  assert.equal(badTarget.status, 400);
+  assert.equal((await request(`/runs/${boardRun.id}/cancel`, {
+    method: "POST", headers: { ...owner, ...jsonHeaders }, body: "{}",
+  })).status, 200);
+  console.log("Offline production HTTP smoke passed: TLS-proxy Host, sessions, CSRF, CRUD, demo/controlled admission and cancellation, SSE replay and owner isolation. Zero cloud calls.");
 } finally {
   server.kill("SIGTERM");
   const stopped = await Promise.race([exited.then(() => true), delay(5000).then(() => false)]);

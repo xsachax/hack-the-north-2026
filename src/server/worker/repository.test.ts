@@ -14,6 +14,7 @@ import type { CloudUsage, PrivateSessionReference } from "../execution/cloud";
 import type { ExecutionResult } from "../execution/types";
 import { readWorkerPolicy, workerPolicySchema, type WorkerPolicy } from "./config";
 import { LeaseLostError, WorkerRepository, type Claim } from "./repository";
+import { migrations } from "../migrations";
 
 const page = { after: 0, limit: 100 };
 const demo = (count = 1, scenario: DemoRun["scenario"] = "fixed"): DemoRun => ({
@@ -110,6 +111,10 @@ describe("durable worker repository (offline)", () => {
   };
   const create = (who = owner, count = 1, scenario: DemoRun["scenario"] = "fixed") =>
     repository.createDemoRun(who, randomUUID(), demo(count, scenario)).run;
+  const controlled = () => repository.createControlledRun(owner, randomUUID(), {
+    authorizationAcknowledged: true, controlledSiteId: "project-board",
+    assignments: [{ personaId: personas[0].id, goal: "Inspect the board", criteria: ["The board is understandable"] }],
+  }).run;
   const claim = (worker = "worker-a", connection = repository) => {
     const value = connection.claim(worker);
     expect(value).not.toBeNull();
@@ -137,6 +142,134 @@ describe("durable worker repository (offline)", () => {
     repository = open();
     owner = repository.createSession().ownerId;
     other = repository.createSession().ownerId;
+  });
+
+  it("reads migrated duplicate website snapshots and blocks them without stalling subsequent controlled work", () => {
+    close(repository);
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { mode: 0o700 });
+    const database = inspect();
+    database.exec(migrations.slice(0, 3).join("\n"));
+    database.exec("PRAGMA user_version=3");
+    owner = randomUUID();
+    const runId = randomUUID();
+    const attemptId = randomUUID();
+    const jobId = randomUUID();
+    const now = new Date(time).toISOString();
+    const criteria = ["Help is visible", "Help is visible"];
+    const snapshot = {
+      id: attemptId, runId, persona: personas[0], goal: "Find help", criteria,
+      status: "queued", createdAt: now, updatedAt: now,
+    };
+    database.prepare("INSERT INTO owners VALUES(?,?,?,?)").run(owner, "historical-session-hash", "csrf", time + 1000);
+    database.prepare(`INSERT INTO runs(id,owner_id,idempotency_key,request_hash,status,scope,created_at,updated_at)
+      VALUES(?,?,?,?,'queued',?,?,?)`).run(runId, owner, randomUUID(), "historical-request-hash",
+        JSON.stringify({ targetUrl: "https://example.com/", allowedSubdomains: [], pathPrefixes: ["/"] }), now, now);
+    database.prepare("INSERT INTO attempts VALUES(?,?,?,?)").run(attemptId, runId, "queued", JSON.stringify(snapshot));
+    database.prepare("INSERT INTO jobs(id,run_id,attempt_id,status) VALUES(?,?,?,'queued')").run(jobId, runId, attemptId);
+    database.prepare("INSERT INTO usage_reservations(job_id) VALUES(?)").run(jobId);
+
+    repository = open();
+    expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(migrations.length);
+    expect(repository.attempts(owner, runId)).toEqual([snapshot]);
+    const next = controlled();
+    const leased = claim();
+    expect(leased.runId).toBe(next.id);
+    expect(repository.getRun(owner, runId).status).toBe("blocked");
+    expect(repository.attempts(owner, runId)[0]).toMatchObject({ criteria, status: "blocked" });
+    expect(events(runId).find((event) => event.kind === "attempt.finished")?.data.reason).toBe("blocked_unsupported");
+    expect(database.prepare("SELECT reserved_seconds FROM usage_reservations WHERE job_id=?").get(jobId)?.reserved_seconds).toBe(0);
+    expect(database.prepare("SELECT count(*) AS n FROM launches WHERE job_id=?").get(jobId)?.n).toBe(0);
+    repository.finish(leased, result(), usage());
+    expect(repository.claim("next-worker")).toBeNull();
+    expect(database.prepare("SELECT count(*) AS n FROM launches").get()?.n).toBe(1);
+    expect(repository.getRun(owner, next.id).status).toBe("succeeded");
+  });
+
+  it("applies unchanged durable reservation limits to general controlled criteria", () => {
+    configure({ ownerBudgetSeconds: 239 });
+    const run = controlled();
+    expect(repository.claim("worker")).toBeNull();
+    expect(repository.getRun(owner, run.id).status).toBe("limit_reached");
+    expect(repository.accounting(owner).reservedSeconds).toBe(0);
+    expect(events(run.id).find((event) => event.kind === "attempt.finished")?.data.reason).toBe("budget_exhausted");
+  });
+
+  it("defensively blocks store-only legacy criteria in a board snapshot before reserving", () => {
+    const run = controlled();
+    const database = inspect();
+    const attempt = repository.attempts(owner, run.id)[0];
+    database.prepare("UPDATE attempts SET snapshot=? WHERE id=?")
+      .run(JSON.stringify({ ...attempt, criteria: [...demoCriteria] }), attempt.id);
+    expect(repository.claim("worker")).toBeNull();
+    expect(repository.getRun(owner, run.id).status).toBe("blocked");
+    expect(repository.accounting(owner).reservedSeconds).toBe(0);
+    expect(events(run.id).find((event) => event.kind === "attempt.finished")?.data.reason).toBe("unsupported_criteria");
+  });
+
+  it("retains selected site and scope across lease recovery without a second reservation", () => {
+    const run = controlled();
+    const first = claim();
+    expect(first).toMatchObject({ controlledSiteId: "project-board", scope: run.scope, recovery: false });
+    time += repository.policy.leaseMs + 1;
+    const recovered = claim("replacement");
+    expect(recovered).toMatchObject({
+      controlledSiteId: "project-board", scope: run.scope, recovery: true, correlationToken: first.correlationToken,
+    });
+    expect(repository.accounting(owner).reservedSeconds).toBe(240);
+    expect(() => repository.finish(first, result(), usage())).toThrow(LeaseLostError);
+    repository.recover(recovered, { confirmed: true, sessions: [{ sessionId: randomUUID(), status: "COMPLETED", actualBrowserSeconds: 2 }] });
+    expect(repository.getRun(owner, run.id).status).toBe("infrastructure_failed");
+    expect(repository.accounting(owner).committedSeconds).toBe(2);
+  });
+
+  it("cancels controlled jobs before allocation without occupying capacity", () => {
+    const run = controlled();
+    repository.cancelRun(owner, run.id);
+    expect(repository.claim("worker")).toBeNull();
+    expect(repository.getRun(owner, run.id).status).toBe("cancelled");
+    expect(repository.accounting(owner).reservedSeconds).toBe(0);
+  });
+
+  it("exposes only known, finite nonnegative numeric Gateway counters in owner summaries", () => {
+    const run = controlled();
+    const leased = claim();
+    repository.finish(leased, result(), usage({
+      modelMetrics: {
+        totalPromptTokens: 12, totalCompletionTokens: 3, extractInferenceTimeMs: 25.5,
+        totalReasoningTokens: -1, totalCachedInputTokens: "private-string",
+        actPromptTokens: { private: "provider-payload" },
+        arbitraryProviderObject: { sessionId: "private-session" },
+        screenshotKey: "private-key",
+      } as unknown as CloudUsage["modelMetrics"],
+    }));
+    expect(repository.attemptSummaries(owner, run.id)[0].usage?.modelMetrics).toEqual({
+      totalPromptTokens: 12, totalCompletionTokens: 3, extractInferenceTimeMs: 25.5,
+    });
+    expect(() => repository.attemptSummaries(other, run.id)).toThrow();
+    expect(JSON.stringify(repository.attemptSummaries(owner, run.id))).not.toContain("private");
+  });
+
+  it("never resolves another attempt's private screenshot citation into public evidence", () => {
+    controlled();
+    const first = claim();
+    const screenshot = { ...artifact(), kind: "screenshot" as const };
+    repository.recordArtifact(first, screenshot, "screenshot");
+    const run = controlled();
+    const second = claim("second");
+    repository.finish(second, {
+      ...result(), checks: [{
+        criterion: "clarity", passed: true, evidence: `Screenshot:${screenshot.key}`,
+        status: "met", method: "semantic",
+        citations: [{ observationId: "board", pageUrl: run.scope.targetUrl, step: 0, excerpt: "Visible board", screenshotKey: screenshot.key }],
+      }],
+    }, usage());
+    const summary = repository.attemptSummaries(owner, run.id)[0].summary!;
+    expect(summary.checks[0].evidence).toBe("Screenshot:[PRIVATE_ARTIFACT]");
+    expect(summary.checks[0].citations?.[0]).toEqual({
+      observationId: "board", pageUrl: run.scope.targetUrl, step: 0, excerpt: "Visible board",
+    });
+    expect(JSON.stringify(summary)).not.toContain(screenshot.key);
   });
 
   afterEach(async () => {

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { assignmentSchema } from "./contracts";
+import { criterionSchema } from "./criteria";
 
 export const demoCriteria = [
   "Both advertised coupons apply and the mug total is CA$21.60.",
@@ -8,7 +9,9 @@ export const demoCriteria = [
 export const demoRunSchema = z.strictObject({
   authorizationAcknowledged: z.literal(true),
   scenario: z.enum(["fixed", "second-coupon"]),
-  assignments: z.array(assignmentSchema).min(1).max(12),
+  assignments: z.array(assignmentSchema.extend({
+    criteria: z.array(criterionSchema).min(1).max(12),
+  })).min(1).max(12),
 }).refine((value) => new Set(value.assignments.map((a) => a.personaId)).size === value.assignments.length,
   "Each persona may appear only once");
 export type DemoRun = z.infer<typeof demoRunSchema>;
@@ -17,7 +20,7 @@ export const demoScope = {
   allowedSubdomains: [],
   pathPrefixes: ["/demo", "/_next"],
 };
-export function supportedDemoCriteria(criteria: readonly string[]): boolean {
+export function supportedDemoCriteria(criteria: readonly unknown[]): boolean {
   return new Set(criteria).size === criteria.length &&
     criteria.every((criterion) => demoCriteria.some((known) => known === criterion));
 }

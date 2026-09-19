@@ -2,9 +2,16 @@
 
 User testing before you have users. A crowd of AI personas uses an authorized web app in real Browserbase browsers, with a live wall and evidence-backed bug and friction reports.
 
-**Current phase: durable multi-persona worker and controlled-fixture APIs, not the full MVP.** This repository includes a Next.js dashboard preview, twelve persona profiles, canonical runtime schemas, private SQLite persistence and owner-scoped APIs. The [worker runbook](docs/WORKER.md) covers separate app/worker startup, transactional quotas, fenced leases, crash reconciliation, cancellation, spending and resumable events. The [execution reference](docs/EXECUTION.md) describes the Browserbase/Stagehand Gateway loop. **Arbitrary-target execution remains disabled pending proven browser egress enforcement (#8).** The UI does not start sessions or display fabricated results. Protected explicit demo admission can now queue paid work; no browser is launched inside an HTTP handler.
+**Current phase: scoped controlled-site execution and user-defined criteria, not the full MVP.** This repository includes a Next.js dashboard preview, twelve persona profiles, canonical runtime schemas, private SQLite persistence and owner-scoped APIs. The [worker runbook](docs/WORKER.md) covers separate app/worker startup, transactional quotas, fenced leases, crash reconciliation, cancellation, spending and resumable events. The [execution reference](docs/EXECUTION.md) describes the Browserbase/Stagehand Gateway loop and the distinction between structural checks and evidence-grounded semantic judgment. **Arbitrary-target execution remains disabled pending proven browser egress enforcement (#8).** The UI does not start sessions or display fabricated results. Protected explicit controlled-site admission can queue paid work; no browser is launched inside an HTTP handler.
 
 The synthetic gift store at `/demo` supports browse/cart/fake checkout. Configure six independent broken/fixed variants and reset tab-local state at `/demo-fixtures`, outside the shopping flow. See the [fixture matrix and next-layer handoff](docs/DEMO.md) for deterministic setup, scoped objectives, evidence distinctions and authorized cloud reachability. No real purchases, accounts or payments.
+
+A second, structurally different controlled site at `/project-board` supports
+synthetic project creation. The same scoped driver and loop accept custom
+personas, objectives and criteria through `/api/v1/controlled-runs`; this is an
+explicit operator-gated registry, not a workaround for customer URL admission.
+Natural-language results are heuristic judgments with checked observation
+citations, not deterministic proof or calibrated confidence statistics.
 
 The [delivery plan](docs/DELIVERY_PLAN.md) defines the architecture, sequential PR layers, acceptance gates, capability matrix and accountability ledger for the end-to-end build.
 
@@ -42,6 +49,8 @@ npm run persona:integration -- --confirm-paid --scenario=fixed
 # See docs/WORKER.md before enabling ENABLE_DEMO_RUNS.
 npm run worker -- --confirm-paid
 npm run worker:integration -- --confirm-paid
+# Separate one-browser, cumulative-20-minute controlled-site proof:
+npm run controlled:integration -- --confirm-paid
 ```
 
 The `browserbase:smoke` command creates **one browser**, requests a maximum **120-second session lifetime**, and calls `extract` and `observe` once each through Model Gateway. It reads the heading on `example.com`, replays one observed click with `act`, verifies the IANA destination, and saves a screenshot, token metrics, and session references under `data/smoke/<run-id>/`. Browserbase/provider-internal retries may still occur; these are operational limits, not a dollar-spend guarantee. Each AI operation has a 30-second timeout.
@@ -110,7 +119,7 @@ The application and separate orchestrator use Node/TypeScript. Keep long-running
 
 ## MVP direction
 
-The controlled demo store has six independently switchable planted problems and deterministic browser regressions. The bounded persona loop supports measured actions, short in-character commentary, patience, stalls, private screenshots and observed criterion checks. Autonomous coverage is limited to the explicitly recorded integration scenarios, not all six problems. Next: generalized controlled-site execution/evaluation (#11), then the real live wall and evidence-backed grouped reports. HTTP 4xx responses alone are not confirmed bugs.
+The controlled demo store has six independently switchable planted problems and deterministic browser regressions. The bounded persona loop supports measured actions, short in-character commentary, patience, stalls, private screenshots and observed criterion checks. Autonomous coverage is limited to the explicitly recorded integration scenarios, not all six problems. Layer04b adds reusable controlled-site execution/evaluation (#11); next are the real live wall and evidence-backed grouped reports. HTTP 4xx responses alone are not confirmed bugs.
 
 The minimum complete demo is the store, crowd wall and grouped evidence report. Human takeover, reproduction minimization/test generation and rerun comparison follow. A reproduction reducer must re-check the same failure signature in fresh sessions; never promise globally shortest steps without proving them.
 

@@ -75,7 +75,7 @@ test("actual verifier and loop retain observed coupon milestones through demo co
       decide: async ({ observation }) => {
         if (observation.text.includes("Opening the store...")) return wait();
         const [action, label, value] = actions[0];
-        const candidate = observation.candidates.find((item) => item.label === label);
+        const candidate = observation.candidates.find((item) => item.label === label && !item.disabled);
         if (!candidate && label === "Continue to delivery" && observation.text.includes("Checking delivery...")) return wait();
         if (!candidate) missingLabel = label;
         expect(candidate, label).toBeDefined();
@@ -90,12 +90,18 @@ test("actual verifier and loop retain observed coupon milestones through demo co
   expect(result.steps).toBe(11 + waits);
   expect(actions).toHaveLength(0);
   expect(result.checks).toEqual(criteria.map((criterion) => ({
-    criterion, passed: true, evidence: expect.stringMatching(/^observation:/),
+    criterion, passed: true, evidence: expect.stringMatching(/^observation:/), method: "legacy", status: "met",
   })));
   const cartChecks = observations.filter((observation) => observation.url.endsWith("/demo/cart")).map((observation) => observation.checks);
   expect(cartChecks.some((checks) => checks.some((check) => check.criterion === COUPON_CRITERION && !check.passed))).toBe(true);
-  expect(cartChecks.at(-1)).toEqual([{ criterion: COUPON_CRITERION, passed: true, evidence: expect.any(String) }]);
-  expect(observations.at(-1)?.checks).toEqual([{ criterion: COMPLETE_CRITERION, passed: true, evidence: expect.any(String) }]);
+  expect(cartChecks.at(-1)).toEqual([
+    { criterion: COUPON_CRITERION, passed: true, evidence: expect.any(String), method: "legacy", status: "met" },
+    { criterion: COMPLETE_CRITERION, passed: false, evidence: "", method: "legacy", status: "not_observed" },
+  ]);
+  expect(observations.at(-1)?.checks).toEqual([
+    { criterion: COUPON_CRITERION, passed: false, evidence: "", method: "legacy", status: "not_observed" },
+    { criterion: COMPLETE_CRITERION, passed: true, evidence: expect.any(String), method: "legacy", status: "met" },
+  ]);
 });
 
 for (const [broken, reverse] of [[false, false], [true, false], [false, true]]) {
@@ -208,6 +214,7 @@ test("cancellation during asynchronous candidate validation prevents dispatch", 
 test("driver offers only viewport candidates and handles select, keyboard, scroll, back and dialogs", async ({ page }) => {
   const html = `<!doctype html><title>Capabilities</title><body>
     <label>Size<select><option>Small</option><option>Large</option></select></label>
+    <label><input type="checkbox">Email updates</label><button disabled>Unavailable</button>
     <button onclick="alert('Synthetic dialog')">Dialog</button>
     <a href="/demo/cart">Cart</a><div style="height:1400px"></div><button>Below fold</button></body>`;
   const network = await installFixtureNetwork(page.context(), page, async () => ({
@@ -219,7 +226,13 @@ test("driver offers only viewport candidates and handles select, keyboard, scrol
     close: async () => { await page.close(); return { status: "closed", errors: [] }; },
   });
   expect((await driver.observe(signal())).candidates.map((candidate) => candidate.label)).not.toContain("Below fold");
-  await act(driver, "select", "Size", "Large");
+  const selected = await act(driver, "select", "Size", "Large");
+  expect(selected.candidates.find((candidate) => candidate.label === "Size")).toMatchObject({ value: "Large", selected: ["Large"] });
+  const disabled = selected.candidates.find((candidate) => candidate.label === "Unavailable")!;
+  expect(disabled.disabled).toBe(true);
+  await expect(driver.act({ actor: "agent", action: "click", candidateId: disabled.id, value: null, commentary: "" }, signal())).rejects.toThrow("ungrounded_candidate");
+  const checked = await act(driver, "click", "Email updates");
+  expect(checked.candidates.find((candidate) => candidate.label === "Email updates")).toMatchObject({ checked: true });
   await expect(page.getByRole("combobox")).toHaveValue("Large");
   await act(driver, "key", undefined, "Tab");
   await act(driver, "click", "Dialog");

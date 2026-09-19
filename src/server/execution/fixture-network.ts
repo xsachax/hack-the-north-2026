@@ -1,15 +1,13 @@
 import { request } from "node:http";
 import type { BrowserContext, Page } from "playwright-core";
+import { allowsNavigation, controlledSite, type ControlledSite, type NavigationScope } from "../../lib/controlled-sites";
 
-export const FIXTURE_ORIGIN = "https://fixture.flash-flood.invalid";
-export const fixtureRoutes = new Set([
-  "/demo", "/demo/category/home", "/demo/category/paper", "/demo/product/mug",
-  "/demo/product/candle", "/demo/product/journal", "/demo/cart", "/demo/checkout",
-  "/demo/checkout/review", "/demo/complete",
-]);
+export const FIXTURE_ORIGIN = controlledSite("store").origin;
+export const fixtureRoutes = new Set(controlledSite("store").navigationPaths);
 export type FixtureResponse = { status: number; contentType: string; body: Buffer };
 export type FixtureSource = (url: URL) => Promise<FixtureResponse>;
 export type NetworkSignal = { code: string; url: string };
+export type RequestPolicy = (raw: string, document?: boolean) => boolean;
 
 export function isGatewayControlRequest(url: string, method: string, initiator: string, extensionOrigin?: string): boolean {
   if (!extensionOrigin || !/^chrome-extension:\/\/[a-p]{32}$/.test(extensionOrigin)) return false;
@@ -19,25 +17,33 @@ export function isGatewayControlRequest(url: string, method: string, initiator: 
 }
 
 export function isFixtureRequest(raw: string, document = false): boolean {
-  let url: URL;
-  try { url = new URL(raw); } catch { return false; }
-  if (url.origin !== FIXTURE_ORIGIN || url.username || url.password || url.hash) return false;
-  if (fixtureRoutes.has(url.pathname)) return !url.search;
-  if (document) return false;
-  if (url.pathname === "/demo/cart-summary") {
-    return [...url.searchParams.keys()].length === 1
-      && ["fixed", "broken"].includes(url.searchParams.get("variant") ?? "");
-  }
-  return /^\/_next\/static\/[a-zA-Z0-9/_@.-]+\.(?:js|css|woff2?)$/.test(url.pathname)
-    && !url.pathname.includes("..") && !url.search;
+  return controlledRequestPolicy(controlledSite("store"))(raw, document);
+}
+
+export function controlledRequestPolicy(site: ControlledSite, scope?: NavigationScope): RequestPolicy {
+  const navigation = scope ?? { allowedOrigins: [site.origin], navigationPaths: site.navigationPaths };
+  return (raw, document = false) => {
+    let url: URL;
+    try { url = new URL(raw); } catch { return false; }
+    if (url.origin !== site.origin || url.username || url.password || url.hash) return false;
+    if (site.navigationPaths.includes(url.pathname)) return allowsNavigation(navigation, raw);
+    if (document) return false;
+    if (site.resourcePaths.includes(url.pathname + url.search)) return true;
+    return /^\/_next\/static\/[a-zA-Z0-9/_@.-]+\.(?:js|css|woff2?)$/.test(url.pathname)
+      && !url.pathname.includes("..") && !url.search;
+  };
 }
 
 // The browser never connects to this address. Only this trusted, fixed fixture
 // transport can reach it, without forwarding browser headers or following redirects.
 export function localFixtureSource(port: number): FixtureSource {
+  return localControlledSource(port, isFixtureRequest);
+}
+
+export function localControlledSource(port: number, policy: RequestPolicy): FixtureSource {
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error("Invalid fixture port");
   return async (url) => {
-    if (!isFixtureRequest(url.href)) throw new Error("Fixture transport scope violation");
+    if (!policy(url.href)) throw new Error("Fixture transport scope violation");
     return new Promise((resolve, reject) => {
       const req = request({
         hostname: "127.0.0.1", port, path: url.pathname + url.search, method: "GET",
@@ -78,7 +84,7 @@ export const FIXTURE_CSP = [
 ].join("; ");
 
 /**
- * A replay transport for OUR trusted fixture code, not an arbitrary-site sandbox.
+ * A replay transport for OUR trusted controlled sites, not an arbitrary-site sandbox.
  * No route continues or falls back to the browser network. Unknown content is
  * not accepted; arbitrary-site execution must remain gated at the factory.
  */
@@ -87,6 +93,17 @@ export async function installFixtureNetwork(
   page: Page,
   source: FixtureSource,
   onSignal: (signal: NetworkSignal) => void,
+  extensionOrigin?: string,
+): Promise<{ close(): Promise<void>; errors: string[] }> {
+  return installControlledNetwork(context, page, source, onSignal, isFixtureRequest, extensionOrigin);
+}
+
+export async function installControlledNetwork(
+  context: BrowserContext,
+  page: Page,
+  source: FixtureSource,
+  onSignal: (signal: NetworkSignal) => void,
+  policy: RequestPolicy,
   extensionOrigin?: string,
 ): Promise<{ close(): Promise<void>; errors: string[] }> {
   const errors: string[] = [];
@@ -99,7 +116,7 @@ export async function installFixtureNetwork(
   await context.addInitScript(() => {
     const policy = {
       deny() { throw new Error("FLASH_FLOOD_UNSUPPORTED_CHANNEL"); },
-      open() { return null; },
+      open() { throw new Error("FLASH_FLOOD_UNSUPPORTED_TABS"); },
     };
     for (const name of ["Worker", "SharedWorker", "WebTransport", "RTCPeerConnection", "webkitRTCPeerConnection"]) {
       Object.defineProperty(globalThis, name, { value: policy.deny, configurable: false, writable: false });
@@ -136,10 +153,10 @@ export async function installFixtureNetwork(
       return;
     }
     const document = req.isNavigationRequest();
-    let allowed = req.method() === "GET" && isFixtureRequest(url, document);
+    let allowed = req.method() === "GET" && policy(url, document);
     try {
       allowed &&= req.frame().page() === page;
-      if (document) allowed &&= req.frame() === page.mainFrame();
+      allowed &&= req.frame() === page.mainFrame();
     } catch { allowed = false; }
     if (!allowed) {
       onSignal({ code: "request_denied", url });

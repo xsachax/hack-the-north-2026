@@ -8,6 +8,7 @@ import type { ArtifactSinks } from "./artifacts";
 import { COMPLETE_CRITERION, COUPON_CRITERION, FixtureDriver } from "./driver";
 import type { Page } from "playwright-core";
 import { personas } from "../../lib/personas";
+import { controlledSite } from "../../lib/controlled-sites";
 import type { BrainInput } from "./types";
 
 const mocks = vi.hoisted(() => {
@@ -88,7 +89,7 @@ vi.mock("@browserbasehq/stagehand", () => ({
 vi.mock("playwright-core", () => ({ chromium: { connectOverCDP: mocks.connect } }));
 vi.mock("./fixture-network", async (importOriginal) => ({
   ...await importOriginal<typeof import("./fixture-network")>(),
-  installFixtureNetwork: mocks.install,
+  installControlledNetwork: mocks.install,
 }));
 
 const config = configSchema.parse({
@@ -180,6 +181,71 @@ afterEach(() => {
 });
 
 describe("fixture-only cloud admission", () => {
+  it.each([COUPON_CRITERION, COMPLETE_CRITERION])("rejects store-only legacy criterion on the board before allocation: %s", async (criterion) => {
+    const site = controlledSite("project-board");
+    await expect(createFixtureExecution(config, options({
+      controlledSiteId: site.id, targetUrl: site.origin + site.entryPath,
+      fixtures: undefined, criteria: [criterion],
+    }))).rejects.toMatchObject({
+      code: "unsupported", phase: "admission",
+      usage: { allocationAttempted: false }, cleanup: { status: "closed", errors: [] },
+    });
+    expect(mocks.sdk).not.toHaveBeenCalled();
+    expect(mocks.launch).not.toHaveBeenCalled();
+  });
+
+  it("allows the same wording as an explicitly semantic board criterion", async () => {
+    const site = controlledSite("project-board");
+    const targetUrl = site.origin + site.entryPath;
+    mocks.page.url.mockReturnValue(targetUrl);
+    mocks.stagehandPage.url.mockResolvedValue(targetUrl);
+    const execution = await createFixtureExecution(config, options({
+      controlledSiteId: site.id, targetUrl, fixtures: undefined,
+      criteria: [{ id: "explicit-semantic", kind: "semantic", description: COMPLETE_CRITERION, semantics: "current" }],
+    }));
+    expect(mocks.launch).toHaveBeenCalledOnce();
+    expect(await execution.driver.close()).toEqual({ status: "closed", errors: [] });
+  });
+
+  it("accepts novel criteria for both controlled sites without requiring a demo seed", async () => {
+    for (const id of ["store", "project-board"] as const) {
+      const site = controlledSite(id);
+      const targetUrl = site.origin + site.entryPath;
+      mocks.page.url.mockReturnValue(targetUrl);
+      mocks.stagehandPage.url.mockResolvedValue(targetUrl);
+      const execution = await createFixtureExecution(config, options({
+        controlledSiteId: id, targetUrl, fixtures: undefined,
+        criteria: [
+          "The visitor can find the creation or shopping journey.",
+          { id: "entry", kind: "url", description: "At the entry", semantics: "current", path: site.entryPath },
+        ],
+      }));
+      expect(execution.usage.allocationAttempted).toBe(true);
+      expect(mocks.page.evaluate).not.toHaveBeenCalled();
+      expect(mocks.page.reload).not.toHaveBeenCalled();
+      expect(await execution.driver.close()).toEqual({ status: "closed", errors: [] });
+    }
+  });
+
+  it.each([
+    { controlledSiteId: "project-board", targetUrl: `${FIXTURE_ORIGIN}/demo` },
+    { controlledSiteId: "store", targetUrl: "https://board.flash-flood.invalid/project-board" },
+    { controlledSiteId: "project-board", targetUrl: "https://example.com/project-board" },
+    { controlledSiteId: "unknown" },
+    { controlledSiteId: "project-board", targetUrl: "https://board.flash-flood.invalid/project-board", fixtures: fixedFixtures },
+    { scope: { targetUrl: `${FIXTURE_ORIGIN}/demo`, allowedSubdomains: [], pathPrefixes: ["/demo/cart"] } },
+    { criteria: [
+      { id: "same", kind: "url", description: "one", semantics: "current", path: "/demo" },
+      { id: "same", kind: "url", description: "two", semantics: "milestone", path: "/demo/cart" },
+    ] },
+  ])("fails controlled-target mismatches before allocation %j", async (overrides) => {
+    await expect(createFixtureExecution(config, Object.assign(options({ fixtures: undefined }), overrides))).rejects.toMatchObject({
+      phase: "admission", usage: { allocationAttempted: false },
+    });
+    expect(mocks.sdk).not.toHaveBeenCalled();
+    expect(mocks.launch).not.toHaveBeenCalled();
+  });
+
   it.each([
     { targetUrl: "https://example.com/demo" },
     { targetUrl: `${FIXTURE_ORIGIN}/demo?redirect=https://example.com` },
@@ -210,7 +276,6 @@ describe("fixture-only cloud admission", () => {
     { criteria: [""] },
     { criteria: ["criterion".repeat(100)] },
     { criteria: ["Same criterion", " Same criterion "] },
-    { criteria: ["Unknown criterion"] },
     { criteria: [COUPON_CRITERION, COUPON_CRITERION] },
     { correlationToken: "not-a-uuid" },
     { viewport: { width: 0, height: 720 } },
@@ -406,7 +471,7 @@ describe("startup and private session setup", () => {
     });
     expect(mocks.connect).toHaveBeenCalledWith(completed.connectUrl, { timeout: 10000 });
     expect(mocks.install).toHaveBeenCalledWith(
-      mocks.context, mocks.page, expect.any(Function), expect.any(Function), `chrome-extension://${"a".repeat(32)}`,
+      mocks.context, mocks.page, expect.any(Function), expect.any(Function), expect.any(Function), `chrome-extension://${"a".repeat(32)}`,
     );
     expect(mocks.install.mock.invocationCallOrder[0]).toBeLessThan(mocks.page.goto.mock.invocationCallOrder[0]);
     expect(mocks.page.evaluate).toHaveBeenCalledWith(expect.any(Function), {
@@ -458,7 +523,7 @@ describe("startup and private session setup", () => {
     ]);
     const execution = await createFixtureExecution(config, options());
     expect(mocks.install).toHaveBeenCalledWith(
-      mocks.context, mocks.page, expect.any(Function), expect.any(Function), origin,
+      mocks.context, mocks.page, expect.any(Function), expect.any(Function), expect.any(Function), origin,
     );
     await execution.driver.close();
   });

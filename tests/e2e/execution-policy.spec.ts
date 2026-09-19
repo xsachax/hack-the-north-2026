@@ -132,7 +132,8 @@ for (const bypassCSP of [false, true]) {
           }
           try { await navigator.serviceWorker.register(`${origin}/sw.js`); denied.serviceWorker = "unexpectedly allowed"; }
           catch (error) { denied.serviceWorker = (error as Error).message; }
-          denied.popup = String(window.open(`${origin}/popup`) === null);
+          try { window.open(`${origin}/popup`); denied.popup = "unexpectedly allowed"; }
+          catch (error) { denied.popup = (error as Error).message; }
           const image = new Image();
           const imageDone = new Promise<void>((resolve) => { image.onload = image.onerror = () => resolve(); });
           image.src = `${origin}/image`;
@@ -154,7 +155,7 @@ for (const bypassCSP of [false, true]) {
           // The denial function can be callable but deliberately non-constructible.
           expect(result.denied[name], name).toMatch(/^(FLASH_FLOOD_UNSUPPORTED_CHANNEL|Constructor is not a constructor)$/);
         }
-        expect(result.denied.popup).toBe("true");
+        expect(result.denied.popup).toBe("FLASH_FLOOD_UNSUPPORTED_TABS");
         expect(result.fetchResult).toBe("rejected");
         if (!bypassCSP) {
           await expect.poll(() => violations).toEqual(expect.arrayContaining(["connect-src", "img-src", "frame-src", "form-action"]));

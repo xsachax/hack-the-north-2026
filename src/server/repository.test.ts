@@ -123,6 +123,30 @@ describe("SQLite repository (offline)", () => {
     expect(open).toThrow("Database version is newer");
   });
 
+  it("upgrades pre-controlled-site databases without changing legacy run snapshots", () => {
+    close(repository);
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { mode: 0o700 });
+    const database = inspect();
+    database.exec(migrations.slice(0, 3).join("\n"));
+    database.exec("PRAGMA user_version=3");
+    const now = new Date(time).toISOString();
+    const legacyOwner = randomUUID();
+    const runId = randomUUID();
+    database.prepare("INSERT INTO owners VALUES(?,?,?,?)").run(legacyOwner, "legacy-hash", "csrf", time + 1000);
+    database.prepare(`INSERT INTO runs(id,owner_id,idempotency_key,request_hash,status,scope,created_at,updated_at,execution_mode,scenario)
+      VALUES(?,?,?,?,'queued',?,?,?,'controlled-fixture','second-coupon')`)
+      .run(runId, legacyOwner, randomUUID(), "legacy-request-hash", JSON.stringify(request().scope), now, now);
+    repository = open();
+    expect(repository.getRun(legacyOwner, runId)).toMatchObject({
+      id: runId, executionMode: "controlled-fixture", scope: request().scope, status: "queued",
+    });
+    expect(repository.getRun(legacyOwner, runId).controlledSiteId).toBeUndefined();
+    expect(database.prepare("SELECT scenario,controlled_site_id,request_hash FROM runs WHERE id=?").get(runId))
+      .toEqual({ scenario: "second-coupon", controlled_site_id: null, request_hash: "legacy-request-hash" });
+    expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(migrations.length);
+  });
+
   it("stores only a hash of opaque session tokens, persists sessions, and expires them", () => {
     const session = repository.createSession();
     const row = inspect().prepare("SELECT * FROM owners WHERE id=?").get(session.ownerId);

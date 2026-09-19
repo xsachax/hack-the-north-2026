@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { fixedFixtures } from "../../lib/demo";
-import { demoScope } from "../../lib/demo-run";
 import type { AppConfig } from "../../lib/config";
 import { ArtifactWriter, sanitizeEvidence, type ArtifactReference, type ArtifactSinks } from "../execution/artifacts";
 import { CloudStartupError, createFixtureExecution, type CloudUsage, type FixtureExecutionOptions } from "../execution/cloud";
@@ -24,7 +23,9 @@ function failedResult(cancelled: boolean, cleanup: ExecutionResult["cleanup"]): 
   const reason = status === "cancelled" ? "Execution cancelled during startup" : "Worker execution failed";
   return {
     status, reason, originalTerminal: { status, reason }, cleanup,
-    checks: [], steps: 0, modelCalls: 0, durationMs: 0, errors: [reason],
+    checks: [], steps: 0, modelCalls: 0,
+    modelOperations: { decision: 0, evaluation: 0, retry: 0, total: 0 },
+    durationMs: 0, errors: [reason],
   };
 }
 
@@ -120,9 +121,12 @@ export class DurableWorker {
       launchInvoked = true;
       const execution = await this.dependencies.launch({
         mode: "controlled-fixture", runId: claim.runId, personaId: claim.attempt.persona.id,
-        correlationToken: claim.correlationToken, assertActive, targetUrl: demoScope.targetUrl,
+        correlationToken: claim.correlationToken, assertActive, targetUrl: claim.scope.targetUrl,
+        scope: claim.scope, controlledSiteId: claim.controlledSiteId,
         criteria: claim.attempt.criteria, fixturePort: this.fixturePort,
-        fixtures: { ...fixedFixtures, secondCoupon: claim.scenario === "second-coupon" },
+        ...(claim.controlledSiteId === "project-board" ? {} : {
+          fixtures: { ...fixedFixtures, secondCoupon: claim.scenario === "second-coupon" },
+        }),
         viewport: claim.attempt.persona.device === "phone" ? { width: 390, height: 844 } : { width: 1280, height: 900 },
         artifacts, signal: controller.signal,
         cleanupJson: async (value) => {
@@ -166,7 +170,24 @@ export class DurableWorker {
           act: async (action, signal) => { assertActive(); return execution.driver.act(action, signal); },
           close: () => execution.driver.close(),
         },
-        brain: { decide: async (input, signal) => { assertActive(); return execution.brain.decide(input, signal); } },
+        brain: {
+          managesModelBudget: execution.brain.managesModelBudget,
+          decide: async (input, signal, budget) => {
+            assertActive();
+            const decision = await execution.brain.decide(input, signal, budget);
+            assertActive();
+            return decision;
+          },
+          ...(execution.brain.evaluate ? {
+            evaluate: async (input, signal, budget) => {
+              assertActive();
+              const checks = await execution.brain.evaluate!(input, signal, budget);
+              assertActive();
+              return checks;
+            },
+          } satisfies Partial<Brain> : {}),
+          ...(execution.brain.drain ? { drain: () => execution.brain.drain!() } : {}),
+        },
         onEvent,
       });
       this.repository.finish(claim, result, usage);
