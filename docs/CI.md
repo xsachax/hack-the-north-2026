@@ -159,13 +159,13 @@ logging is enabled to retain useful startup diagnostics without changing any
 network policy or sandbox flags.
 
 The first hosted namespace attempt at commit `96137d4` died during Chromium
-startup with `SIGTRAP`; its checkout-backed temporary path would produce a
-131-byte process-singleton socket path. Crashpad's missing CPU-frequency
+startup with `SIGTRAP`, before browser probes ran; its checkout-backed temporary
+path would produce a 131-byte process-singleton socket path. Crashpad's missing CPU-frequency
 sysfs messages were not evidence that CPU scaling caused the crash. The
-short namespace-private alias addresses that concrete path-length hazard,
-but the underlying startup diagnosis and the repaired acceptance scenario
-still require a subsequent hosted run; local macOS checks cannot confirm
-Linux startup.
+short namespace-private `/mnt` alias addresses that concrete path-length hazard.
+With that change, commit `be1c18f` successfully started Chromium and completed
+the namespace acceptance on hosted Linux. This resolves the observed startup
+failure but does not independently prove that path length was its sole cause.
 
 `/etc/resolv.conf` is
 bind-mounted in the private mount namespace to use only `127.0.0.1`; its
@@ -259,8 +259,8 @@ same-document fetch rebinding, retained HTTP/2 connections, or a transition
 from an initially permitted public address to a denied private address.
 Both DNS answers are deliberately owned and private; no public or provider
 destination is probed. Local macOS inspection validates the internal-page
-control mechanism only, not Linux DNS or namespace acceptance; the modified
-scenario still requires an exact-head hosted Linux pass.
+control mechanism only; the `be1c18f` hosted runs documented below supply the actual
+Linux DNS and namespace acceptance for this scenario.
 
 This focused lane covers HTTP navigation, repeated proxy failure, those four
 owned addresses, and forced same-process DNS answer changes only. It does not
@@ -271,6 +271,20 @@ isolation. Privacy readback is configuration evidence, not a substitute for
 transport-specific tests. The separate native-policy suite owns additional
 browser-surface tests; neither suite alone proves a complete production
 network sandbox or safe provider rollout.
+
+### Hosted acceptance evidence
+
+On 2026-09-19, both push and PR `native-policy` jobs passed at `be1c18f`.
+The [push job 105923619650](https://github.com/xsachax/hack-the-north-2026/actions/runs/35453119450/job/105923619650)
+reported all nine standard native-policy tests passing in 44.9 seconds, then
+Linux Chromium **145.0.7632.6** exercising same-process DNS phases
+`10.77.0.1` and `169.254.77.1`. The namespace test passed in 3 seconds
+(4.3 seconds total for its Playwright run). The PR
+[run 35453120781](https://github.com/xsachax/hack-the-north-2026/actions/runs/35453120781)
+also completed `check`, `native-policy`, and `container` successfully.
+This is actual hosted Linux evidence for that commit, not an inference from
+macOS static checks or local inspection. Later source changes need their own
+exact-head acceptance; the behavioral limits above still apply.
 
 ## Pinned Actions runtime
 

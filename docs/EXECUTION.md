@@ -407,7 +407,17 @@ tests compare owned TCP/UDP listeners with policy-off positive controls:
 No destination TCP connection/UDP datagram is observed in the corresponding
 negative lanes. These are bounded regression observations, not proof about
 every channel or a different remote Chrome build. The separate Linux namespace
-suite and its run command are documented in [CI.md](CI.md). Resolver DNS traffic
+suite and its run command are documented in [CI.md](CI.md). At implementation
+revision `be1c18f`, hosted Ubuntu 24.04 passed all nine native tests and the
+isolated namespace test on Chromium `145.0.7632.6`. The latter proves reachable
+owned private/link-local/IPv6 listeners and same-process, same-hostname DNS
+answer changes between `10.77.0.1` and `169.254.77.1`, with zero destination
+connections in the policy-enabled lanes. It deliberately clears native
+DNS/socket caches; natural TTL expiry, same-document rebinding and the future
+HTTP broker's per-connection DNS pinning are separate requirements. The initial
+`96137d4` namespace launch failed before any probe; shortening the private
+Chromium scratch path resolved startup in the accepted revision.
+Resolver DNS traffic
 is a distinct control-plane channel: Chrome explicitly documents that disabling
 prediction **does not disable page-initiated DNS-prefetch or preconnect**.
 Do not describe this candidate as suppressing all DNS traffic or protecting

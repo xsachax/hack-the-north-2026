@@ -171,3 +171,16 @@ HTTP broker would supply functionality, not enforcement. Actual local Chromium
 No provider resources, model calls, public execution capability or renewed
 spending allocation are implied. Full remote enforcement and a genuine scoped
 public objective remain required; this follow-up references, not closes, #8.
+
+PR #22's implementation revision `be1c18f` passed the full hosted check and
+container jobs, nine native-channel browser tests, and the isolated Linux
+private/link-local/IPv6/same-process DNS-change test. Local validation includes
+2,061 unit/API tests, the preserved 103-test E2E baseline, production build and
+HTTP/SSE smoke. The first namespace bootstrap (`96137d4`) failed before probes;
+the accepted short private scratch path resolved it. Known-private-value scans
+cover source and client build output. Security review found no reachable
+vulnerability in the candidate; the identified worker-evidence gap was fixed,
+and the native per-origin override guard has a reproduced UDP counterexample.
+Coordinator final-head review/CI and merge remain separate from this evidence.
+The standalone public HTTP transport is now a separate coordinated workstream;
+neither piece independently enables the factory or satisfies #8.
