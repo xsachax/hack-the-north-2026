@@ -268,6 +268,16 @@ review found and prompted the allocation-retry and capped-owner fairness fixes;
 a focused allocation follow-up found no remaining significant issues. Public
 target gate #8 and controlled-site generalization #11 remain open.
 
+One push CI run exposed a timing assumption in the existing scripted coupon +
+completion E2E brain: it requested checkout while the real delivery-summary
+request still disabled that control. A deterministic 2500ms response delay
+reproduced the infrastructure failure after seven actions. The test brain now
+waits only for the known hydration/delivery-pending states, without advancing
+its scripted action or hiding unexpected missing controls. The forced-delay
+regression requires an actual wait and passed six repeated runs; the full
+38-test suite passed afterward. Production execution code and live evidence
+were unchanged by this test-only correction.
+
 ### Rubber-duck review
 
 The rejected shortcut was resetting expired leases to queued: it would spend

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { setTimeout as delay } from "node:timers/promises";
 import { test, expect, type Page } from "@playwright/test";
 import type { ArtifactSinks } from "../../src/server/execution/artifacts";
 import { FixtureDriver, COUPON_CRITERION, COMPLETE_CRITERION, demoVerifier } from "../../src/server/execution/driver";
@@ -20,8 +21,13 @@ const sinks: ArtifactSinks = {
   json: async (value) => artifact(Buffer.from(JSON.stringify(value)), "json"),
   telemetry: async (value) => artifact(Buffer.from(JSON.stringify(value)), "json"),
 };
-async function setup(page: Page, broken = false, criteria = [COUPON_CRITERION]) {
-  const network = await installFixtureNetwork(page.context(), page, localFixtureSource(4317), () => {});
+async function setup(page: Page, broken = false, criteria = [COUPON_CRITERION], cartDelayMs = 0) {
+  const source = localFixtureSource(4317);
+  const network = await installFixtureNetwork(page.context(), page, async (url) => {
+    const response = await source(url);
+    if (url.pathname === "/demo/cart-summary" && cartDelayMs) await delay(cartDelayMs);
+    return response;
+  }, () => {});
   await page.goto(`${FIXTURE_ORIGIN}/demo/category/home`);
   await page.evaluate(({ key, state }) => sessionStorage.setItem(key, state), {
     key: DEMO_STORAGE_KEY, state: JSON.stringify(freshDemo({ ...fixedFixtures, secondCoupon: broken })),
@@ -44,7 +50,7 @@ async function act(driver: FixtureDriver, action: BrowserAction["action"], label
 
 test("actual verifier and loop retain observed coupon milestones through demo completion", async ({ page }) => {
   const criteria = [COUPON_CRITERION, COMPLETE_CRITERION];
-  const driver = await setup(page, false, criteria);
+  const driver = await setup(page, false, criteria, 2500);
   const actions: [BrowserAction["action"], string, string | null][] = [
     ["click", "Maple ceramic mug", null], ["click", "Add to cart", null], ["click", "View cart", null],
     ["type", "Coupon code", "SAVE10"], ["click", "Apply coupon", null],
@@ -53,24 +59,36 @@ test("actual verifier and loop retain observed coupon milestones through demo co
     ["click", "Review order", null], ["click", "Place demo order", null],
   ];
   const observations: Observation[] = [];
+  let missingLabel: string | undefined;
+  let waits = 0;
+  const wait = () => {
+    waits++;
+    return { action: "wait" as const, candidateId: null, value: "500", commentary: "Waiting for the fixture to be ready." };
+  };
   const result = await executePersona({
-    persona: personas.find((persona) => persona.id === "bargain-hunter")!,
+    persona: { ...personas.find((persona) => persona.id === "bargain-hunter")!, patienceSteps: 20 },
     goal: "Apply both advertised coupons, then complete a synthetic demo order.",
-    criteria, limits: { maxSteps: 12, maxModelCalls: 12, maxDurationMs: 20000, carefulDelayMs: 0 },
+    criteria, limits: { maxSteps: 20, maxModelCalls: 20, maxDurationMs: 20000, carefulDelayMs: 0, stallThreshold: 5 },
   }, {
     driver,
     brain: {
       decide: async ({ observation }) => {
-        const [action, label, value] = actions.shift()!;
+        if (observation.text.includes("Opening the store...")) return wait();
+        const [action, label, value] = actions[0];
         const candidate = observation.candidates.find((item) => item.label === label);
+        if (!candidate && label === "Continue to delivery" && observation.text.includes("Checking delivery...")) return wait();
+        if (!candidate) missingLabel = label;
         expect(candidate, label).toBeDefined();
+        actions.shift();
         return { action, candidateId: candidate!.id, value, commentary: "" };
       },
     },
     onEvent: async (event) => { if (event.kind === "observation") observations.push(event.observation); },
   });
-  expect(result.status).toBe("succeeded");
-  expect(result.steps).toBe(11);
+  expect(result.status, JSON.stringify({ reason: result.reason, steps: result.steps, missingLabel, lastText: observations.at(-1)?.text })).toBe("succeeded");
+  expect(waits).toBeGreaterThan(0);
+  expect(result.steps).toBe(11 + waits);
+  expect(actions).toHaveLength(0);
   expect(result.checks).toEqual(criteria.map((criterion) => ({
     criterion, passed: true, evidence: expect.stringMatching(/^observation:/),
   })));
