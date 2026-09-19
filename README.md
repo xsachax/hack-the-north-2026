@@ -2,7 +2,9 @@
 
 User testing before you have users. A crowd of AI personas uses an authorized web app in real Browserbase browsers, with a live wall and evidence-backed bug and friction reports.
 
-**Current phase: durable offline backend, not the full MVP.** This repository includes a Next.js dashboard preview, twelve persona profiles, canonical runtime schemas, private SQLite persistence and owner-scoped APIs, plus the foundation's Browserbase + Stagehand smoke integration. The UI does not start sessions or display fabricated results. The [API reference](docs/API.md) covers bootstrap, persona CRUD, scoped run creation/cancellation, events and private evidence references. No API endpoint launches paid browsers.
+**Current phase: durable offline backend and controlled demo fixtures, not the full MVP.** This repository includes a Next.js dashboard preview, twelve persona profiles, canonical runtime schemas, private SQLite persistence and owner-scoped APIs, plus the foundation's Browserbase + Stagehand smoke integration. The UI does not start sessions or display fabricated results. The [API reference](docs/API.md) covers bootstrap, persona CRUD, scoped run creation/cancellation, events and private evidence references. No API endpoint launches paid browsers.
+
+The synthetic gift store at `/demo` supports browse/cart/fake checkout. Configure six independent broken/fixed variants and reset tab-local state at `/demo-fixtures`, outside the shopping flow. See the [fixture matrix and next-layer handoff](docs/DEMO.md) for deterministic setup, scoped objectives, evidence distinctions and authorized cloud reachability. No real purchases, accounts or payments.
 
 The [delivery plan](docs/DELIVERY_PLAN.md) defines the architecture, sequential PR layers, acceptance gates, capability matrix and accountability ledger for the end-to-end build.
 
@@ -31,6 +33,8 @@ If `.env.local` already exists, keep it rather than copying over it. Open http:/
 npm run check              # Lint, types, offline tests; no Browserbase credits
 npm run build              # Production build; no Browserbase credits
 npm run test:http          # Built-app offline HTTP smoke (run build first)
+npx playwright install chromium --only-shell # One-time offline E2E browser setup
+npm run test:e2e           # Production-server demo regressions (run build first)
 npm run browserbase:smoke  # Paid, explicit integration check
 ```
 
@@ -71,10 +75,11 @@ gh secret set BROWSERBASE_API_KEY --repo xsachax/hack-the-north-2026
 ## Layout
 
 ```text
-src/app/              Next.js dashboard preview and health endpoint
+src/app/              Next.js dashboard, isolated demo store, health and owner APIs
 src/lib/              Configuration, personas, canonical runtime domain/scope schemas
 src/server/           SQLite repository/migrations, safe APIs, target policy, cloud smoke
-scripts/              Explicit, paid Browserbase smoke command
+scripts/              Offline HTTP smoke and explicit paid Browserbase smoke
+tests/e2e/            Deterministic offline Chromium demo regressions
 .github/workflows/    Offline CI and opt-in cloud smoke
 ```
 
@@ -94,7 +99,7 @@ The application and future orchestrator use Node/TypeScript. Keep long-running p
 
 ## MVP direction
 
-Build a controlled demo store with six planted problems, then a bounded persona loop with visible-page perception, short in-character observations, patience and stuck detection. Capture browser errors and failed/slow requests, persist runs and screenshots, stream steps to the live wall, and group issues with replay links. Report failures with evidence; do not equate all HTTP 4xx responses with confirmed bugs.
+The controlled demo store now has six independently switchable planted problems and deterministic browser regressions; no autonomous persona discovery is claimed. Next: a bounded persona loop with visible-page perception, short in-character observations, patience and stuck detection. Capture browser errors and failed/slow requests, persist runs and screenshots, stream steps to the live wall, and group issues with replay links. Report failures with evidence; do not equate all HTTP 4xx responses with confirmed bugs.
 
 The minimum complete demo is the store, crowd wall and grouped evidence report. Human takeover, reproduction minimization/test generation and rerun comparison follow. A reproduction reducer must re-check the same failure signature in fresh sessions; never promise globally shortest steps without proving them.
 

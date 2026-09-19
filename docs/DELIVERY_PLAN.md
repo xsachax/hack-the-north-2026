@@ -123,8 +123,8 @@ Regular CI never needs a live Browserbase key. Real-browser paid checks are expl
 | Layer | State | Issue / PR | Evidence / blockers |
 | --- | --- | --- | --- |
 | 00 | Merged | PR #2 | Foundation merged at `5080b1e`: 30 offline tests, production build, real Gateway smoke, completed remote session, desktop/mobile layout checks |
-| 01 | In review | Issue #3 / PR #5 | Canonical contracts, private SQLite migrations/recovery, owner-scoped offline APIs, CSRF/origin/access-code gate, persisted limits and reusable URL/DNS/scope policy. 421 offline tests, lint/types, production build and built-app HTTP smoke pass; zero cloud calls. See docs/API.md for worker/network enforcement and identity limitations. |
-| 02 | Pending | Pending | Depends on 01 |
+| 01 | Merged | Issue #3 / PR #5 | Merged at `b1264b0`: canonical contracts, private SQLite migrations/recovery, owner-scoped offline APIs, CSRF/origin/access-code gate, persisted limits and reusable URL/DNS/scope policy. 420 offline tests, lint/types, production build and built-app HTTP smoke passed; zero cloud calls. Layer 02 carries the later test-only persisted-corruption regression from `12f1225` (421-test baseline). See docs/API.md for limitations. |
+| 02 | In progress | Issue #4 / PR pending | Controlled gift store, six independent broken/fixed fixtures, tab-local reset/isolation and offline production-browser regressions. See docs/DEMO.md for fixture signatures, goal/scope handoff and cloud reachability. No deployment or paid calls; no autonomous discovery claim. |
 | 03 | Pending | Pending | Gateway decision/viewport prototype is a gating technical risk |
 | 04 | Pending | Pending | Must prove leases, cancellation and budget accounting |
 | 05 | Pending | Pending | Backend functionality before visual polish |
