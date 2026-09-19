@@ -148,12 +148,18 @@ function harness(options: {
   data?: string;
   base64?: boolean;
   noEof?: boolean;
+  early?: "start" | "close";
 } = {}) {
   const session = new EventEmitter();
-  const close = vi.fn(async () => {});
+  const close = vi.fn(async () => {
+    if (options.early === "close") session.emit("Tracing.tracingComplete", { stream: "early" });
+  });
   const detach = vi.fn(async () => {});
   const send = vi.fn(async (method: string) => {
     if (method === "Tracing.start" && options.competing) throw new Error("already tracing");
+    if (method === "Tracing.start" && options.early === "start") {
+      session.emit("Tracing.tracingComplete", { stream: "early" });
+    }
     if (method === "Tracing.end") {
       queueMicrotask(() => session.emit("Tracing.tracingComplete", {
         stream: options.missingStream ? undefined : "owned", dataLossOccurred: !!options.loss,
@@ -200,9 +206,19 @@ describe("bounded refusal trace acquisition", () => {
     expect(fake.detach).toHaveBeenCalledOnce();
   });
 
+  it.each(["start", "close"] as const)("rejects completion during %s without stopping a subsequent unowned trace", async (early) => {
+    const fake = harness({ early });
+    await expect(verifyNativeProxyRefusal(fake.context, () => {})).rejects.toMatchObject({
+      message: "native_proxy_endpoint_unconfirmed",
+      cause: { message: `${early === "start" ? "trace_start" : "probe_close"}:native_proxy_trace_completed_early` },
+    });
+    expect(fake.send.mock.calls.some(([method]) => method === "Tracing.end" || method === "IO.read")).toBe(false);
+    expect(fake.detach).toHaveBeenCalledOnce();
+  });
+
   it.each([
     [{ competing: true }, "trace_start:unconfirmed"],
-    [{ data: "{}" }, "trace_validate:native_proxy_trace_rejected"],
+    [{ data: "{}" }, "trace_validate:native_proxy_trace_rejected:root_schema"],
     [{ missingStream: true }, "trace_complete:native_proxy_trace_unavailable"],
     [{ data: "private malformed trace contents" }, "trace_validate:unconfirmed"],
   ])("retains only constant phase and reason diagnostics", async (options, cause) => {

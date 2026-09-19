@@ -13,6 +13,50 @@ import { verifyNativeProxyRefusal } from "../../src/server/execution/native-prox
 import { connectNativeWorkerControl, type NativeWorkerControl } from "../../src/server/execution/native-worker-control";
 import { attachCdpTarget } from "../../src/server/execution/cdp-target";
 
+function observeLateTraceCompletion(context: BrowserContext) {
+  const browser = context.browser()!;
+  const createSession = browser.newBrowserCDPSession.bind(browser);
+  browser.newBrowserCDPSession = async () => {
+    const session = await createSession();
+    const send = session.send.bind(session);
+    const detach = session.detach.bind(session);
+    let owned = false;
+    let endedAt: number | undefined;
+    let completedAt: number | undefined;
+    const complete = new Promise<{ stream?: string }>((resolve) => {
+      session.once("Tracing.tracingComplete", (result) => {
+        completedAt = performance.now();
+        resolve(result);
+      });
+    });
+    session.send = async (method, params) => {
+      if (method === "Tracing.end" && owned) endedAt ??= performance.now();
+      const result = await send(method, params);
+      if (method === "Tracing.start") owned = true;
+      return result;
+    };
+    session.detach = async () => {
+      if (owned && endedAt !== undefined && completedAt === undefined) {
+        // Observe only after production verification has already failed. Its verdict is unchanged.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const result = await Promise.race([
+          complete, new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), 10000); }),
+        ]);
+        clearTimeout(timer);
+        console.log({
+          diagnostic: "owned_trace_completion_after_failed_verification",
+          completionObserved: completedAt !== undefined,
+          elapsedMs: completedAt === undefined ? null : Math.round(completedAt - endedAt),
+          browserConnected: browser.isConnected(),
+        });
+        if (result?.stream) await send("IO.close", { handle: result.stream });
+      }
+      await detach();
+    };
+    return session;
+  };
+}
+
 async function launch(options: { preferences?: object; tamper?: string; cdp?: boolean } = {}) {
   // Reserve only as a preflight: the attestation must observe an actual TCP refusal.
   const guard = createTcpServer();
@@ -59,6 +103,7 @@ async function launch(options: { preferences?: object; tamper?: string; cdp?: bo
       ],
     });
     context = await launchContext();
+    observeLateTraceCompletion(context);
     const worker = context.serviceWorkers()[0] ?? await context.waitForEvent("serviceworker");
     control = await connectNativeWorkerControl({ context, workerUrl: worker.url(), assertActive() {} });
     expect(await control.snapshot()).toMatchObject({ ready: false, phase: "bootstrap" });

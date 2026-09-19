@@ -11,53 +11,60 @@ const eventSchema = z.object({
   args: z.object({ params: z.record(z.string(), z.unknown()).optional(), source_type: z.string().optional() }),
 });
 
+class NativeProxyTraceError extends Error {
+  constructor(readonly reason: string) { super("native_proxy_trace_rejected"); }
+}
+
 /** Raw tracing data is discarded; callers may retain only this constant verdict. */
 export function assertNativeProxyRefusalTrace(value: unknown): "tcp_connection_refused" {
   const root = z.object({ traceEvents: z.array(z.unknown()).max(10000) }).safeParse(value);
-  if (!root.success) throw new Error("native_proxy_trace_rejected");
+  if (!root.success) throw new NativeProxyTraceError("root_schema");
   const connections = new Map<string, { stage: number; thread: number; timestamp: number }>();
   const seen = new Set<string>();
   const sequence = ["TCP_CONNECT:b", "TCP_CONNECT_ATTEMPT:b", "TCP_CONNECT_ATTEMPT:e", "TCP_CONNECT:e"];
   let cycles = 0;
   for (const item of root.data.traceEvents) {
-    if (!item || typeof item !== "object") throw new Error("native_proxy_trace_rejected");
+    if (!item || typeof item !== "object") throw new NativeProxyTraceError("record_type");
     const name: unknown = Reflect.get(item, "name");
     if (name !== "TCP_CONNECT" && name !== "TCP_CONNECT_ATTEMPT") continue;
     const parsed = eventSchema.safeParse(item);
-    if (!parsed.success) throw new Error("native_proxy_trace_rejected");
+    if (!parsed.success) throw new NativeProxyTraceError("event_schema");
     const event = parsed.data;
     const key = `${event.pid}/${event.id2.local}`;
     const connection = connections.get(key) ?? { stage: 0, thread: event.tid, timestamp: event.ts };
     connections.set(key, connection);
     const step = `${event.name}:${event.ph}`;
     const identity = `${key}/${event.tid}/${event.ts}/${step}`;
-    if (connections.size > 8 || seen.size >= 32 || seen.has(identity)
-      || connection.thread !== event.tid || event.ts < connection.timestamp
-      || sequence[connection.stage] !== step) throw new Error("native_proxy_trace_rejected");
+    if (connections.size > 8) throw new NativeProxyTraceError("source_limit");
+    if (seen.size >= 32) throw new NativeProxyTraceError("event_limit");
+    if (seen.has(identity)) throw new NativeProxyTraceError("duplicate_event");
+    if (connection.thread !== event.tid) throw new NativeProxyTraceError("changed_thread");
+    if (event.ts < connection.timestamp) throw new NativeProxyTraceError("backward_timestamp");
+    if (sequence[connection.stage] !== step) throw new NativeProxyTraceError("phase_order");
     seen.add(identity);
     connection.timestamp = event.ts;
     connection.stage = (connection.stage + 1) % sequence.length;
-    if (connection.stage === 0 && ++cycles > 8) throw new Error("native_proxy_trace_rejected");
+    if (connection.stage === 0 && ++cycles > 8) throw new NativeProxyTraceError("cycle_limit");
     const params = event.args.params;
-    if (event.args.source_type !== undefined && event.args.source_type !== "SOCKET") throw new Error("native_proxy_trace_rejected");
+    if (event.args.source_type !== undefined && event.args.source_type !== "SOCKET") throw new NativeProxyTraceError("source_type");
     if (event.ph === "e") {
-      if (params && Object.keys(params).length) throw new Error("native_proxy_trace_rejected");
+      if (params && Object.keys(params).length) throw new NativeProxyTraceError("end_parameters");
       continue;
     }
-    if (event.args.source_type !== "SOCKET" || !params) throw new Error("native_proxy_trace_rejected");
+    if (event.args.source_type !== "SOCKET" || !params) throw new NativeProxyTraceError("begin_parameters");
     if (event.name === "TCP_CONNECT") {
       if (params.net_error !== -102 || !Array.isArray(params.address_list)
         || params.address_list.length !== 1 || params.address_list[0] !== endpoint) {
-        throw new Error("native_proxy_trace_rejected");
+        throw new NativeProxyTraceError("connect_refusal");
       }
     } else {
       // ECONNREFUSED on the measured Darwin/Linux hosts; no reset/timeout success.
       if (params.address !== endpoint || (params.os_error !== 61 && params.os_error !== 111)) {
-        throw new Error("native_proxy_trace_rejected");
+        throw new NativeProxyTraceError("attempt_refusal");
       }
     }
   }
-  if (!cycles || [...connections.values()].some((connection) => connection.stage !== 0)) throw new Error("native_proxy_trace_rejected");
+  if (!cycles || [...connections.values()].some((connection) => connection.stage !== 0)) throw new NativeProxyTraceError("incomplete_sequence");
   return "tcp_connection_refused";
 }
 
@@ -77,11 +84,17 @@ export async function verifyNativeProxyRefusal(context: BrowserContext, assertAc
   let ended = false;
   let stream: string | undefined;
   let phase = "session";
+  let completeReceived = false;
+  let onComplete: ((result: { stream?: string; dataLossOccurred?: boolean }) => void) | undefined;
   try {
     assertActive();
     const browser = context.browser();
     if (!browser) throw new Error("native_proxy_trace_unavailable");
     tracing = await bounded(browser.newBrowserCDPSession());
+    const complete = new Promise<{ stream?: string; dataLossOccurred?: boolean }>((resolve) => {
+      onComplete = (result) => { completeReceived = true; resolve(result); };
+      tracing!.once("Tracing.tracingComplete", onComplete);
+    });
     // Chrome rejects a competing trace. Never stop a trace this caller did not start.
     phase = "trace_start";
     await bounded(tracing.send("Tracing.start", {
@@ -89,6 +102,7 @@ export async function verifyNativeProxyRefusal(context: BrowserContext, assertAc
       traceConfig: { recordMode: "recordUntilFull", includedCategories: ["netlog"] },
     }).then(() => { started = true; }));
     assertActive();
+    if (completeReceived) throw new Error("native_proxy_trace_completed_early");
     phase = "page";
     page = await bounded(context.newPage());
     phase = "navigation";
@@ -103,8 +117,8 @@ export async function verifyNativeProxyRefusal(context: BrowserContext, assertAc
     await bounded(page.close());
     page = undefined;
     assertActive();
+    if (completeReceived) throw new Error("native_proxy_trace_completed_early");
     phase = "trace_end";
-    const complete = new Promise<{ stream?: string; dataLossOccurred?: boolean }>((resolve) => tracing!.once("Tracing.tracingComplete", resolve));
     await bounded(tracing.send("Tracing.end"));
     ended = true;
     phase = "trace_complete";
@@ -130,16 +144,21 @@ export async function verifyNativeProxyRefusal(context: BrowserContext, assertAc
     assertActive();
   } catch (error) {
     const known = new Set(["native_proxy_trace_rejected", "native_proxy_attestation_timeout",
-      "native_proxy_trace_unavailable", "native_proxy_trace_limit", "native_proxy_endpoint_unconfirmed"]);
-    const reason = error instanceof Error && known.has(error.message) ? error.message : "unconfirmed";
+      "native_proxy_trace_unavailable", "native_proxy_trace_limit", "native_proxy_endpoint_unconfirmed",
+      "native_proxy_trace_completed_early"]);
+    const reason = error instanceof NativeProxyTraceError ? `${error.message}:${error.reason}`
+      : error instanceof Error && known.has(error.message) ? error.message : "unconfirmed";
     throw new Error("native_proxy_endpoint_unconfirmed", { cause: new Error(`${phase}:${reason}`) });
   } finally {
     try {
-      if (started && !ended && tracing) await bounded(tracing.send("Tracing.end"));
+      if (started && !ended && !completeReceived && tracing) await bounded(tracing.send("Tracing.end"));
       if (stream && tracing) await bounded(tracing.send("IO.close", { handle: stream }));
     } finally {
       try { await bounded(Promise.resolve(page?.close())); }
-      finally { await bounded(Promise.resolve(tracing?.detach())); }
+      finally {
+        if (onComplete && tracing) tracing.off("Tracing.tracingComplete", onComplete);
+        await bounded(Promise.resolve(tracing?.detach()));
+      }
     }
   }
 }
