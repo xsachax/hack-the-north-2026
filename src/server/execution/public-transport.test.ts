@@ -114,7 +114,7 @@ beforeAll(async () => {
   directory = mkdtempSync(join(tmpdir(), "ff-public-transport-"));
   execFileSync("openssl", [
     "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-    "-subj", "/CN=example.com", "-addext", "subjectAltName=DNS:example.com",
+    "-subj", "/CN=example.com", "-addext", "subjectAltName=DNS:example.com,IP:93.184.216.34,IP:2606:4700:4700::1111",
     "-keyout", join(directory, "key.pem"), "-out", join(directory, "cert.pem"),
   ], { stdio: "ignore" });
   state.ca = readFileSync(join(directory, "cert.pem"), "utf8");
@@ -418,6 +418,19 @@ describe("real owned TLS and hostile response framing", () => {
     await expect(transport().request({ ...input, url: "https://example.com/docs" }))
       .rejects.toMatchObject({ code: "unsafe_destination" });
     expect(state.dispatches).toHaveLength(1);
+  });
+  it.each(["93.184.216.34", "[2606:4700:4700::1111]"])("verifies an owned certificate IP SAN for %s without hostname SNI", async (host) => {
+    state.port = tlsPort;
+    expect((await transport().request({ ...input, url: `https://${host}/docs` })).status).toBe(200);
+    expect(state.dispatches[0].servername).toBe("");
+  });
+  it("rejects an untrusted certificate issuer, not only a mismatched hostname", async () => {
+    state.port = tlsPort;
+    const ca = state.ca;
+    state.ca = "";
+    try {
+      await expect(transport().request({ ...input, url: "https://example.com/docs" })).rejects.toMatchObject({ code: "network_failure" });
+    } finally { state.ca = ca; }
   });
   it.each([
     "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 2\r\n\r\nxx",
