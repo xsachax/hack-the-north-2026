@@ -258,8 +258,9 @@ stronger end-to-end proof. Browserbase domain restrictions cover main-frame
 navigation only. Admission DNS checks followed by `route.continue()` are
 insufficient for DNS rebinding and must not replace this gate.
 
-The next release requirement is a proven provider-enforced egress policy or
-mandatory authenticated proxy/firewall covering **all** browser connections,
+The next release requirement is a proven provider-enforced egress policy,
+mandatory authenticated proxy/firewall, or independently proved native browser
+policy covering **all supported** browser connections,
 with public-IP pinning per connection, redirects revalidated, scope checked
 for every request and unsupported channels denied outside page JavaScript.
 A server-side pinned HTTP(S) fulfillment client is a useful component but does
@@ -360,6 +361,128 @@ If no provider-supported no-bypass configuration exists, changing browser hostin
 and one-key Gateway compatibility is a product/infrastructure decision, not an
 unsafe opt-out. Until these inputs and real positive/negative proofs exist,
 `websiteExecutionEnabled` remains false and #1/#8 remain open.
+
+### Native browser policy candidate (offline Phase A)
+
+An external hosted proxy is **not assumed to be the only possible solution**.
+`src/server/execution/native-policy-extension/` is a maintained, isolated MV3
+probe, not a runtime capability or an opt-out from #8. Its native Chrome proxy
+settings send HTTP and HTTPS to an intentionally closed loopback endpoint and
+set an explicit SOCKS5 fallback for other proxy-supported URL schemes. The only
+bypass rule is `<-loopback>`, which subtracts Chromium's implicit localhost and
+link-local bypass. There is no `DIRECT`, PAC, system-proxy fallback, page route,
+CSP or JavaScript replacement providing this boundary.
+
+Installation reads back **both the exact value and `levelOfControl`** for proxy,
+`webRTCIPHandlingPolicy=disable_non_proxied_udp`, and
+`networkPredictionEnabled=false`. Competing/unavailable control fails readiness;
+later drift and nonfatal proxy errors latch a fault. Diagnostics are bounded
+fixed codes, not request URLs or bodies. The extension exposes no content
+script, host permission, page messaging, or web-accessible resource. This is
+not an operating-system firewall: the privileged Chrome host, extension
+installation and debugger remain trusted. Its in-memory readiness flag is
+not sufficient public admission.
+
+`npm run test:native-policy` uses Playwright 1.58.2's **full Chromium channel**,
+locally measured as `145.0.7632.6`, with no interception at all. Nine independent
+tests compare owned TCP/UDP listeners with policy-off positive controls:
+
+- HTTP navigation/redirect and localhost, encoded IPv4 and IPv4-mapped aliases;
+  fetch, image, frame/srcdoc, classic/module/shared/service workers and WS.
+- The same live classic/module/shared worker instances and an installed service
+  worker attempt fetches before and after native policy installation.
+- HTTPS navigation/redirect, fetch/image/frame and WSS; only the ephemeral test
+  certificate's SPKI is trusted. Production certificate checks are unchanged.
+- STUN UDP and TURN UDP/TCP in both page and srcdoc realms, and WebTransport
+  QUIC packets in page, classic/module/shared/service-worker realms. All four
+  worker kinds expose WebTransport in the measured build; each has a separate
+  owned UDP positive control and a zero-packet native-policy negative. Missing
+  API availability or missing positive packets in **any** claimed realm fails
+  acceptance as unsupported, never as successful native enforcement. The QUIC positive control
+  proves actual packets reach the listener, **not a completed WebTransport
+  session**. Its browser is closed before negatives to avoid counting unfinished
+  positive-handshake retransmissions as leakage.
+- A separate unused-origin preconnect TCP listener, and native enforcement while
+  the extension service worker is actually stopped and after it restarts
+  (CDP reports the stopped/running transitions).
+
+No destination TCP connection/UDP datagram is observed in the corresponding
+negative lanes. These are bounded regression observations, not proof about
+every channel or a different remote Chrome build. The separate Linux namespace
+suite and its run command are documented in [CI.md](CI.md). At implementation
+revision `be1c18f`, hosted Ubuntu 24.04 passed all nine native tests and the
+isolated namespace test on Chromium `145.0.7632.6`. The latter proves reachable
+owned private/link-local/IPv6 listeners and same-process, same-hostname DNS
+answer changes between `10.77.0.1` and `169.254.77.1`, with zero destination
+connections in the policy-enabled lanes. It deliberately clears native
+DNS/socket caches; natural TTL expiry, same-document rebinding and the future
+HTTP broker's per-connection DNS pinning are separate requirements. The initial
+`96137d4` namespace launch failed before any probe; shortening the private
+Chromium scratch path resolved startup in the accepted revision.
+Resolver DNS traffic
+is a distinct control-plane channel: Chrome explicitly documents that disabling
+prediction **does not disable page-initiated DNS-prefetch or preconnect**.
+Do not describe this candidate as suppressing all DNS traffic or protecting
+arbitrary secrets embedded in DNS names.
+
+Two implementation observations prevented false assurance. MV3 workers cannot
+use top-level await at entry, so bootstrap uses an explicitly caught async task.
+On this Chromium build, `fallbackProxy.scheme="http"` read back as `"socks4"`;
+the strict check correctly refused readiness. An explicit SOCKS5 fallback reads
+back exactly and still points only to the closed endpoint.
+
+Before any public integration, remaining gates include:
+
+1. Independently prove that the selected proxy endpoint is nonfunctional before
+   loading untrusted content. The local harness refuses an occupied port first.
+   Proxy-endpoint traffic is separate from the forbidden-destination listeners;
+   the candidate does not claim literally zero loopback packets. An answering
+   or forwarding endpoint must reject admission, not become an implicit proxy.
+2. Prove effective WebRTC routing in the actual provider configuration, including
+   any managed per-origin `WebRtcIPHandlingUrl` overrides. Global privacy
+   readback cannot rule those out. The maintained
+   `native-policy-attestation.ts` helper reads only the global preference and
+   override list from a temporary trusted `chrome://prefs-internals/` page,
+   rejects missing/unknown shapes and **any** per-origin entry, and closes the
+   page. It never returns or logs the whole profile. A paired owned-STUN test
+   reproduces the counterexample: the same controlled global preference blocks
+   UDP without an override, but a seeded matching `handling:"default"` entry
+   sends packets directly. Both profiles report API-only extension readiness;
+   the additional attestation rejects the unsafe profile. Repeated fresh
+   internal-page reads are covered. Provider support for this internal-page
+   check remains unproved; do not expose it to a model, artifact or live-view
+   grant. Chromium also exempts standalone extension
+   processes from WebRTC routing preferences; never expose an untrusted
+   page-to-privileged-extension network bridge.
+3. Establish native settings before loading any untrusted document, verify
+   worker/restart/disconnect behavior, and reject missing or changed enforcement.
+   Returning profiles are not a candidate public capability: restored tabs or
+   workers could run before the handshake.
+4. Prove the actual Browserbase build and extension packaging. The public SDK
+   2.20.0 API and [extension documentation](https://docs.browserbase.com/platform/browser/core-features/browser-extensions.md)
+   expose one `extensionId`, not an assumed array. The pinned Stagehand 4.1.0 ZIP
+   uses that slot. A minimal license-preserving repack would require its own
+   audited bootstrap, exact archive checks and real Gateway compatibility proof;
+   no archive is vendored or uploaded by this phase. Bounded inspection found no
+   page-to-worker messaging path in its isolated content script, not approval of
+   a future combined extension.
+5. Only after native enforcement holds, add a bounded server-side HTTP(S)
+   fulfillment transport with per-connection public-address validation/DNS pinning,
+   TLS/SNI validation, redirect/scope/method/byte/time limits and strict trusted
+   Gateway initiator identity. Interception supplies functionality; native policy
+   must still block traffic when interception misses a request or disconnects.
+   Preserve browser origin/cookie/CORS semantics and report unsupported channels
+   explicitly instead of fabricating successful responses.
+
+Sources: Chrome [proxy API](https://developer.chrome.com/docs/extensions/reference/api/proxy),
+[proxy rules and implicit bypasses](https://chromium.googlesource.com/chromium/src/+/HEAD/net/docs/proxy.md),
+and [privacy API](https://developer.chrome.com/docs/extensions/reference/api/privacy).
+The relevant upstream WebRTC routing implementation is pinned for inspection at
+Chromium commit `280c10305884862b0562f68e256cd23895fa4279`
+(`content/renderer/renderer_blink_platform_impl.cc`,
+`chrome/browser/renderer_preferences_util.cc`,
+`chrome/renderer/chrome_content_renderer_client.cc`). Source inspection informs
+test design; it is not substituted for the actual running build.
 
 ## Evidence privacy and diagnostics
 

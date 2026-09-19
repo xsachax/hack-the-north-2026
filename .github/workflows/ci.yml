@@ -67,6 +67,35 @@ jobs:
           RELEASE_PACKAGE_DIR="$PWD/data/release-package" npm run release:package-check
       # Private cookies, SQLite files, screenshots and traces are never uploaded.
 
+  native-policy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      BROWSERBASE_API_KEY: ""
+      BROWSERBASE_PROJECT_ID: ""
+      FLASH_FLOOD_ACCESS_CODE: ""
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1; Node 24
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0; Node 24
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Install pinned full Chromium and namespace tools
+        run: |
+          npx --no-install playwright install --with-deps chromium
+          sudo apt-get install -y iproute2 util-linux procps
+      - name: Native extension channel probes without interception
+        timeout-minutes: 3
+        run: npm run test:native-policy
+      - name: Isolated private addresses and actual DNS answer changes
+        timeout-minutes: 5
+        run: node node_modules/tsx/dist/cli.mjs scripts/native-policy-linux.ts --ci-sudo
+      # Owned sentinels only, no cloud credentials or uploaded browser artifacts.
+
   container:
     runs-on: ubuntu-24.04
     timeout-minutes: 20

@@ -5,6 +5,10 @@ explicit demo/controlled-site admission queues paid work for a separately runnin
 The operator dashboard consumes these owner-scoped endpoints; mock preview data
 is separate from durable worker execution.
 
+The offline [native egress policy candidate](EXECUTION.md#native-browser-policy-candidate-offline-phase-a)
+does not enable an API capability. Public `/runs` requests still terminate as
+`blocked_unsupported` without allocation; `/capabilities` remains truthful.
+
 ## Deployment and identity
 
 Use a persistent, single-host Node.js 22.18+ (22.x) process with `DATA_DIR` on a
