@@ -94,6 +94,9 @@ jobs:
       - name: Isolated private addresses and actual DNS answer changes
         timeout-minutes: 5
         run: node node_modules/tsx/dist/cli.mjs scripts/native-policy-linux.ts --ci-sudo
+      - name: Public transport sockets and DNS rebinding in isolated namespace
+        timeout-minutes: 3
+        run: node node_modules/tsx/dist/cli.mjs scripts/native-policy-linux.ts --ci-sudo --public-transport
       # Owned sentinels only, no cloud credentials or uploaded browser artifacts.
 
   container:
