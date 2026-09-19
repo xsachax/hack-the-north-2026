@@ -371,7 +371,7 @@ async function main() {
       if (!offlineRestartVerified) throw new Error("offline_genuine_resume_failed");
     } else if (!resume) {
       phase = "durable-worker";
-      await start(["--import", "tsx", "scripts/worker.ts", "--confirm-paid"], "worker");
+      await start(["--conditions=react-server", "--import", "tsx", "scripts/worker.ts", "--confirm-paid"], "worker");
       await wait(() => !["queued", "running"].includes(repository!.getRun(owner, runId).status), 390000);
     }
     phase = "persisted-report";

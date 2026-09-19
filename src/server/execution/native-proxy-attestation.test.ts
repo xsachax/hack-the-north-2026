@@ -187,6 +187,8 @@ describe("bounded refusal trace acquisition", () => {
     expect(fake.send).toHaveBeenCalledWith("IO.read", { handle: "owned", size: 65536 });
     expect(fake.send).toHaveBeenCalledWith("IO.close", { handle: "owned" });
     expect(fake.close).toHaveBeenCalledOnce();
+    const end = fake.send.mock.calls.findIndex(([method]) => method === "Tracing.end");
+    expect(fake.close.mock.invocationCallOrder[0]).toBeLessThan(fake.send.mock.invocationCallOrder[end]);
     expect(fake.detach).toHaveBeenCalledOnce();
   });
 

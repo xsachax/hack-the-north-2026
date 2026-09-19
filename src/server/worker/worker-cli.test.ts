@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { personas } from "../../lib/personas";
+import { demoCriteria } from "../../lib/demo-run";
 import { PUBLIC_ASSET_POLICY, PUBLIC_EXECUTION_POLICY } from "../../lib/public-execution";
 import { WorkerRepository } from "./repository";
 
@@ -23,7 +24,10 @@ beforeEach(() => {
       }
       return read.call(this, file, ...args);
     };
-    const deny = () => { throw Error('offline_network_forbidden'); };
+    const deny = () => {
+      fs.writeFileSync(${JSON.stringify(join(directory, "network-attempted"))}, "attempt");
+      throw Error('offline_network_forbidden');
+    };
     globalThis.fetch = deny;
     for (const module of ['node:http', 'node:https']) {
       require(module).request = deny; require(module).get = deny;
@@ -45,6 +49,77 @@ beforeEach(() => {
 afterEach(() => rmSync(directory, { recursive: true, force: true }));
 
 describe("maintained worker startup entrypoints (offline, no provider allocation)", () => {
+  it("cannot spend on queued controlled jobs with only the public operator flag enabled", () => {
+    const repository = new WorkerRepository(directory);
+    const database = new DatabaseSync(join(directory, "flash-flood.sqlite"));
+    try {
+      const owner = repository.createSession().ownerId;
+      repository.createDemoRun(owner, randomUUID(), {
+        authorizationAcknowledged: true, scenario: "fixed",
+        assignments: [{ personaId: personas[0].id, goal: "Read the cart", criteria: [demoCriteria[0]] }],
+      });
+      const before = database.prepare("SELECT * FROM jobs").all();
+      const usage = repository.accounting();
+      const result = spawnSync("npm", ["run", "worker", "--", "--confirm-paid"], {
+        env: {
+          PATH: process.env.PATH, NODE_ENV: "test", TSX_DISABLE_CACHE: "1", TMPDIR: directory,
+          NODE_OPTIONS: `--require ${JSON.stringify(guard)}`, NPM_CONFIG_UPDATE_NOTIFIER: "false",
+          DATA_DIR: directory, ENABLE_PUBLIC_RUNS: "true", ENABLE_DEMO_RUNS: "false",
+          BROWSERBASE_API_KEY: "test", BROWSERBASE_PROJECT_ID: randomUUID(),
+        },
+        encoding: "utf8", timeout: 20000,
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("worker_failed_check_private_configuration_and_database");
+      expect(`${result.stdout}${result.stderr}`).not.toMatch(/Client Component|worker_ready/);
+      expect(existsSync(join(directory, "network-attempted"))).toBe(false);
+      expect(database.prepare("SELECT * FROM jobs").all()).toEqual(before);
+      expect(repository.accounting()).toEqual(usage);
+      expect(database.prepare("SELECT count(*) AS n FROM launches").get()?.n).toBe(0);
+    } finally { database.close(); repository.close(); }
+  });
+
+  it.each(["worker", "controlled", "ui", "report"])("runs the maintained %s harness worker argv with its server-only condition", (name) => {
+    const source = readFileSync(join(process.cwd(), "scripts", `${name}-integration.ts`), "utf8");
+    const matches = [...source.matchAll(/\[("[^\n\]]*"scripts\/worker\.ts"[^\n\]]*)\]/g)];
+    expect(matches).toHaveLength(1);
+    const args: unknown = JSON.parse(`[${matches[0][1]}]`);
+    if (!Array.isArray(args) || !args.every((value): value is string => typeof value === "string")) {
+      throw new Error("maintained_worker_argv_rejected");
+    }
+    expect(args).toContain("--conditions=react-server");
+    const result = spawnSync(process.execPath, ["--require", guard, ...args], {
+      env: {
+        PATH: process.env.PATH, NODE_ENV: "test", TSX_DISABLE_CACHE: "1", TMPDIR: directory,
+        DATA_DIR: directory, ENABLE_PUBLIC_RUNS: "true", ENABLE_DEMO_RUNS: "false",
+        BROWSERBASE_API_KEY: "test", BROWSERBASE_PROJECT_ID: randomUUID(),
+      },
+      encoding: "utf8", timeout: 20000,
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("worker_failed_check_private_configuration_and_database");
+    expect(`${result.stdout}${result.stderr}`).not.toMatch(/Client Component|server-only.*Error|worker_ready/);
+    expect(existsSync(join(directory, "network-attempted"))).toBe(false);
+  });
+
+  it("still requires fixture readiness after explicit controlled-worker authorization", () => {
+    const result = spawnSync(process.execPath, [
+      "--conditions=react-server", "--require", guard, "--import", "tsx", "scripts/worker.ts", "--confirm-paid",
+    ], {
+      env: {
+        PATH: process.env.PATH, NODE_ENV: "test", TSX_DISABLE_CACHE: "1", TMPDIR: directory,
+        DATA_DIR: directory, ENABLE_PUBLIC_RUNS: "false", ENABLE_DEMO_RUNS: "true",
+        BROWSERBASE_API_KEY: "test", BROWSERBASE_PROJECT_ID: randomUUID(),
+      },
+      encoding: "utf8", timeout: 20000,
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("worker_failed_check_private_configuration_and_database");
+    expect(result.stdout).not.toContain("worker_ready");
+    expect(existsSync(join(directory, "network-attempted"))).toBe(true);
+    expect(existsSync(join(directory, "flash-flood.sqlite"))).toBe(false);
+  });
+
   it.each(["worker", "worker:reconcile"] as const)("runs %s through configuration validation under react-server", (script) => {
     const result = spawnSync("npm", ["run", script, "--",
       ...(script === "worker" ? ["--confirm-paid"] : ["--confirm-release", randomUUID()])], {

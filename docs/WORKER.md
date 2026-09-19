@@ -139,6 +139,11 @@ external baseline.
 | `ENABLE_DEMO_RUNS` | false | Required for demo/registered-site API admission and ordinary paid worker CLI |
 | `ENABLE_PUBLIC_RUNS` | false | Cannot enable public execution at this offline checkpoint; the immutable source-level readiness stop overrides this flag |
 
+The checkpoint worker always requires `ENABLE_DEMO_RUNS=true` plus
+`--confirm-paid` and a healthy controlled fixture source. The public flag cannot
+substitute for this paid-execution gate. All maintained harness worker subprocesses
+pass Node's `--conditions=react-server`; they retain the server-only import guard.
+
 Explicit environment settings override worker defaults; `.env.example` keeps
 the existing shorter 120-second timeout and 12-step setting. For coupon journeys
 use 240 seconds and 14 steps/model calls as in the bounded rehearsal.

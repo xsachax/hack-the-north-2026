@@ -10,20 +10,18 @@ nextEnv.loadEnvConfig(process.cwd());
 
 async function main() {
   if (process.argv.slice(2).join(" ") !== "--confirm-paid" ||
-    (process.env.ENABLE_DEMO_RUNS !== "true" && process.env.ENABLE_PUBLIC_RUNS !== "true")) {
+    process.env.ENABLE_DEMO_RUNS !== "true") {
     throw new Error("worker_requires_explicit_paid_confirmation");
   }
   const policy = readWorkerPolicy(process.env);
   const config = { ...readConfig(process.env), SESSION_TIMEOUT_SECONDS: policy.sessionSeconds };
   const port = z.coerce.number().int().min(1).max(65535).parse(process.env.FIXTURE_PORT ?? 4321);
   const shutdownMs = z.coerce.number().int().min(10000).max(120000).parse(process.env.WORKER_SHUTDOWN_MS ?? 60000);
-  if (process.env.ENABLE_DEMO_RUNS === "true") {
-    const fixture = await fetch(`http://127.0.0.1:${port}/demo/category/home`, {
-      signal: AbortSignal.timeout(5000), redirect: "error",
-    });
-    if (!fixture.ok) throw new Error("fixture_source_unavailable");
-    await fixture.body?.cancel();
-  }
+  const fixture = await fetch(`http://127.0.0.1:${port}/demo/category/home`, {
+    signal: AbortSignal.timeout(5000), redirect: "error",
+  });
+  if (!fixture.ok) throw new Error("fixture_source_unavailable");
+  await fixture.body?.cancel();
   const repository = new WorkerRepository(config.DATA_DIR, policy);
   const controller = new AbortController();
   let deadline: ReturnType<typeof setTimeout> | undefined;

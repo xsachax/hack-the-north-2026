@@ -34,6 +34,8 @@ Local composed probes have also exhibited intermittent, fail-closed
 their cause is unresolved.
 Passing offline reruns are not hosted startup-reliability proof. The checkpoint
 does not relax refusal evidence, widen its deadlines or add automatic retries.
+Refusal acquisition closes its finished owned probe page before ending the trace;
+failure diagnostics retain only constant phase/reason codes, never raw NetLog.
 
 Deferred work includes a reviewed supported SDK connection/termination lifecycle,
 settlement of inner HTTP retries before recycling metadata ports, actual hosted

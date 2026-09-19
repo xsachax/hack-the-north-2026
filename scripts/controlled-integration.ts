@@ -148,7 +148,7 @@ async function main() {
       }],
     }));
     runId = run.id;
-    const worker = spawn(process.execPath, ["--import", "tsx", "scripts/worker.ts", "--confirm-paid"], { env, stdio: "ignore" });
+    const worker = spawn(process.execPath, ["--conditions=react-server", "--import", "tsx", "scripts/worker.ts", "--confirm-paid"], { env, stdio: "ignore" });
     children.push(worker);
     const deadline = Date.now() + 390000;
     while (Date.now() < deadline) {

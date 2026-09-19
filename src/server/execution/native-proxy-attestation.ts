@@ -99,6 +99,10 @@ export async function verifyNativeProxyRefusal(context: BrowserContext, assertAc
       refused = error instanceof Error && /^page\.goto: net::ERR_PROXY_CONNECTION_FAILED at https:\/\/example\.com\/(?:\n|$)/.test(error.message);
     }
     assertActive();
+    phase = "probe_close";
+    await bounded(page.close());
+    page = undefined;
+    assertActive();
     phase = "trace_end";
     const complete = new Promise<{ stream?: string; dataLossOccurred?: boolean }>((resolve) => tracing!.once("Tracing.tracingComplete", resolve));
     await bounded(tracing.send("Tracing.end"));
