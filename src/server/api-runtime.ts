@@ -2,6 +2,7 @@ import "server-only";
 import { createApi, validateApiConfiguration } from "./api";
 import { Repository } from "./repository";
 import { readWorkerPolicy, workerExecutionLimits } from "./worker/config";
+import { createBrowserbaseReplayProvider, createReplayAdapter } from "./reports/replay";
 
 let handler: ReturnType<typeof createApi> | undefined;
 export async function handleApi(request: Request): Promise<Response> {
@@ -16,9 +17,15 @@ export async function handleApi(request: Request): Promise<Response> {
         executionLimits: workerExecutionLimits(readWorkerPolicy(process.env)),
       };
       validateApiConfiguration(configuration);
+      const segmentOrigins = (process.env.BROWSERBASE_REPLAY_ORIGINS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+      if (segmentOrigins.length > 8) throw new Error("replay_origin_limit");
       handler = createApi({
         repository: new Repository(process.env.DATA_DIR ?? "./data"),
         configuration,
+        reportSecrets: [process.env.BROWSERBASE_API_KEY ?? "", process.env.FLASH_FLOOD_ACCESS_CODE ?? ""].filter(Boolean),
+        replay: process.env.BROWSERBASE_API_KEY ? createReplayAdapter({
+          provider: createBrowserbaseReplayProvider(process.env.BROWSERBASE_API_KEY), segmentOrigins,
+        }) : undefined,
       });
     }
     return await handler(request);

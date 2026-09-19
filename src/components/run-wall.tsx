@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { Attempt, Evidence, RunEvent } from "@/lib/contracts";
-import { criterionDescription, criterionKey } from "@/lib/criteria";
+import { criterionDescription, criterionKey, criterionStatus } from "@/lib/criteria";
 import { api, ApiError } from "@/lib/client-api";
 import type { AttemptSummary } from "@/lib/ui-contracts";
 import {
@@ -40,6 +40,7 @@ function AttemptCard({ attempt, events, summary, viewer, canView, atCapacity, st
       <span className={`wall-badge wall-status-${attempt.status}`}>{label(attempt.status)}</span>
     </header>
     <p className="wall-goal">{attempt.goal}</p>
+    <Link className="wall-evidence-link" href={`/runs/${encodeURIComponent(attempt.runId)}/reports?attempt=${encodeURIComponent(attempt.id)}`}>View agent report & evidence</Link>
     <div className="wall-now">
       <span className="wall-kicker">CURRENT ACTIVITY</span>
       <strong>{quiet ? recovering ? "Recovery / cleanup" : stopping && !isTerminal(attempt.status) ? "Cancellation requested" : label(attempt.status)
@@ -68,7 +69,7 @@ function AttemptCard({ attempt, events, summary, viewer, canView, atCapacity, st
       <summary>Criteria & evidence · {attempt.criteria.length}</summary>
       <ul>{attempt.criteria.map((criterion) => {
         const check = summary?.summary?.checks.find((item) => item.criterion === criterionKey(criterion) || item.criterion === criterionDescription(criterion));
-        const status = check?.status ?? (check ? check.passed ? "met" : "not_met" : "not_observed");
+        const status = criterionStatus(check);
         return <li key={criterionKey(criterion)}>
           <span className={`wall-check wall-check-${status}`}>{label(status)}</span>
           <strong>{criterionDescription(criterion)}</strong>
@@ -155,7 +156,7 @@ export function RunWall({ runId }: { runId: string }) {
   return <main className="run-wall">
     <header className="wall-topbar">
       <Link href="/" className="wall-brand"><span aria-hidden="true">↗</span> flash flood</Link>
-      <nav aria-label="Run navigation"><Link href="/">New run</Link><span>OWNER-ONLY WALL</span></nav>
+      <nav aria-label="Run navigation"><Link href={`/runs/${encodeURIComponent(runId)}/reports`}>Reports</Link><Link href="/">New run</Link><span>OWNER-ONLY WALL</span></nav>
     </header>
     <section className="wall-intro">
       <div><p className="wall-kicker">REAL BROWSERS. PERSISTED EVIDENCE.</p><h1>Your users,<br /><span>in the wild.</span></h1>
@@ -207,8 +208,9 @@ export function RunWall({ runId }: { runId: string }) {
     </section>
     {(evidence || evidenceMessage) && <section className="wall-evidence" aria-label="Private evidence metadata" aria-live="polite">
       <h2>Evidence metadata</h2>{evidenceMessage && <p>{evidenceMessage}</p>}
-      {evidence && <><p>{evidence.kind} · <time dateTime={evidence.createdAt}>{time(evidence.createdAt)}</time></p><code>{evidence.id}</code><p>{evidence.summary}</p></>}
-      <p>Metadata only. Protected artifact downloads and replay are not available here.</p>
+      {evidence && <><p>{evidence.kind} · <time dateTime={evidence.createdAt}>{time(evidence.createdAt)}</time></p><code>{evidence.id}</code><p>{evidence.summary}</p>
+        <Link href={`/runs/${encodeURIComponent(runId)}/reports?attempt=${encodeURIComponent(evidence.attemptId)}&evidence=${encodeURIComponent(evidence.id)}`}>Open this evidence in reports</Link></>}
+      <p>Metadata only here. Open reports to inspect protected artifacts and recording availability.</p>
       <button onClick={() => { evidenceRequest.current++; setEvidence(null); setEvidenceMessage(null); }}>Close evidence</button>
     </section>}
     <footer className="wall-footer"><span>Private by default. No viewer links are saved locally.</span><span>Infrastructure failure is not a target bug.</span></footer>

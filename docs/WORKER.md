@@ -198,7 +198,11 @@ exclusive monotonic cursors and reconnect. Use JSON event pagination for older
 history. The wall obtains live-view metadata only from the protected
 `/runs/:id/sessions` route; no API key or CDP URL is returned. Live-view URLs are
 access-bearing: never persist them in analytics, public logs or shared reports.
-Protected evidence download and replay delivery remain later-layer work.
+Layer06 adds protected evidence detail/downloads and report projections from
+these durable records; see [REPORTS.md](REPORTS.md) and [REPLAY.md](REPLAY.md).
+The recording integration binds each private provider session ID to its actual
+job and rechecks the run/attempt owner on every request. Report construction
+does not alter worker results, acquire leases, allocate browsers or call a model.
 
 ## Launch UI and live wall (layer 05)
 
@@ -278,6 +282,108 @@ lost-response replay, owner changes, cancellation/recovery/quarantine, stream
 gaps, same-owner reauthorization, and terminal-history summary races.
 
 ## Verification and paid rehearsal
+
+### Layer06 report rehearsal
+
+`npm run report:integration -- --offline-preflight` exercises the protected
+report/export path without a provider call. The separately authorized
+`npm run report:integration -- --confirm-paid` uses a genuine new owner session
+and one controlled project-board assignment, with a 300-second TTL, at most two
+concurrent browsers, a 944-second external baseline, and a **1,200-second lifetime
+cumulative reservation cap** under private `data/report-rehearsal`. Failed
+attempts count; refunds never replenish this cap. Do not remove the database or
+ledger to regain allocation.
+
+Fresh rehearsals save only the genuine opaque owner cookie and its run binding
+in `owner-resume.json` inside the private invocation directory (mode 600,
+directory 700, maximum 8 KiB, no symlinks, nonrenewing 15-minute deadline). After a
+downstream failure or a pending recording, use
+`npm run report:integration -- --resume <original-invocation-UUID>`.
+This starts only the local app, proxy and browser: it cannot create/cancel a run,
+start a worker or reserve another cloud session. It verifies the actual saved
+owner session, run, settled launch, exact remote closure and unchanged lifetime
+ledger before readback. It never invents or reassigns ownership.
+
+The credential file is deleted after successful playback, or when an expired or
+invalid state is read. If an operator stops with an explicit recording fallback,
+remove that invocation's `owner-resume.json` immediately rather than retaining
+credentials unnecessarily. The 15-minute harness deadline does not revoke the
+underlying application session. Never copy this file to logs, browser storage
+exports, public artifacts or CI. The offline preflight proves genuine-owner
+restoration across a local app/browser restart on an isolated cancelled run,
+with no worker, provider calls or reservations.
+
+The proof must verify actual report citations, protected screenshot content,
+persisted action/evidence relationships, safe exports and the exact correlated
+remote session set. Recording readback has its own bounded attempts; processing
+or unavailable recordings do not justify another browser allocation. Existing
+closed-session artifacts can support operator-authorized provider readback, but
+cannot serve as an authenticated owner proof if the original opaque owner cookie
+was intentionally discarded. Never mint or reassign ownership to manufacture
+that proof. All screenshots, detailed manifests, TLS material and provider
+identifiers remain ignored private data, not CI uploads.
+
+The first layer06 mission succeeded with one action and one decision, but its
+downstream acceptance harness stopped before replay: it incorrectly required
+`Cache-Control` to equal `no-store` instead of accepting the artifact reader's
+stronger `private, no-store, max-age=0` directive set. This assertion rejected
+valid production headers; that attempt did not establish byte-level screenshot
+delivery. The regression now checks the actual artifact response's cache
+directives, safe MIME, attachment disposition and `nosniff`; it does not weaken
+the production response.
+
+That failed rehearsal still counts: **20.548 actual browser seconds / 300
+non-refundable reserved seconds**, 21 whole seconds charged and 279 released,
+4,143 prompt / 275 completion tokens, zero semantic/retry calls. Its exact
+persisted session set was independently remotely `COMPLETED`; all jobs and
+launches settled and the owned processes/lock stopped. No recording reads were
+attempted. Its owner cookie was not retained, so it cannot be repurposed as an
+authenticated replay proof by modifying ownership.
+
+### Layer06 accepted proof (2026-09-19)
+
+After the header regression and resumable offline preflight passed, the second
+mission completed the end-to-end owner API -> durable worker -> Browserbase ->
+persisted report -> protected evidence/export -> protected HLS path. It opened
+the project list without editing, with one decision and one action. The report
+matched the actual criterion observation, step, timeline and registered evidence;
+the downloaded PNG matched the persisted file byte-for-byte. Anonymous/foreign
+access failed, and refresh plus desktop/mobile navigation preserved the report.
+
+The recording was `ready` on one explicit metadata check. Keyboard-started
+playback advanced from 0 to 3.898913 seconds, decoded 119 frames at 1280x900, and
+produced 4,096 opaque sampled pixels with 15 distinct quantized colors. The
+35,573-byte private frame capture showed the real project board. One playlist
+and three media responses used only protected same-origin paths; no signed
+provider URLs reached the browser. No replacement mission or resume allocation
+was needed for recording readiness.
+
+| Rehearsal | Acceptance | Actual browser seconds | Lifetime reservation | Prompt / completion tokens |
+| --- | --- | --- | --- | --- |
+| First | Mission succeeded; downstream header assertion failed | 20.548 | 300 | 4,143 / 275 |
+| Second | Report, evidence, exports and decoded playback passed | 20.218 | 300 | 4,162 / 289 |
+| Total | Both exact remote sessions independently `COMPLETED` | **40.766** | **600 of 1,200** | **8,305 / 564** |
+
+The ledger charged 42 whole seconds and released 558; the non-refundable lifetime
+reservation remains 600. There were two decision calls and zero semantic/retry
+calls; reporting and replay made no inference calls. Peak browser concurrency
+was one, with TTL 300. Project-wide provider counters are not an invoice.
+The tracked project actual is now **984.674 seconds**; later manual layers
+should use a rounded-up external baseline of 985, without changing this proof's
+944-second policy.
+
+Both exact correlated session references were reread remotely as `COMPLETED`.
+There are no queued/leased jobs or unsettled launches. The app, worker, proxy and
+browser stopped, ports 4325/4326 were verified released, and the lock and every
+resumption credential file were removed. Private desktop/mobile report,
+evidence and decoded-recording captures were inspected and remain ignored;
+none were published. The separate earlier seven-read investigation allocated
+zero browsers and is not counted as another mission.
+
+Local acceptance passes **1,630 unit/API tests and 86 Chromium E2E tests**, lint,
+types, production build, actual HTTPS/SSE/report/export smoke and the authentic
+zero-allocation restart/resume preflight. Focused independent reviews cleared
+the final report provenance/classification and protected recording boundaries.
 
 Ordinary CI runs `npm run check`, build, HTTP smoke and Chromium E2E with no paid
 credentials. SQLite process tests compete on one actual WAL database, kill a

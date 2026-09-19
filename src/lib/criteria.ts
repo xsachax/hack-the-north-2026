@@ -62,3 +62,8 @@ export const criterionCheckSchema = z.strictObject({
 }).refine((check) => check.status === undefined || check.passed === (check.status === "met"),
   "Canonical status must agree with passed");
 export type CriterionCheck = z.infer<typeof criterionCheckSchema>;
+export function criterionStatus(check?: Pick<CriterionCheck, "status" | "passed" | "evidence">) {
+  if (check?.status) return check.status;
+  if (!check || (!check.passed && !check.evidence.trim())) return "not_observed" as const;
+  return check.passed ? "met" as const : "not_met" as const;
+}

@@ -1,0 +1,12 @@
+.recording-evidence { margin-top: 2rem; padding: 1.25rem; border: 1px solid #d7d3cb; border-radius: 1rem; background: #f7f5f0; color: #202421; }
+.recording-evidence h3 { margin: 0 0 .75rem; }
+.recording-evidence p { max-width: 80ch; line-height: 1.5; overflow-wrap: anywhere; }
+.recording-evidence label { display: flex; align-items: center; gap: .6rem; line-height: 1.5; }
+.recording-evidence input[type="checkbox"] { width: 1.15rem; height: 1.15rem; flex: none; }
+.recording-actions { display: flex; gap: .75rem; flex-wrap: wrap; margin-top: 1rem; }
+.recording-evidence button, .recording-evidence select { border: 1px solid #27483a; border-radius: .5rem; padding: .65rem .9rem; background: white; color: #183c2b; min-height: 44px; }
+.recording-evidence button:disabled { opacity: .55; cursor: not-allowed; }
+.recording-evidence :focus-visible { outline: 3px solid #ce6c30; outline-offset: 3px; }
+.recording-evidence a { color: #244e3c; text-decoration: underline; }
+.recording-evidence video { display: block; margin-top: 1rem; width: 100%; max-height: 70vh; background: #171c19; border-radius: .5rem; }
+.recording-evidence [role="alert"] { color: #8b2420; border-left: 3px solid; padding-left: .75rem; }

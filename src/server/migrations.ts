@@ -126,4 +126,26 @@ export const migrations = [
   ALTER TABLE runs ADD COLUMN controlled_site_id TEXT
     CHECK(controlled_site_id IN ('store','project-board'));
   `,
+  `
+  CREATE TABLE report_snapshots (
+    run_id TEXT PRIMARY KEY REFERENCES runs(id),
+    revision TEXT NOT NULL,
+    report TEXT NOT NULL CHECK(json_valid(report))
+  );
+  CREATE TABLE browser_session_bindings (
+    session_id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL REFERENCES jobs(id)
+  );
+  INSERT INTO browser_session_bindings(session_id,job_id)
+    SELECT json_extract(session_reference,'$.sessionId'),job_id FROM launches
+    WHERE session_reference IS NOT NULL;
+  CREATE TABLE replay_grants (
+    owner_id TEXT NOT NULL REFERENCES owners(id),
+    attempt_id TEXT NOT NULL REFERENCES attempts(id),
+    session_id TEXT NOT NULL REFERENCES browser_session_bindings(session_id),
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at INTEGER NOT NULL,
+    PRIMARY KEY(owner_id,attempt_id)
+  );
+  `,
 ] as const;

@@ -35,11 +35,30 @@ describe("private immutable execution artifacts", () => {
       key: first.key, kind: "screenshot", bytes: bytes.length,
       sha256: createHash("sha256").update(bytes).digest("hex"),
     });
+
     expect(readFileSync(join(attemptPath(), first.key))).toEqual(bytes);
     for (const path of [dir, join(dir, "execution"), join(dir, "execution", runId), attemptPath()])
       expect(statSync(path).mode & 0o777).toBe(0o700);
     expect(statSync(join(attemptPath(), first.key)).mode & 0o777).toBe(0o600);
     expect(readdirSync(attemptPath()).sort()).toEqual([first.key, second.key].sort());
+  });
+
+  it("retains safe network context in a validated telemetry batch without exposing query credentials", async () => {
+    const result = await writer.writeJson(runId, attemptId, { telemetry: [telemetry({
+      kind: "slow_request", code: "SLOW_REQUEST", durationMs: 1500,
+      url: "https://example.com/assets/catalog?token=secret#private",
+    })] });
+    expect(JSON.parse(readFileSync(join(attemptPath(), result.key), "utf8"))).toEqual({
+      telemetry: [telemetry({ kind: "slow_request", code: "SLOW_REQUEST", durationMs: 1500, url: "https://example.com/assets/catalog" })],
+    });
+    const malicious = await writer.writeJson(runId, attemptId, { telemetry: [{
+      ...telemetry({ kind: "slow_request", code: "CUSTOM_SECRET", url: "https://example.com/password/known-secret" }),
+    }] });
+    const stored = readFileSync(join(attemptPath(), malicious.key), "utf8");
+    expect(stored).not.toContain("known-secret");
+    expect(stored).not.toContain("CUSTOM_SECRET");
+    expect(stored).not.toContain("password");
+    expect(JSON.parse(stored).telemetry[0].code).toBe("SLOW_REQUEST");
   });
 
   it("bounds concurrent files across separate writer instances", async () => {
