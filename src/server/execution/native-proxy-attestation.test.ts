@@ -149,6 +149,8 @@ function harness(options: {
   base64?: boolean;
   noEof?: boolean;
   early?: "start" | "close";
+  completionDelay?: number;
+  stalledStart?: boolean;
 } = {}) {
   const session = new EventEmitter();
   const close = vi.fn(async () => {
@@ -156,14 +158,17 @@ function harness(options: {
   });
   const detach = vi.fn(async () => {});
   const send = vi.fn(async (method: string) => {
+    if (method === "Tracing.start" && options.stalledStart) return new Promise(() => {});
     if (method === "Tracing.start" && options.competing) throw new Error("already tracing");
     if (method === "Tracing.start" && options.early === "start") {
       session.emit("Tracing.tracingComplete", { stream: "early" });
     }
     if (method === "Tracing.end") {
-      queueMicrotask(() => session.emit("Tracing.tracingComplete", {
+      const complete = () => session.emit("Tracing.tracingComplete", {
         stream: options.missingStream ? undefined : "owned", dataLossOccurred: !!options.loss,
-      }));
+      });
+      if (options.completionDelay !== undefined) setTimeout(complete, options.completionDelay);
+      else queueMicrotask(complete);
     }
     if (method === "IO.read") {
       const data = options.data ?? JSON.stringify({ traceEvents: evidence() });
@@ -187,6 +192,72 @@ function harness(options: {
 }
 
 describe("bounded refusal trace acquisition", () => {
+  it.each([5000, 5200])("accepts a complete valid trace after the measured %sms flush", async (completionDelay) => {
+    vi.useFakeTimers();
+    try {
+      const fake = harness({ completionDelay });
+      const result = expect(verifyNativeProxyRefusal(fake.context, () => {})).resolves.toBeUndefined();
+      await vi.advanceTimersByTimeAsync(completionDelay);
+      await result;
+      expect(fake.send).toHaveBeenCalledWith("IO.close", { handle: "owned" });
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it("still rejects incomplete collection at its fixed 7.5 second deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = harness({ completionDelay: 7501 });
+      const result = expect(verifyNativeProxyRefusal(fake.context, () => {})).rejects.toMatchObject({
+        cause: { message: "trace_complete:native_proxy_attestation_timeout" },
+      });
+      await vi.advanceTimersByTimeAsync(7500);
+      await result;
+      expect(fake.send.mock.calls.some(([method]) => method === "IO.read")).toBe(false);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it.each([{ loss: true }, { data: "{}" }, { navigation: "success" as const }])("keeps delayed invalid evidence fail-closed", async (options) => {
+    vi.useFakeTimers();
+    try {
+      const fake = harness({ ...options, completionDelay: 5200 });
+      const result = expect(verifyNativeProxyRefusal(fake.context, () => {}))
+        .rejects.toThrow("native_proxy_endpoint_unconfirmed");
+      await vi.advanceTimersByTimeAsync(5200);
+      await result;
+      expect(fake.detach).toHaveBeenCalledOnce();
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it("retains the three-second bound on ordinary CDP commands", async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = harness({ stalledStart: true });
+      const result = expect(verifyNativeProxyRefusal(fake.context, () => {})).rejects.toMatchObject({
+        cause: { message: "trace_start:native_proxy_attestation_timeout" },
+      });
+      await vi.advanceTimersByTimeAsync(3000);
+      await result;
+      expect(fake.newPage).not.toHaveBeenCalled();
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it("fences cancellation during trace flush without waiting for its completion deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = harness({ completionDelay: 5200 });
+      let active = true;
+      const result = expect(verifyNativeProxyRefusal(fake.context, () => {
+        if (!active) throw new Error("cancelled");
+      })).rejects.toThrow("native_proxy_endpoint_unconfirmed");
+      await vi.advanceTimersByTimeAsync(1000);
+      active = false;
+      await vi.advanceTimersByTimeAsync(25);
+      await result;
+      expect(fake.detach).toHaveBeenCalledOnce();
+      expect(fake.send.mock.calls.some(([method]) => method === "IO.read")).toBe(false);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
   it.each([false, true])("discards the owned stream and closes resources (base64=%s)", async (base64) => {
     const fake = harness({ base64 });
     await expect(verifyNativeProxyRefusal(fake.context, () => {})).resolves.toBeUndefined();

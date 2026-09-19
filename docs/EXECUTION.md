@@ -29,13 +29,20 @@ prototypes and are not wired into that factory. A successful SDK extraction test
 with synthetic Gateway responses does not establish production WSS startup,
 failure cleanup or a genuine external objective.
 
-Local composed probes have also exhibited intermittent, fail-closed
-`native_proxy_endpoint_unconfirmed` and native-worker CDP readiness timeouts;
-their cause is unresolved.
-Passing offline reruns are not hosted startup-reliability proof. The checkpoint
-does not relax refusal evidence, widen its deadlines or add automatic retries.
-Refusal acquisition closes its finished owned probe page before ending the trace;
-failure diagnostics retain only constant phase/reason codes, never raw NetLog.
+Actual Linux diagnostics measured stopped-trace completion at 5.018–5.145 seconds,
+after the former generic three-second wait had already failed. Trace completion
+now has a dedicated 7.5-second budget; ordinary CDP commands retain their
+three-second bound, and the longer wait checks cancellation/lease validity every
+25 ms. Refusal/TCP evidence, data-loss rejection and byte/event limits are
+unchanged; no retry is added. Refusal acquisition closes its finished owned probe
+before ending the trace and rejects unexpected early completion. Diagnostics
+retain only constant phase/reason codes, never raw NetLog.
+
+Local composed probes have also exhibited native-worker CDP readiness timeouts
+and a strict trace-format rejection whose causes remain unresolved. Offline
+results are not hosted startup-reliability proof. Native-only channel tests now
+require a single owned-sentinel refusal before starting the negative lane:
+`chrome.proxy.settings.set()` completion alone is not a network-service barrier.
 
 Deferred work includes a reviewed supported SDK connection/termination lifecycle,
 settlement of inner HTTP retries before recycling metadata ports, actual hosted

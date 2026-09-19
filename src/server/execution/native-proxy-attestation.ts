@@ -68,13 +68,17 @@ export function assertNativeProxyRefusalTrace(value: unknown): "tcp_connection_r
   return "tcp_connection_refused";
 }
 
-async function bounded<T>(work: Promise<T>, milliseconds = 3000): Promise<T> {
+async function bounded<T>(work: Promise<T>, milliseconds = 3000, assertActive?: () => void): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let fence: ReturnType<typeof setInterval> | undefined;
   try {
     return await Promise.race([work, new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error("native_proxy_attestation_timeout")), milliseconds);
+      if (assertActive) fence = setInterval(() => {
+        try { assertActive(); } catch (error) { reject(error); }
+      }, 25);
     })]);
-  } finally { clearTimeout(timer); }
+  } finally { clearTimeout(timer); clearInterval(fence); }
 }
 
 export async function verifyNativeProxyRefusal(context: BrowserContext, assertActive: () => void): Promise<void> {
@@ -122,7 +126,8 @@ export async function verifyNativeProxyRefusal(context: BrowserContext, assertAc
     await bounded(tracing.send("Tracing.end"));
     ended = true;
     phase = "trace_complete";
-    const result = await bounded(complete);
+    // Pinned Linux Chromium completes some stopped traces after its ~5s flush path.
+    const result = await bounded(complete, 7500, assertActive);
     stream = result.stream;
     if (!stream || result.dataLossOccurred) throw new Error("native_proxy_trace_unavailable");
     const chunks: Buffer[] = [];

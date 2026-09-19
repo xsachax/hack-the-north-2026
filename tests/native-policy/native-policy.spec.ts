@@ -195,6 +195,12 @@ test("preloaded page frames, fetch, WS, workers and preconnect cannot escape nat
     await browser.worker.evaluate(async (value) => {
       await (globalThis as ExtensionGlobal).chrome.proxy.settings.set({ value,scope: "regular" });
     },proxyValue);
+    const readiness = await browser.context.newPage();
+    try {
+      await expect(readiness.goto(`${sentinel.origin}/policy-ready`, { timeout: 5000 }))
+        .rejects.toThrow("ERR_PROXY_CONNECTION_FAILED");
+      expect(sentinel.hits).not.toContain("/policy-ready");
+    } finally { await readiness.close(); }
     sentinel.reset();
     await probe();
     expect(sentinel.hits).toEqual([]);
