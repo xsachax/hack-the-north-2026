@@ -37,6 +37,22 @@ const finding = {
 };
 
 describe("strict wire contracts", () => {
+  it("rejects duplicate canonical criterion identities at admission", () => {
+    const semantic = { id: "same", kind: "semantic", description: "First", semantics: "current" };
+    for (const criteria of [
+      ["duplicate", "duplicate"],
+      [semantic, { ...semantic, description: "Different description" }],
+      ["same", semantic],
+    ]) {
+      expect(assignmentSchema.safeParse({ ...assignment, criteria }).success).toBe(false);
+    }
+  });
+
+  it("preserves historical duplicate string criteria when reading persisted attempts", () => {
+    const criteria = ["Help is visible", "Help is visible"];
+    expect(attemptSchema.parse({ ...attempt, criteria }).criteria).toEqual(criteria);
+  });
+
   it.each([
     ["persona profile", personaProfileSchema, profile],
     ["persona", personaSchema, { ...profile, id: "careful-reader" }],
@@ -110,7 +126,10 @@ describe("strict wire contracts", () => {
   });
 
   it("bounds assignment goals and criteria, including empty/control text", () => {
-    expect(assignmentSchema.safeParse({ ...assignment, goal: "a".repeat(2000), criteria: Array(12).fill("a".repeat(500)) }).success).toBe(true);
+    expect(assignmentSchema.safeParse({
+      ...assignment, goal: "a".repeat(2000),
+      criteria: Array.from({ length: 12 }, (_, index) => `${String(index).padStart(2, "0")}${"a".repeat(498)}`),
+    }).success).toBe(true);
     for (const goal of [" ", "a".repeat(2001), "bad\u0007text"]) {
       expect(assignmentSchema.safeParse({ ...assignment, goal }).success).toBe(false);
     }

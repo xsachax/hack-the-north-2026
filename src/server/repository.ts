@@ -6,7 +6,7 @@ import { z } from "zod";
 import {
   attemptSchema, createRunSchema, evidenceSchema, findingSchema, idempotencyKeySchema,
   idSchema, paginationSchema, personaProfileSchema, personaSchema, runSchema,
-  eventSchema, terminalStatusSchema,
+  eventSchema, terminalStatusSchema, publicAttemptSummarySchema, gatewayMetricsSchema,
   type Attempt, type CreateRun, type Evidence, type Finding, type Pagination,
   type Persona, type PersonaProfile, type Run, type RunEvent, type TerminalStatus,
 } from "../lib/contracts";
@@ -15,12 +15,16 @@ import { ServiceError } from "./errors";
 import { migrations } from "./migrations";
 import { demoRunSchema, demoScope, supportedDemoCriteria, type DemoRun } from "../lib/demo-run";
 import { referenceSchema } from "./worker/session-reference";
+import { resultSchema } from "./worker/result";
+import { controlledRunSchema, resolveControlledScope, type ControlledRun } from "../lib/controlled-run";
+import { isLegacyCriterion } from "../lib/criteria";
 
 type Row = Record<string, SQLOutputValue>;
 const parseJson = (value: unknown): unknown => JSON.parse(z.string().parse(value));
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 const notFound = () => new ServiceError("not_found", 404);
 const conflict = () => new ServiceError("conflict", 409);
+const publicEvidenceText = (value: string) => value.replace(/[a-f0-9]{64}/gi, "[PRIVATE_ARTIFACT]");
 export type OwnerSession = { ownerId: string; csrf: string; expiresAt: number };
 export type Page<T> = { items: T[]; nextCursor: number | null };
 
@@ -30,6 +34,7 @@ function readRun(row: Row): Run {
     scope: parseJson(row.scope), createdAt: row.created_at, updatedAt: row.updated_at,
     cancelRequestedAt: row.cancel_requested_at,
     executionMode: row.execution_mode,
+    ...(row.controlled_site_id ? { controlledSiteId: row.controlled_site_id } : {}),
   });
 }
 
@@ -161,13 +166,30 @@ export class Repository {
     }
     return this.insertRun(owner, key, {
       authorizationAcknowledged: true, scope: demoScope, assignments: request.assignments,
-    }, request.scenario);
+    }, { scenario: request.scenario });
   }
 
-  private insertRun(owner: string, key: string, input: CreateRun, scenario?: DemoRun["scenario"]): { run: Run; created: boolean } {
+  createControlledRun(owner: string, key: string, input: ControlledRun): { run: Run; created: boolean } {
+    const request = controlledRunSchema.parse(input);
+    if (request.controlledSiteId !== "store" &&
+      request.assignments.some(({ criteria }) => criteria.some(isLegacyCriterion))) {
+      throw new ServiceError("unsupported_criteria", 400);
+    }
+    let scope: CreateRun["scope"];
+    try { scope = resolveControlledScope(request.controlledSiteId, request.scope); }
+    catch { throw new ServiceError("invalid_request", 400); }
+    return this.insertRun(owner, key, {
+      authorizationAcknowledged: true, scope, assignments: request.assignments,
+    }, { controlledSiteId: request.controlledSiteId });
+  }
+
+  private insertRun(owner: string, key: string, input: CreateRun,
+    controlled?: { scenario?: DemoRun["scenario"]; controlledSiteId?: ControlledRun["controlledSiteId"] },
+  ): { run: Run; created: boolean } {
     const request = createRunSchema.parse(input);
     idempotencyKeySchema.parse(key);
-    const hash = digest(JSON.stringify(scenario ? { request, scenario, mode: "controlled-fixture" } : request));
+    const hash = digest(JSON.stringify(controlled
+      ? { request, ...controlled, mode: "controlled-fixture" } : request));
     return this.transaction(() => {
       const existing = this.db.prepare("SELECT * FROM runs WHERE owner_id=? AND idempotency_key=?").get(owner, key);
       if (existing) {
@@ -186,9 +208,9 @@ export class Repository {
       });
       const id = randomUUID();
       const time = this.now();
-      this.db.prepare(`INSERT INTO runs(id, owner_id, idempotency_key, request_hash, status, scope, created_at, updated_at, execution_mode, scenario)
-        VALUES(?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`).run(id, owner, key, hash, JSON.stringify(request.scope), time, time,
-          scenario ? "controlled-fixture" : "website", scenario ?? null);
+      this.db.prepare(`INSERT INTO runs(id, owner_id, idempotency_key, request_hash, status, scope, created_at, updated_at, execution_mode, scenario, controlled_site_id)
+        VALUES(?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)`).run(id, owner, key, hash, JSON.stringify(request.scope), time, time,
+          controlled ? "controlled-fixture" : "website", controlled?.scenario ?? null, controlled?.controlledSiteId ?? null);
       for (const { assignment, persona } of snapshots) {
         const attempt = attemptSchema.parse({
           id: randomUUID(), runId: id, persona, goal: assignment.goal, criteria: assignment.criteria,
@@ -244,14 +266,39 @@ export class Repository {
       u.reserved_seconds,u.consumed_seconds,u.released_seconds
       FROM jobs j JOIN attempts a ON a.id=j.attempt_id JOIN usage_reservations u ON u.job_id=j.id
       LEFT JOIN launches l ON l.job_id=j.id WHERE j.run_id=? ORDER BY j.rowid`).all(runId).map((row) => {
-      const summary = row.summary ? z.object({
-        steps: z.int().nonnegative(), modelCalls: z.int().nonnegative(), durationMs: z.number().nonnegative(),
-        cleanup: z.object({ status: z.enum(["closed", "failed"]) }),
-      }).parse(parseJson(row.summary)) : null;
+      const privateSummary = row.summary ? resultSchema.parse(parseJson(row.summary)) : null;
+      const summary = privateSummary ? publicAttemptSummarySchema.parse({
+        steps: privateSummary.steps, modelCalls: privateSummary.modelCalls,
+        modelOperations: privateSummary.modelOperations, durationMs: privateSummary.durationMs,
+        cleanup: { status: privateSummary.cleanup.status },
+        checks: privateSummary.checks.map((check) => ({
+          ...check,
+          evidence: publicEvidenceText(check.evidence),
+          ...(check.uncertainty !== undefined ? { uncertainty: publicEvidenceText(check.uncertainty) } : {}),
+          ...(check.citations ? {
+            citations: check.citations.map(({ screenshotKey, ...citation }) => {
+              const evidence = screenshotKey ? this.db.prepare(
+                "SELECT id FROM evidence WHERE storage_key=? AND run_id=? AND attempt_id=? AND json_extract(metadata,'$.kind')='screenshot'",
+              ).get(screenshotKey, runId, row.attempt_id!) : undefined;
+              return {
+                ...citation, excerpt: publicEvidenceText(citation.excerpt),
+                ...(evidence ? { evidenceId: evidence.id } : {}),
+              };
+            }),
+          } : {}),
+        })),
+      }) : null;
       const usage = row.usage ? z.object({
         actualBrowserSeconds: z.number().nonnegative().optional(),
         elapsedSeconds: z.number().nonnegative(),
         remoteStatus: z.enum(["PENDING", "RUNNING", "COMPLETED", "ERROR", "TIMED_OUT"]).optional(),
+        modelMetrics: z.unknown().optional().transform((value) => {
+          if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+          const counters = Object.fromEntries(Object.entries(value).filter(([key, counter]) =>
+            Object.hasOwn(gatewayMetricsSchema.shape, key) &&
+            typeof counter === "number" && Number.isFinite(counter) && counter >= 0));
+          return Object.keys(counters).length ? gatewayMetricsSchema.parse(counters) : undefined;
+        }),
       }).parse(parseJson(row.usage)) : null;
       return {
         attemptId: row.attempt_id, status: row.status, launchState: row.state ?? "not_launched",

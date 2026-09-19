@@ -21,7 +21,8 @@
     "persona:integration": "tsx scripts/persona-integration.ts",
     "worker": "tsx scripts/worker.ts",
     "worker:reconcile": "tsx scripts/worker-reconcile.ts",
-    "worker:integration": "tsx scripts/worker-integration.ts"
+    "worker:integration": "tsx scripts/worker-integration.ts",
+    "controlled:integration": "tsx scripts/controlled-integration.ts"
   },
   "dependencies": {
     "@browserbasehq/sdk": "2.20.0",

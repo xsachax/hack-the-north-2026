@@ -1,8 +1,11 @@
 import { z } from "zod";
 import type { TerminalStatus } from "../../lib/contracts";
 import type { Persona } from "../../lib/personas";
+import type { Criterion, CriterionCheck } from "../../lib/criteria";
+import type { ModelBudget, ModelOperations } from "./budget";
 
 export type { TerminalStatus, Persona };
+export type { Criterion, CriterionCheck };
 
 export interface Candidate {
   readonly id: string;
@@ -10,12 +13,10 @@ export interface Candidate {
   readonly label: string;
   readonly href?: string;
   readonly inputType?: string;
-}
-
-export interface CriterionCheck {
-  readonly criterion: string;
-  readonly passed: boolean;
-  readonly evidence: string;
+  readonly disabled?: boolean;
+  readonly value?: string;
+  readonly checked?: boolean;
+  readonly selected?: readonly string[];
 }
 
 export interface TelemetrySignal {
@@ -30,6 +31,8 @@ export interface Observation {
   readonly url: string;
   readonly title: string;
   readonly text: string;
+  /** Bounded, fully viewport-visible rendered blocks; excludes synthetic focus/input annotations. */
+  readonly textBlocks?: readonly string[];
   readonly candidates: readonly Candidate[];
   readonly screenshotKey?: string;
   readonly signals: readonly TelemetrySignal[];
@@ -79,14 +82,31 @@ export interface HistoryEntry {
 export interface BrainInput {
   readonly persona: Persona;
   readonly goal: string;
-  readonly criteria: readonly string[];
+  readonly criteria: readonly Criterion[];
   readonly observation: Observation;
   readonly history: readonly HistoryEntry[];
 }
 
 export interface Brain {
   /** Model output is untrusted and is parsed by the loop, even with a typed brain. */
-  decide(input: BrainInput, signal: AbortSignal): Promise<Decision>;
+  decide(input: BrainInput, signal: AbortSignal, budget?: ModelBudget): Promise<Decision>;
+  /** Set only when every initiated inference/retry charges the supplied budget. */
+  readonly managesModelBudget?: boolean;
+  evaluate?(input: EvaluationInput, signal: AbortSignal, budget?: ModelBudget): Promise<readonly CriterionCheck[]>;
+  drain?(): Promise<void>;
+}
+
+export interface EvaluationInput {
+  readonly criteria: readonly Criterion[];
+  readonly observation: Observation;
+  readonly step: number;
+}
+
+export interface Evaluator {
+  evaluate(input: EvaluationInput, signal: AbortSignal, budget?: ModelBudget): Promise<readonly CriterionCheck[]>;
+  /** Unmarked adapters are charged once per invocation by executePersona. */
+  readonly managesModelBudget?: boolean;
+  drain?(): Promise<void>;
 }
 
 export interface ExecutionLimits {
@@ -102,7 +122,7 @@ export interface ExecutionLimits {
 export interface ExecutePersonaInput {
   readonly persona: Persona;
   readonly goal: string;
-  readonly criteria: readonly string[];
+  readonly criteria: readonly Criterion[];
   readonly limits?: ExecutionLimits;
   readonly signal?: AbortSignal;
 }
@@ -116,6 +136,7 @@ export interface ExecutionResult extends TerminalOutcome {
   readonly checks: readonly CriterionCheck[];
   readonly steps: number;
   readonly modelCalls: number;
+  readonly modelOperations?: ModelOperations;
   readonly durationMs: number;
   readonly cleanup: CleanupOutcome;
   /** Preserved when cleanup or reporting overrides the primary result. */
@@ -134,5 +155,6 @@ export type ExecutionEvent =
 export interface ExecutionDependencies {
   readonly driver: BrowserDriver;
   readonly brain: Brain;
+  readonly evaluator?: Evaluator;
   readonly onEvent?: (event: ExecutionEvent, signal: AbortSignal) => Promise<void>;
 }

@@ -1,11 +1,12 @@
 # Durable worker runbook (layer 04)
 
-The separate Node process executes only explicitly admitted Little Maple fixtures.
+The separate Node process executes only explicitly admitted registered controlled sites.
 `POST /api/v1/runs` still admits scoped website requests, but a worker terminates
 them as `blocked` with `blocked_unsupported`, without allocating a browser.
 Release gate #8 remains open. There is no public-URL fallback or target-validation
-exception. Layer 04b (#11) will generalize controlled-site drivers/evaluation
-before the layer 05 wall; arbitrary user criteria are not yet executable.
+exception. Layer 04b (#11) adds custom structural and evidence-grounded semantic
+criteria for the store and project board before the layer 05 wall. Natural-language
+evaluation is a recorded heuristic, not a deterministic outcome oracle.
 
 ## Clean startup
 
@@ -41,8 +42,11 @@ credits once an explicitly confirmed worker is running.
 
 Bootstrap an owner, then submit `/api/v1/demo-runs` as documented in API.md.
 The twelve predefined personas and owned custom profiles share immutable
-goal/criteria snapshots. Only `fixed` and `second-coupon` scenarios and the two
-listed criteria are accepted. Other fixture flags are not caller-controlled.
+goal/criteria snapshots. The legacy demo route accepts only `fixed` and `second-coupon` scenarios and the
+two listed deterministic criteria. The separate `/api/v1/controlled-runs` route
+accepts registered sites and custom criteria; see the canonical examples in
+[API.md](API.md). Other fixture flags and loopback transport ports are not
+caller-controlled.
 
 ## Durable policy and spending
 
@@ -63,12 +67,12 @@ external baseline.
 | `LIFETIME_RESERVATION_LIMIT_SECONDS` | 324000 | Additional non-refundable cumulative launch-reservation ceiling |
 | `SESSION_TIMEOUT_SECONDS` | 240 | 60..300 remote TTL and per-launch reservation |
 | `MAX_STEPS_PER_PERSONA` | 14 | 1..30 safety ceiling, independent of persona patience |
-| `MAX_MODEL_CALLS_PER_PERSONA` | 14 | 1..30 safety ceiling; no automatic model retries by worker |
+| `MAX_MODEL_CALLS_PER_PERSONA` | 14 | 1..30 shared application-call ceiling for decisions and semantic verification, including failed calls; no automatic model retries by worker |
 | `WORKER_LEASE_MS` | 30000 | 5000..120000; heartbeat/cancel poll every 500ms or less |
 | `WORKER_RECOVERY_LIMIT` | 6 | 1..10 bounded attempts before quarantine |
 | `WORKER_SHUTDOWN_MS` | 60000 | 10000..120000 graceful deadline, then process exits with durable recovery required |
 | `FIXTURE_PORT` | 4321 | Trusted loopback Next fixture source; no public tunnel |
-| `ENABLE_DEMO_RUNS` | false | Required for API demo admission and ordinary paid worker CLI |
+| `ENABLE_DEMO_RUNS` | false | Required for demo/registered-site API admission and ordinary paid worker CLI |
 
 Explicit environment settings override worker defaults; `.env.example` keeps
 the existing shorter 120-second timeout and 12-step setting. For coupon journeys
@@ -321,3 +325,107 @@ SQLite transactions serialize caps/cancel/finish; driver guards fence stale
 dispatch; already-sent operations remain an explicitly documented network race.
 Only positive remote terminal proof refunds money. Private evidence and event
 identity use separate schemas; SSE reads never manufacture execution progress.
+
+## Layer04b controlled-site rehearsal
+
+Issue #11 / PR #17 builds on merged layer04 PR #15 without weakening #8.
+
+After the offline gates, `npm run controlled:integration -- --confirm-paid`
+runs one custom persona through owner admission and the real durable worker on
+the registered project board. It starts on the empty projects list, asks for
+`Garden planning` in the `Design` category, and requires both the structural
+name assertion and a cited semantic category judgment. Acceptance also checks
+a prior grounded negative/inconclusive semantic observation and verifies that
+decision/evaluation counts sum to the shared call total. It owns its loopback fixture server on port 4322
+and one worker, not a public tunnel. The fixed persistent ledger is
+`DATA_DIR/controlled-rehearsal`, with a private exclusive integration lock,
+one concurrent session, a 300-second per-session reservation/remote TTL, and a
+**1,200-second cumulative non-refundable reservation cap**, including failed
+attempts. At most four paid allocations fit; do not delete the ledger or change
+`DATA_DIR` to evade the cap. A stale lock requires remote reconciliation before
+an operator removes that exact file.
+This development harness requires `DATA_DIR` to resolve inside the current
+worktree, preventing accidental use of another checkout's ledger. Normal
+deployment workers still support the private persistent-volume configuration
+above. Keep the same rehearsal ledger for every retry; a different checkout
+does not grant another spending authorization.
+
+The external prior project ledger is **726.912 actual browser seconds**:
+12.400 foundation, 350.240 layer03 and 364.272 layer04. This harness reserves
+**727 seconds** as the conservative external baseline. External historical
+reservations are not reset or refunded by this new ledger; the 1,200-second
+authorization limits this layer's additional cumulative reservations.
+Gateway calls are separately chargeable. Application operation counts and
+available Gateway token metrics are evidence, not an invoice; provider-internal
+retries and failed-call token usage may be unavailable.
+
+The harness records durable results and independent remote cleanup proof
+privately, emits aggregate usage only, and stops its own app/worker processes.
+Failed proof remains failure even when the remote browser eventually closes.
+No session references, live-view URLs or screenshots belong in public PR logs.
+
+The harness has its own deterministic board oracle: the negative observation
+must show the known empty list; the positive cited observation must show the
+saved `Garden planning`/`Design` pair and exactly one stored project. A model
+that incorrectly says `met` while citing a real `Research` project does not
+pass acceptance. This harness-specific oracle does not replace semantic
+evaluation in general execution. Cleanup acceptance also requires exactly one
+remote session, matching the persisted private session reference, rather than
+merely one launch-correlation query; every discovered session is still released.
+
+### Layer04b live ledger
+
+The first attempt created the requested `Garden planning` project in `Design`
+in four browser actions, but both semantic verification calls failed. It was
+**not accepted**: the initial SDK response failed schema generation; the final
+response had its provenance URL rewritten to an empty string by Stagehand's
+URL-field extraction transform. Independent inspection of the completed
+session's private RPC logs and pinned SDK source established the cause without
+another browser allocation. The wire schema now uses a bounded plain string,
+with strict URL/equality validation retained locally.
+
+That first stored outcome was `gave_up` after a model `done`, with an inconclusive
+semantic check. This exposed a separate taxonomy bug: verifier infrastructure
+errors must not be presented as persona abandonment. The loop now terminates
+those errors as `infrastructure_failed`, retaining an inconclusive check,
+charged call and explicit verification failure. The historical result remains
+immutable and is recorded here as a failed infrastructure acceptance, not
+evidence of friction on the board.
+
+| Attempt | Acceptance | Actual browser seconds | Conservative reservation | Application calls |
+| --- | --- | --- | --- | --- |
+| Initial board journey | Rejected: semantic SDK schema failure and incorrect abandonment taxonomy | 62.490 | 300 | 5 decisions + 2 evaluations = 7 |
+| Corrected board journey | Accepted: custom persona, four actions, independently verified saved name/category, grounded negative then positive | 61.668 | 300 | 4 decisions + 2 evaluations = 6 |
+
+Both sessions were independently re-retrieved and verified `COMPLETED`.
+**Layer04b totals: 124.158 actual browser seconds; 600 cumulative reserved
+seconds of the 1,200-second cap; peak concurrency one.** The durable ledger
+consumed 125 whole seconds and released 475. The successful session used
+28,137 prompt / 2,576 completion tokens; cumulative available metrics are
+**56,337 prompt / 4,690 completion tokens**, with nine decisions and four
+evaluations, no application retries. Failed-call metrics may be incomplete and
+are not a provider invoice.
+
+The successful history contains semantic `not_met` on the known empty list,
+`not_observed` on unrelated form observations, then `met` on the saved project
+list. Both evaluated verdicts have two validated citations and heuristic
+confidence 0.9; this is not a calibrated accuracy estimate. The final screenshot
+references map to owner evidence. The independent oracle confirms the exact
+project name, separate `Category: Design` block and exactly one project, so
+the model cannot pass rehearsal merely by citing a similar name or wrong category.
+
+Including the separate external actual ledger, project usage recorded through
+this layer is **851.070 actual seconds** (726.912 prior + 124.158 here). Historical
+reservations remain separate; this does not refund or reset them. No browser,
+worker, fixture listener or integration lock was left running. Private provider
+logs, session references and evidence remain in the ignored rehearsal directory.
+
+Final offline gates: **1,290 unit/API tests, lint/types, production build,
+built-app HTTP/SSE smoke and 48 Chromium E2E tests**. Both structurally different
+sites run custom personas/novel criteria through the actual scoped driver,
+loop and durable worker offline. No paid store replay was needed in this layer.
+Independent review prompted exact rendered-text/line-break fixes, historical
+snapshot compatibility, conservative cache removal, independent acceptance
+oracles and exact-session cleanup proof. Additional regressions exclude
+hidden/clipped text from semantic evidence and distinguish verifier infrastructure
+errors from persona abandonment. Public-target gate #8 remains open.

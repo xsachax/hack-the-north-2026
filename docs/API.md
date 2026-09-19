@@ -1,7 +1,7 @@
 # Owner API and durable execution contracts
 
 Base path: `/api/v1`. These handlers **never launch a browser or call a model**;
-explicit demo admission queues paid work for a separately running worker.
+explicit demo/controlled-site admission queues paid work for a separately running worker.
 The dashboard is still a preview; it is not wired to these endpoints.
 
 ## Deployment and identity
@@ -76,6 +76,7 @@ longer-lived admission limits may not clear after one minute.
 | DELETE | `/personas/:id` | No body; deletes custom profile; existing attempt snapshots remain intact |
 | POST | `/runs` | Validated scoped request below; required `Idempotency-Key` |
 | POST | `/demo-runs` | Explicit opt-in trusted fixture request below; required `Idempotency-Key` |
+| POST | `/controlled-runs` | Explicit operator-gated registered site, custom criteria and optional narrowed navigation scope; required `Idempotency-Key` |
 | GET | `/runs?after=0&limit=50` | `{items,nextCursor}` ordered by durable ascending creation cursor |
 | GET | `/runs/:id` | Run with scope, lifecycle and cancellation-request timestamp |
 | GET | `/runs/:id/attempts` | `{items}` (bounded by twelve assignments), including immutable persona/goal snapshots |
@@ -151,7 +152,8 @@ are accepted:
 Scenarios are `fixed|second-coupon`. The other supported criterion is exactly
 `The demo order is visibly complete.` Assignments may use owned custom profiles;
 their goals/criteria are immutable snapshots, not replacement policies. Unknown
-or duplicate criteria fail prelaunch. Arbitrary criterion evaluation is #11.
+or duplicate legacy demo criteria fail prelaunch. Custom criteria use the distinct
+controlled-site route below.
 The server maps this request to the synthetic fixture scope and trusted switches,
 returning a Run with `executionMode:"controlled-fixture"`. Normal `/runs` returns
 `executionMode:"website"` and remains queued until a worker records `blocked`
@@ -170,6 +172,128 @@ The `/sessions` response is itself private, access-bearing metadata: use only fo
 the owning wall, do not log/cache/share it. It does not expose an API key, CDP
 connection or replay URL. References are unavailable once cancellation,
 recovery or completion begins. Protected evidence downloads/replays come later.
+
+### Controlled sites and custom objectives (layer04b / UI05)
+
+Implemented in issue #11 / PR #17, on top of merged worker PR #15.
+
+`POST /controlled-runs` uses the same strong access-code, `ENABLE_DEMO_RUNS`,
+owner, Origin, CSRF, body-size, rate-limit and idempotency protections as the demo
+route. It is an **operator-selected trusted-site registry**, not the ordinary
+customer URL endpoint. `controlledSiteId` is `store` or `project-board`; an
+unknown ID, arbitrary origin, transport port or fixture flag is rejected.
+The immutable registry selects synthetic HTTPS origin, exact document routes
+and trusted loopback transport. An optional `scope` narrows navigation using
+`targetPath` and segment-boundary `pathPrefixes`; it cannot enlarge the registry.
+Same-origin Next static assets are transport dependencies, not navigation goals.
+
+Choose a predefined ID from `GET /personas`, or save a profile with `POST /personas`
+and use the returned ID. Both paths snapshot the entire profile, goal and
+criteria; later profile edits/deletion cannot change the queued attempt.
+
+```json
+{
+  "authorizationAcknowledged": true,
+  "controlledSiteId": "project-board",
+  "scope": {
+    "targetPath": "/project-board",
+    "pathPrefixes": ["/project-board"]
+  },
+  "assignments": [{
+    "personaId": "careful-first-timer",
+    "goal": "Create a synthetic project named Garden planning in the Research category and confirm it is listed.",
+    "criteria": [{
+      "id": "project-listed",
+      "kind": "visible_text",
+      "description": "The new project name is visible in the projects list.",
+      "semantics": "current",
+      "paths": ["/project-board/projects"],
+      "text": "Garden planning",
+      "match": "contains"
+    }, {
+      "id": "category-confirmed",
+      "kind": "semantic",
+      "description": "The visible project list associates Garden planning with the Research category.",
+      "semantics": "current",
+      "paths": ["/project-board/projects"]
+    }]
+  }]
+}
+```
+
+Custom profile example (replace `personaId` above with its returned UUID):
+
+```json
+{
+  "name": "Volunteer organizer",
+  "character": "A volunteer planning a small community garden project.",
+  "device": "desktop",
+  "techComfort": "medium",
+  "patienceSteps": 12,
+  "readingStyle": "careful",
+  "quirks": ["Checks the saved project title and category."],
+  "worries": ["Losing work before it is visibly listed."]
+}
+```
+
+Criteria are bounded strings or structured assertions. Strings retain backwards
+compatibility; non-legacy strings request semantic evaluation, while the two
+exact demo criteria retain their deterministic fixture oracle. Structured
+assertions use an ID, description, `kind` and `semantics`. Exact canonical
+`paths` declare where a condition is observable, not a navigation permission.
+URL assertions match exact pathnames; visible-text assertions use literal
+`exact`/`contains` matching, never caller regexes or executable selectors.
+`exact` matches a measured visible text block (including inline pieces of a
+heading), not the whole page or hidden DOM. `contains` searches those measured
+blocks joined with spaces, excluding synthetic focus/input annotations; use a
+control-state criterion for input values. Neither asserts absence from the
+entire document.
+Control assertions use measured control labels/state, not model-supplied code.
+An outcome must be represented by observable URL/text/control evidence or
+explicit semantic judgment, not an unverified model `done`.
+
+For `kind:"control"`, use `label`, `match:"exact"|"contains"` and optional
+`controlKind:"link"|"button"|"input"|"select"`. Optional `value`, `checked`,
+`disabled` and `selected` assert observed state; `selected` is an exact unordered
+set of option values. Disabled controls remain observable but cannot be action
+targets. Missing requested state is inconclusive, not a match. The criterion
+means at least one measured matching control has the requested state; it does
+not identify a unique DOM element or grant an arbitrary selector.
+
+Attempt summaries retain `passed` for compatibility and add explicit states:
+
+| `check.status` | Meaning |
+| --- | --- |
+| `met` | Met, with deterministic evidence or validated semantic citations |
+| `not_met` | Not met on a relevant observed page; not automatically a target bug |
+| `not_observed` | Not observed here; configured relevance excludes this page |
+| `inconclusive` | Missing, ambiguous, malformed or insufficient evidence, or unavailable requested state |
+| `unsupported` | Required evaluation capability is unavailable |
+
+`method` is `legacy`, `deterministic` or `semantic`. Semantic `confidence` has
+`confidenceMeaning:"heuristic"`; the server does not interpret it as a probability.
+Public summary citations expose observation ID, page URL, step, excerpt and an
+owner-scoped screenshot `evidenceId` when available, never private storage keys.
+`modelOperations` separates `decision`, `evaluation`, `retry` and `total`;
+`modelCalls` equals the total. Available allowlisted numeric Gateway metrics are
+reported separately from these application operations.
+
+`milestone` means a verified achievement can survive an unrelated route;
+a contradictory observation on a relevant route invalidates it. `current`
+requires the condition on the latest observation. Missing, unsupported or
+ambiguous observations are not silently converted to success or target bugs.
+Semantic citations are checked against the actual bounded observation and its
+page, step and screenshot reference. This proves provenance, **not entailment**:
+the semantic verdict and confidence remain heuristic, not calibrated statistics
+or deterministic proof. All decision and verification calls, including failed
+calls, share the attempt's application-call ceiling.
+
+The store accepts novel objectives too, for example `controlledSiteId:"store"`,
+`scope:{"targetPath":"/demo/category/paper","pathPrefixes":["/demo"]}` and
+a visible-text criterion for `Pocket trail journal`. No request is silently
+mapped from `/runs` or an arbitrary customer target into one of these sites.
+Public execution remains blocked by #8. Tabs, subframes, uploads, real purchases,
+context reuse and human takeover are not enabled by custom prose.
 
 ### SSE resume and disconnect
 

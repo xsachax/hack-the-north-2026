@@ -155,3 +155,35 @@ or bypass `/api/v1` authentication/CSRF/access-code checks. Deploying a demo doe
 not authorize paid browser launch. Keep Browserbase secrets server-side in the
 runner, never in page data/storage, fixture URLs, screenshots or public logs.
 Paid usage for layer 02: **zero Browserbase sessions and zero model calls**.
+
+## Second controlled site: project board (layer04b)
+
+`/project-board` is a deliberately small synthetic project organizer, not a
+second product. Its overview links to `/project-board/new`, where a project
+name and one of `Research`, `Design`, or `Engineering` are entered. Saving shows
+the project list at `/project-board/projects`. Unlike the multi-page catalog,
+cart and checkout store, this journey uses a short creation form, category
+selection and an explicit list outcome.
+
+Projects live only in validated, versioned tab-local sessionStorage
+(`flash-flood-project-board-v1`). There are at most twelve projects, names are
+bounded, and duplicate names are rejected. Storage errors/corruption are
+visible rather than silently replaced with an empty successful result.
+Fresh independent browser contexts start empty; no real projects, accounts,
+payments, backend mutations or external services exist.
+
+Operator admission chooses `controlledSiteId:"project-board"` through
+`POST /api/v1/controlled-runs`. The server selects
+`https://board.flash-flood.invalid` and the exact three document routes.
+The same scoped driver, persona loop, structural evaluator and Gateway semantic
+evaluator also serve `controlledSiteId:"store"`. Only transport/registry and
+optional trusted setup differ; generic code does not contain project names,
+product names or site-specific success selectors. The legacy store oracle
+remains available for deterministic fixture regression.
+
+Both transports fulfill registered requests from the exact trusted loopback
+Next process, deny other destinations and never continue arbitrary browser
+traffic. This is synthetic trusted-content testing, **not** proof of safe
+arbitrary-site egress; release gate #8 is unchanged. See [API.md](API.md) for
+custom persona/objective/criterion examples and [EXECUTION.md](EXECUTION.md) for
+the semantic truth boundary and explicit unsupported browser capabilities.

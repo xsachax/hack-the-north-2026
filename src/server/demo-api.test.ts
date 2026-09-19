@@ -151,6 +151,13 @@ describe("explicit demo API and owner-only execution views (offline)", () => {
     expect(claim.runId).toBe(run.id);
   });
 
+  it("retains the legacy unsupported_criteria error for duplicate demo strings", async () => {
+    const body = input();
+    body.assignments[0].criteria = [demoCriteria[0], demoCriteria[0]];
+    await expectError(await handler(request("demo-runs", { body })), 400, "unsupported_criteria");
+    expect(repository.accounting(owner.ownerId).reservedSeconds).toBe(0);
+  });
+
   it("returns unsupported_criteria before any run or reservation is admitted", async () => {
     const body = input();
     body.assignments[0].criteria = ["Pay with a real credit card"];
@@ -273,7 +280,7 @@ describe("explicit demo API and owner-only execution views (offline)", () => {
     expect(await unwrap(await list(run.id, "summaries"))).toEqual({
       items: [{
         attemptId: claim.attempt.id, status: "succeeded", launchState: "settled",
-        summary: { steps: 2, modelCalls: 2, durationMs: 50, cleanup: { status: "closed" } },
+        summary: { steps: 2, modelCalls: 2, durationMs: 50, cleanup: { status: "closed" }, checks: [] },
         usage: { elapsedSeconds: 2, actualBrowserSeconds: 2, remoteStatus: "COMPLETED" },
         reservedSeconds: 240, consumedSeconds: 2, releasedSeconds: 238,
       }],

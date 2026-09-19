@@ -6,11 +6,14 @@ import { createReadStream } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { AppConfig } from "../../lib/config";
 import { assignmentSchema, idSchema, personaIdSchema } from "../../lib/contracts";
-import { DEMO_STORAGE_KEY, freshDemo, fixturesSchema, type Fixtures } from "../../lib/demo";
+import { criterionKey, isLegacyCriterion, type Criterion } from "../../lib/criteria";
+import { controlledNavigationScope, controlledSite, type ControlledSiteId } from "../../lib/controlled-sites";
+import type { TargetScope } from "../../lib/target-scope";
+import { DEMO_STORAGE_KEY, SECOND_COUPON_SIGNATURE, freshDemo, fixturesSchema, type Fixtures } from "../../lib/demo";
 import type { ArtifactSinks } from "./artifacts";
-import { COMPLETE_CRITERION, COUPON_CRITERION, FixtureDriver, demoVerifier } from "./driver";
+import { ScopedBrowserDriver, demoVerifier } from "./driver";
 import { GatewayBrain } from "./gateway";
-import { installFixtureNetwork, isFixtureRequest, localFixtureSource } from "./fixture-network";
+import { controlledRequestPolicy, installControlledNetwork, localControlledSource } from "./fixture-network";
 import { ExecutionError, type CleanupOutcome } from "./types";
 
 export type PrivateSessionReference = {
@@ -36,9 +39,11 @@ export type FixtureExecutionOptions = {
   runId: string;
   personaId: string;
   targetUrl: string;
-  criteria: readonly string[];
+  controlledSiteId?: ControlledSiteId;
+  scope?: TargetScope;
+  criteria: readonly Criterion[];
   fixturePort: number;
-  fixtures: Fixtures;
+  fixtures?: Fixtures;
   viewport: { width: number; height: number };
   artifacts: ArtifactSinks;
   /** Teardown evidence must permit cancellation while still enforcing lease ownership. */
@@ -70,17 +75,24 @@ async function bounded<T>(work: Promise<T>, milliseconds = 10000): Promise<T> {
 
 function validateFixtureOptions(options: FixtureExecutionOptions) {
   // No URL admission bypass or implicit fallback to this mode exists.
-  if (options.mode !== "controlled-fixture" || !isFixtureRequest(options.targetUrl, true)
+  let site;
+  let scope;
+  try {
+    site = controlledSite(options.controlledSiteId ?? "store");
+    scope = controlledNavigationScope(site, options.targetUrl, options.scope);
+  } catch { throw new ExecutionError("unsupported", "controlled_target_out_of_scope"); }
+  if (options.mode !== "controlled-fixture"
     || options.contextReference !== undefined || (options.actor && options.actor !== "agent")) {
     throw new ExecutionError("unsupported", "arbitrary_targets_contexts_and_takeover_disabled");
   }
-  const fixtures = fixturesSchema.parse(options.fixtures);
+  const fixtures = options.fixtures === undefined ? undefined : fixturesSchema.parse(options.fixtures);
+  if (site.id !== "store" && fixtures) throw new ExecutionError("unsupported", "seed_not_supported_for_site");
   idSchema.parse(options.runId);
   personaIdSchema.parse(options.personaId);
   const criteria = assignmentSchema.shape.criteria.parse(options.criteria);
-  if (new Set(criteria).size !== criteria.length) throw new ExecutionError("unsupported", "duplicate_criteria");
-  if (criteria.some((criterion) => criterion !== COUPON_CRITERION && criterion !== COMPLETE_CRITERION)) {
-    throw new ExecutionError("unsupported", "unknown_criterion");
+  if (new Set(criteria.map(criterionKey)).size !== criteria.length) throw new ExecutionError("unsupported", "duplicate_criteria");
+  if (site.id !== "store" && criteria.some(isLegacyCriterion)) {
+    throw new ExecutionError("unsupported", "legacy_criterion_requires_store");
   }
   if (options.correlationToken !== undefined) z.uuid().parse(options.correlationToken);
   const userMetadata = {
@@ -94,13 +106,14 @@ function validateFixtureOptions(options: FixtureExecutionOptions) {
   z.strictObject({
     width: z.int().min(320).max(1920), height: z.int().min(320).max(1200),
   }).parse(options.viewport);
-  const source = localFixtureSource(options.fixturePort);
+  const policy = controlledRequestPolicy(site, scope);
+  const source = localControlledSource(options.fixturePort, policy);
   const assertActive = () => {
     options.signal.throwIfAborted();
     options.assertActive?.();
   };
   assertActive();
-  return { fixtures, criteria, userMetadata, source, assertActive };
+  return { fixtures, criteria, site, scope, policy, userMetadata, source, assertActive };
 }
 
 export async function createFixtureExecution(config: AppConfig, options: FixtureExecutionOptions) {
@@ -113,7 +126,7 @@ export async function createFixtureExecution(config: AppConfig, options: Fixture
     throw new CloudStartupError({ status: "closed", errors: [] }, usage, "admission",
       error instanceof ExecutionError ? error.code : undefined);
   }
-  const { fixtures, criteria, userMetadata, source, assertActive } = validated;
+  const { fixtures, criteria, site, scope, policy, userMetadata, source, assertActive } = validated;
   let bb: Browserbase;
   try { bb = new Browserbase({ apiKey: config.BROWSERBASE_API_KEY, maxRetries: 0, timeout: 10000 }); }
   catch { throw new CloudStartupError({ status: "closed", errors: [] }, usage, "client_initialization"); }
@@ -123,7 +136,7 @@ export async function createFixtureExecution(config: AppConfig, options: Fixture
   let stagehand: Stagehand | undefined;
   let brain: GatewayBrain | undefined;
   let playwright: Browser | undefined;
-  let network: Awaited<ReturnType<typeof installFixtureNetwork>> | undefined;
+  let network: Awaited<ReturnType<typeof installControlledNetwork>> | undefined;
   let closing: Promise<CleanupOutcome> | undefined;
   let phase = "launch";
   const diagnostic = (operation: string, error: unknown, category?: "unconfirmed") => {
@@ -260,18 +273,20 @@ export async function createFixtureExecution(config: AppConfig, options: Fixture
     if (workers.length !== 1) throw new Error("stagehand_extension_identity_unavailable");
     const extensionOrigin = workers[0].url().slice(0, -"/service-worker.js".length);
     phase = "network_install";
-    const driverHolder: { current?: FixtureDriver } = {};
-    network = await installFixtureNetwork(context, page, source, (event) => driverHolder.current?.policySignal(event.url), extensionOrigin);
+    const driverHolder: { current?: ScopedBrowserDriver } = {};
+    network = await installControlledNetwork(context, page, source, (event) => driverHolder.current?.policySignal(event.url, event.code), policy, extensionOrigin);
     assertActive();
     phase = "fixture_setup";
     await page.goto(options.targetUrl, { waitUntil: "networkidle", timeout: 10000 });
     assertActive();
-    await page.evaluate(({ key, state }) => sessionStorage.setItem(key, state), {
-      key: DEMO_STORAGE_KEY, state: JSON.stringify(freshDemo(fixtures)),
-    });
-    assertActive();
-    await page.reload({ waitUntil: "networkidle", timeout: 10000 });
-    assertActive();
+    if (fixtures) {
+      await page.evaluate(({ key, state }) => sessionStorage.setItem(key, state), {
+        key: DEMO_STORAGE_KEY, state: JSON.stringify(freshDemo(fixtures)),
+      });
+      assertActive();
+      await page.reload({ waitUntil: "networkidle", timeout: 10000 });
+      assertActive();
+    }
     phase = "stagehand_page";
     const pages = await browser.context.pages();
     let stagehandPage;
@@ -290,8 +305,12 @@ export async function createFixtureExecution(config: AppConfig, options: Fixture
       replayUrl: `https://www.browserbase.com/sessions/${sessionId}`, timeoutSeconds,
     }), 5000);
     assertActive();
-    const driver = new FixtureDriver({
-      page, artifacts: options.artifacts, verify: demoVerifier(criteria), close,
+    const driver = new ScopedBrowserDriver({
+      page, artifacts: options.artifacts, scope, close,
+      ...(site.id === "store" ? {
+        verify: demoVerifier(criteria.filter((criterion): criterion is string => typeof criterion === "string")),
+        classifyFunctionalError: (error: Error) => error.message === SECOND_COUPON_SIGNATURE ? "FF_DEMO_SECOND_COUPON" : undefined,
+      } : {}),
       networkErrors: network.errors, keyboardOnly: options.keyboardOnly,
       assertActive, cleanupJson: options.cleanupJson,
       onCleanupError: (code, error) => {
@@ -308,3 +327,6 @@ export async function createFixtureExecution(config: AppConfig, options: Fixture
     throw new CloudStartupError(await close(), usage, phase);
   }
 }
+
+/** Explicit targets use the same admission, allocation, lease and teardown fences. */
+export const createControlledExecution = createFixtureExecution;

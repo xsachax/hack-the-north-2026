@@ -1,7 +1,7 @@
 # Single-persona execution (layer 03)
 
-This layer supplies a typed execution engine and an **explicit, controlled-fixture
-integration command**. Layer04 now integrates it with a separate
+This reference covers the typed execution engine, the legacy fixture integration
+and layer04b's reusable controlled-site execution. Layer04 integrates it with a separate
 [durable worker](WORKER.md), protected demo admission, private artifact mapping
 and owner SSE. The standalone layer03 command remains a separate manual ledger.
 Arbitrary website execution is disabled (release blocker #8). Passing a public target to the cloud
@@ -76,7 +76,7 @@ events, and acquires/fences jobs and money before calling the factory.
 
 `createFixtureExecution(config, options)` in `cloud.ts` returns `{driver, brain,
 usage}`. Its options require `mode: "controlled-fixture"`, run/persona IDs,
-fixture URL/port, trusted fixture configuration, viewport, criteria, private
+registered target URL/port, optional trusted store fixture configuration, viewport, criteria, private
 artifact sinks, abort signal and a private `onSession` hook. `usage` is populated
 during cleanup with Gateway token counters, elapsed time, available remote
 browser duration and final remote status. Startup failures throw
@@ -84,7 +84,8 @@ browser duration and final remote status. Startup failures throw
 belong only in the private hook, never in browser-safe event payloads.
 Optional `correlationToken` and synchronous `assertActive` hooks let the worker
 tag launches and fence dispatch at the actual driver guard. Unsupported/duplicate
-fixture criteria fail before launch. Context reference and human actor seams reject unsupported use rather than
+legacy fixture criteria fail before launch; custom criteria require the explicit
+registered-site mode described below. Context reference and human actor seams reject unsupported use rather than
 pretending reuse/takeover is implemented.
 Layer04 uses explicit no-retry session allocation plus connection rather than
 the SDK launch convenience function. Its optional `cleanupJson` hook persists
@@ -109,6 +110,72 @@ or times out, that result becomes an infrastructure failure even if a previously
 emitted event contained success. Layer04 must finalize durable state from the
 returned result, not from the `finished` event alone.
 
+### General criteria and the inference budget
+
+`ScopedBrowserDriver` receives an explicit navigation scope, artifact sinks,
+transport errors, cleanup/lease guards and optional trusted verifier/setup.
+The immutable controlled-site registry and transport choose origins/routes;
+the driver does not guess a site from the objective. `FixtureDriver` remains a
+compatibility wrapper around that same driver, and `demoVerifier` is only the
+legacy deterministic oracle. `createControlledExecution` uses the same cloud
+factory/fences with an explicit registry selection and no board fixture seed.
+
+`src/lib/criteria.ts` defines bounded literal URL/text/control assertions and
+explicit semantic criteria. The loop evaluates structural assertions without
+inference and invokes `brain.evaluate` (or an injected evaluator) only for
+relevant semantic criteria. `GatewayBrain` uses the same supported Stagehand
+`extract` path as decisions, not a second provider API. A strict response schema
+and server validation check criterion identity, observation ID, exact page URL,
+step, screenshot key when supplied, and verbatim nonempty excerpts in the
+bounded observed text. After validation, the server attaches the current
+observation's screenshot reference even when the model omitted it; this links
+evidence, not a claim that Stagehand used that exact independently captured image.
+Unknown/duplicate/forged citations and ambiguous verdicts
+cannot become success. Provenance checks do not prove semantic entailment.
+
+The Gateway wire schema deliberately represents a citation's `pageUrl` as a
+bounded plain string. Stagehand 4.1.0's extraction service rewrites URL-formatted
+schema fields into DOM-link IDs and injects linked destinations afterward;
+that behavior is appropriate for extracting links, not copying a provenance
+URL. The server still validates a real URL and exact equality to the observed
+page using the canonical local citation schema. This is a wire compatibility
+choice, not weaker admission or citation policy. The JSON-schema round-trip and
+invalid-local-URL regressions protect this distinction.
+
+Every initiated application decision/evaluation is charged before dispatch to
+one `ModelBudget`. Failed calls consume their charge; a trusted adapter that
+initiates a retry must charge `retry` before dispatch. There are no automatic
+application retries. Unmarked injected adapters consume one call per invocation;
+an adapter marked `managesModelBudget` is trusted server code responsible for
+charging each initiated inference. Neither page text nor a persona can set it.
+The loop closes the shared budget at cancellation/termination. Gateway cleanup
+drains both decision and evaluation RPCs before metrics/SDK teardown.
+
+Initial success can require zero browser actions, while a semantic evaluation
+still consumes a model call. Structural verification after the last allowed
+action is free; semantic verification must fit the **same** remaining budget.
+If it cannot, the outcome is limit reached, not uncharged success. Results and
+owner summaries expose operation counts; Gateway token counters may omit failed
+calls and provider-internal retries are outside the application counter.
+The recorded metrics are not a price estimate or invoice.
+
+Gateway semantic verdicts are deliberately re-evaluated rather than cached.
+The SDK supplies its own DOM representation and captures its own screenshot;
+matching bounded text, URL, candidates, or even a separately captured artifact
+digest cannot establish that those model inputs are unchanged. This includes
+adapters without a screenshot artifact key: `screenshot:true` still supplies
+visual input. Structural checks are deterministic and call-free on the current
+observation. Semantic caching is deferred until complete input identity can be
+proven, rather than reusing stale UI judgments to save calls.
+
+Observation events contain the current evaluation verdicts/citations, including
+negative and inconclusive results. Terminal milestone accumulation is separate:
+an unrelated-page observation can be unobservable while an earlier verified
+milestone remains met. A relevant contradiction or inconclusive result invalidates
+that milestone. A current-condition criterion never inherits old success on an
+unrelated page. A model cannot declare a relevant page unrelated to preserve a
+milestone. Plain non-legacy strings default to current-page semantic conditions.
+
 `ArtifactWriter.createSinks(runId, attemptId)` writes immutable generated keys
 under the private data directory. The current CLI persists events/evidence and
 session/accounting manifests there; it does not mutate queued repository jobs.
@@ -127,6 +194,15 @@ is viewport-sized, but Stagehand's DOM input can include offscreen information:
 **this is not screenshot-only or strictly human-visible perception**.
 Actions are restricted to current measured candidates and known navigation.
 Screenshots are captured independently as evidence, never used alone as success.
+
+The pinned 4.1.0 SDK also exposes `locator` and `ignoreLocators` for extraction.
+Its shipped option descriptions say these scope/exclude elements and subtrees;
+`screenshot:true` adds a viewport screenshot. Inspection of the client schema
+and serialization confirms these options exist, but does **not** establish that
+excluding `html`/`body` produces a usable screenshot-only prompt on the hosted
+Gateway. This layer does not enable root exclusion or claim strict viewport
+perception. Grounded action candidates and server-checked semantic citations
+remain necessary even when the model receives additional DOM context.
 
 Each observation records a state digest, bounded text, grounded candidate IDs,
 criterion checks, telemetry signals and a private screenshot key. Patience,
@@ -299,3 +375,31 @@ concurrency remains covered. The CLI-loader browser regression waits for the
 actual hydrated fixture control, rather than treating document load as React
 readiness. A real driver/verifier/loop E2E proves coupon milestones survive the
 subsequent checkout and completion routes.
+
+## Layer04b acceptance and next-layer boundary
+
+Issue #11 / PR #17 extends the merged worker in PR #15; #8 remains open.
+
+The final layer04b gates pass **1,290 unit/API tests and 48 Chromium E2E tests**,
+plus lint/types, production build and built-app HTTP/SSE smoke. Both registered
+sites have real driver/loop/durable-worker regressions with custom personas and
+novel criteria. Hidden, transparent, clipped and offscreen text cannot become
+visible-text or semantic citation evidence; exact text preserves inline pieces
+and rendered line breaks. Partial controls remain action candidates only when
+their measured visible region intersects the viewport.
+
+The capped real Gateway/worker proof on the second site succeeded in four
+actions and six application model calls, including two semantic evaluations.
+Its known empty list produced a grounded negative; its saved project produced
+a grounded positive that also passed an independent exact fixture oracle.
+An earlier rejected attempt exposed the SDK URL-field transform and incorrect
+verification-failure taxonomy; both were fixed offline before the corrective
+paid attempt. The complete two-session ledger, token limitations and remote
+cleanup evidence are documented in [WORKER.md](WORKER.md#layer04b-live-ledger).
+
+UI05 can now use the canonical examples in [API.md](API.md), select a registered
+site explicitly, and show immutable criteria, five-way verdicts, method,
+heuristic confidence, owner evidence references and operation counts. It must
+not present ordinary public URLs as executable, semantic judgments as
+deterministic proof, the dashboard preview as a live wall, or disabled browser
+capabilities as implemented. Report/takeover/context features remain later layers.

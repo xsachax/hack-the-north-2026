@@ -1,0 +1,15 @@
+.project-board { max-width: 760px; margin: 0 auto; padding: 28px 24px 80px; font-family: system-ui, sans-serif; color: #172e35; }
+.project-board header { border-bottom: 2px solid #287675; padding-bottom: 16px; }
+.project-board header > a { font-size: 1.35rem; font-weight: 750; }
+.project-board a { color: #176563; text-decoration: underline; }
+.project-board nav { display: flex; gap: 24px; padding: 20px 0; }
+.project-board h1 { font-size: 2rem; margin: 20px 0; }
+.project-board h2 { font-size: 1.15rem; }
+.project-board p { margin: 12px 0; }
+.project-board form { display: grid; gap: 24px; max-width: 420px; }
+.project-board label { display: grid; gap: 8px; font-weight: 600; }
+.project-board input, .project-board select { width: 100%; border: 1px solid #55757b; border-radius: 6px; padding: 12px; background: white; color: #172e35; }
+.project-board button { background: #176563; color: white; padding: 12px 20px; border-radius: 6px; cursor: pointer; }
+.project-board [role="alert"] { border-left: 4px solid #a82e21; padding: 12px; background: #fff0eb; }
+.project-board li { padding: 16px; border: 1px solid #b3cecd; border-radius: 8px; margin: 12px 0; list-style: none; }
+.project-board :focus-visible { outline: 3px solid #d68228; outline-offset: 4px; }

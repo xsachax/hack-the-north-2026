@@ -4,6 +4,7 @@ import {
   createRunSchema, idempotencyKeySchema, idSchema, paginationSchema, personaProfileSchema,
 } from "../lib/contracts";
 import { demoRunSchema } from "../lib/demo-run";
+import { controlledRunSchema } from "../lib/controlled-run";
 import { Repository, type OwnerSession } from "./repository";
 import { ServiceError } from "./errors";
 import { createEventStreamHandler, type EventStreamOptions } from "./event-stream";
@@ -145,6 +146,15 @@ export function createApi({ repository, configuration, validateScope = validateT
       const owner = session.ownerId;
       if (mutation && url.search) fail("invalid_request", 400);
 
+      if (path.length === 1 && path[0] === "controlled-runs" && request.method === "POST") {
+        if (configuration.allowDemoRuns !== true || !configuration.accessCode || configuration.accessCode.length < 32) {
+          fail("demo_disabled", 503);
+        }
+        const key = parseInput(idempotencyKeySchema, request.headers.get("idempotency-key"));
+        const input = parseInput(controlledRunSchema, await readJson(request));
+        const result = repository.createControlledRun(owner, key, input);
+        return respond(result.run, result.created ? 201 : 200);
+      }
       if (path.length === 1 && path[0] === "demo-runs" && request.method === "POST") {
         if (configuration.allowDemoRuns !== true || !configuration.accessCode || configuration.accessCode.length < 32) {
           fail("demo_disabled", 503);

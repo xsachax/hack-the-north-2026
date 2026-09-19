@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { attemptSchema, evidenceSchema, type Attempt, type RunEvent, type TerminalStatus } from "../../lib/contracts";
 import { supportedDemoCriteria } from "../../lib/demo-run";
+import { isLegacyCriterion } from "../../lib/criteria";
 import { Repository } from "../repository";
 import type { ArtifactReference } from "../execution/artifacts";
 import { sanitizeEvidence } from "../execution/artifacts";
@@ -10,6 +11,7 @@ import type { ExecutionResult } from "../execution/types";
 import { workerPolicySchema, type WorkerPolicy } from "./config";
 import { referenceSchema } from "./session-reference";
 import { resultSchema } from "./result";
+import { targetScopeSchema, type TargetScope } from "../../lib/target-scope";
 
 export class LeaseLostError extends Error {
   constructor() { super("worker_lease_lost"); }
@@ -17,7 +19,8 @@ export class LeaseLostError extends Error {
 export type Claim = {
   jobId: string; ownerId: string; workerId: string; generation: number;
   runId: string; attempt: Attempt; correlationToken: string;
-  scenario: "fixed" | "second-coupon"; recovery: boolean; sessionId?: string;
+  scenario?: "fixed" | "second-coupon"; controlledSiteId?: "store" | "project-board";
+  scope: TargetScope; recovery: boolean; sessionId?: string;
 };
 const json = (value: unknown): unknown => JSON.parse(z.string().parse(value));
 const terminalRemote = (status?: string) => !!status && ["COMPLETED", "ERROR", "TIMED_OUT"].includes(status);
@@ -58,7 +61,7 @@ export class WorkerRepository extends Repository {
         WHERE j.status='leased' AND j.lease_expires_at<=? AND l.state NOT IN ('settled','quarantined')
         AND (l.recovery_after IS NULL OR l.recovery_after<=?) ORDER BY j.rowid LIMIT 1`).get(this.now(), this.now());
       if (expired) return this.acquire(z.string().parse(expired.id), workerId, true);
-      const queued = this.db.prepare(`SELECT j.id,r.owner_id,r.execution_mode,a.snapshot
+      const queued = this.db.prepare(`SELECT j.id,r.owner_id,r.execution_mode,r.controlled_site_id,a.snapshot
         FROM jobs j JOIN runs r ON r.id=j.run_id JOIN attempts a ON a.id=j.attempt_id
         WHERE j.status='queued' AND j.cancel_requested_at IS NULL
         AND (r.execution_mode!='controlled-fixture' OR
@@ -70,7 +73,9 @@ export class WorkerRepository extends Repository {
         const attempt = attemptSchema.parse(json(row.snapshot));
         const jobId = z.string().parse(row.id);
         const ownerId = z.string().parse(row.owner_id);
-        if (row.execution_mode !== "controlled-fixture" || !supportedDemoCriteria(attempt.criteria)) {
+        if (row.execution_mode !== "controlled-fixture" ||
+          (!row.controlled_site_id && !supportedDemoCriteria(attempt.criteria)) ||
+          (row.controlled_site_id === "project-board" && attempt.criteria.some(isLegacyCriterion))) {
           this.endQueued(ownerId, jobId, attempt, "blocked",
             row.execution_mode !== "controlled-fixture" ? "blocked_unsupported" : "unsupported_criteria");
           continue;
@@ -116,7 +121,7 @@ export class WorkerRepository extends Repository {
   private acquire(jobId: string, workerId: string, recovery: boolean): Claim {
     this.db.prepare(`UPDATE jobs SET status='leased',lease_owner=?,lease_generation=lease_generation+1,lease_expires_at=?
       WHERE id=?`).run(workerId, new Date(this.clock() + this.policy.leaseMs).toISOString(), jobId);
-    const row = this.db.prepare(`SELECT j.*,r.owner_id,r.scenario,a.snapshot,l.correlation_token,l.session_reference
+    const row = this.db.prepare(`SELECT j.*,r.owner_id,r.scenario,r.controlled_site_id,r.scope,a.snapshot,l.correlation_token,l.session_reference
       FROM jobs j JOIN runs r ON r.id=j.run_id JOIN attempts a ON a.id=j.attempt_id JOIN launches l ON l.job_id=j.id
       WHERE j.id=?`).get(jobId)!;
     if (recovery) {
@@ -128,7 +133,9 @@ export class WorkerRepository extends Repository {
       jobId, ownerId: z.string().parse(row.owner_id), workerId,
       generation: z.number().parse(row.lease_generation), runId: z.string().parse(row.run_id),
       attempt: attemptSchema.parse(json(row.snapshot)), correlationToken: z.string().parse(row.correlation_token),
-      scenario: z.enum(["fixed", "second-coupon"]).parse(row.scenario), recovery, sessionId: ref?.sessionId,
+      ...(row.scenario ? { scenario: z.enum(["fixed", "second-coupon"]).parse(row.scenario) } : {}),
+      ...(row.controlled_site_id ? { controlledSiteId: z.enum(["store", "project-board"]).parse(row.controlled_site_id) } : {}),
+      scope: targetScopeSchema.parse(json(row.scope)), recovery, sessionId: ref?.sessionId,
     };
   }
 
@@ -220,7 +227,7 @@ export class WorkerRepository extends Repository {
       }
       this.settle(claim, neverAttempted ? { ...usage, actualBrowserSeconds: 0 } : usage, confirmed);
       this.db.prepare("UPDATE launches SET summary=? WHERE job_id=?")
-        .run(JSON.stringify(sanitizeEvidence(parsed)), claim.jobId);
+        .run(JSON.stringify(parsed), claim.jobId);
       if (!confirmed) {
         this.deferRecovery(claim);
         return;

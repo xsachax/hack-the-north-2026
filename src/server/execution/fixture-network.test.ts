@@ -3,10 +3,41 @@ import type { BrowserContext, Page, Request, Route } from "playwright-core";
 import {
   FIXTURE_ORIGIN, installFixtureNetwork, isFixtureRequest,
   isGatewayControlRequest, localFixtureSource,
+  controlledRequestPolicy, localControlledSource,
 } from "./fixture-network";
+import { controlledNavigationScope, controlledSite } from "../../lib/controlled-sites";
 
 const extension = `chrome-extension://${"a".repeat(32)}`;
 const gateway = "https://api.stagehand.browserbase.com/v1/llm/responses";
+
+describe("site-configured transport", () => {
+  it("restricts board requests to its exact documents and static assets", async () => {
+    const site = controlledSite("project-board");
+    const policy = controlledRequestPolicy(site);
+    for (const path of site.navigationPaths) expect(policy(site.origin + path, true)).toBe(true);
+    expect(policy(site.origin + "/_next/static/chunks/app.js")).toBe(true);
+    expect(policy(site.origin + "/_next/static/chunks/app.js", true)).toBe(false);
+    for (const path of ["/demo", "/demo/cart-summary?variant=fixed", "/api/v1/runs",
+      "/project-board/new?source=http://127.0.0.1", "/project-board/other"]) {
+      expect(policy(site.origin + path)).toBe(false);
+    }
+    expect(policy(FIXTURE_ORIGIN + "/demo")).toBe(false);
+    await expect(localControlledSource(4317, policy)(new URL(FIXTURE_ORIGIN + "/demo"))).rejects.toThrow("scope violation");
+  });
+
+  it("applies scoped document restrictions even to non-navigation fetches", () => {
+    const site = controlledSite("project-board");
+    const targetUrl = site.origin + "/project-board/new";
+    const scope = controlledNavigationScope(site, targetUrl, {
+      targetUrl, allowedSubdomains: [], pathPrefixes: ["/project-board/new"],
+    });
+    const policy = controlledRequestPolicy(site, scope);
+    expect(policy(targetUrl, true)).toBe(true);
+    expect(policy(site.origin + "/project-board/projects")).toBe(false);
+    expect(policy(site.origin + "/project-board/projects", true)).toBe(false);
+    expect(policy(site.origin + "/_next/static/chunks/app.js")).toBe(true);
+  });
+});
 
 describe("fixture URL allowlist", () => {
   it.each([

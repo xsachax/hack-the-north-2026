@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { demoCriteria } from "../../lib/demo-run";
 import { configSchema } from "../../lib/config";
@@ -9,6 +10,8 @@ import type { ArtifactSinks } from "../execution/artifacts";
 import { CloudStartupError, createFixtureExecution, type CloudUsage, type FixtureExecutionOptions } from "../execution/cloud";
 import type { ExecutionResult, Observation } from "../execution/types";
 import { executePersona } from "../execution/loop";
+import { GatewayBrain } from "../execution/gateway";
+import type { Page, Stagehand } from "@browserbasehq/stagehand";
 import { WorkerRepository } from "./repository";
 import { DurableWorker, type WorkerDependencies } from "./runtime";
 
@@ -29,6 +32,14 @@ describe("durable worker with injected execution adapters", () => {
   const create = () => repository.createDemoRun(owner, randomUUID(), {
     authorizationAcknowledged: true, scenario: "fixed",
     assignments: [{ personaId: personas[0].id, goal: "Apply the coupons", criteria: [demoCriteria[0]] }],
+  }).run;
+  const controlled = () => repository.createControlledRun(owner, randomUUID(), {
+    authorizationAcknowledged: true, controlledSiteId: "project-board",
+    scope: { targetPath: "/project-board/projects", pathPrefixes: ["/project-board/projects"] },
+    assignments: [{
+      personaId: personas[0].id, goal: "Understand project status",
+      criteria: [{ id: "clarity", kind: "semantic", description: "Project status is clearly visible", semantics: "current" }],
+    }],
   }).run;
   const finish: ExecutionResult = {
     status: "succeeded", reason: "All criteria proved", originalTerminal: { status: "succeeded", reason: "All criteria proved" },
@@ -89,6 +100,129 @@ describe("durable worker with injected execution adapters", () => {
     const options = vi.mocked(deps.launch).mock.calls[0][0];
     expect(options.correlationToken).toBe(claim.correlationToken);
     expect(options.criteria).toEqual(claim.attempt.criteria);
+  });
+
+  it("runs controlled snapshots through the real loop and Gateway evaluator and publishes only evidence IDs", async () => {
+    const run = controlled();
+    let privateKey = "";
+    const extract = vi.fn(async () => ({ data: { checks: [{
+      criterion: "clarity", status: "met", confidence: 0.9, uncertainty: "",
+      citations: [{
+        observationId: "board-state", pageUrl: run.scope.targetUrl, step: 0,
+        excerpt: "Project status: ready", screenshotKey: privateKey,
+      }],
+    }] } }));
+    const launch = deps.launch;
+    deps.launch = async (options) => {
+      const execution = await launch(options);
+      expect(options).toMatchObject({ controlledSiteId: "project-board", scope: run.scope, targetUrl: run.scope.targetUrl });
+      expect(options.fixtures).toBeUndefined();
+      execution.brain = new GatewayBrain({ extract } as unknown as Stagehand, {} as Page);
+      execution.driver.observe = async () => {
+        privateKey = (await options.artifacts.screenshot(Buffer.from("offline screenshot"))).key;
+        return {
+          id: "board-state", url: run.scope.targetUrl, title: "Project board",
+          text: "Project status: ready", candidates: [], signals: [], checks: [], screenshotKey: privateKey,
+        };
+      };
+      return execution;
+    };
+    const worker = new DurableWorker(repository, deps, 4321);
+    await worker.executeClaim(repository.claim(worker.id)!, new AbortController().signal);
+    expect(repository.getRun(owner, run.id).status).toBe("succeeded");
+    expect(extract).toHaveBeenCalledTimes(1);
+    const summary = repository.attemptSummaries(owner, run.id)[0].summary;
+    expect(summary).toMatchObject({
+      modelCalls: 1, modelOperations: { decision: 0, evaluation: 1, retry: 0, total: 1 },
+      checks: [{ criterion: "clarity", status: "met", method: "semantic", citations: [{ evidenceId: expect.any(String) }] }],
+    });
+    expect(JSON.stringify(summary)).not.toContain(privateKey);
+    expect(JSON.stringify(summary)).not.toContain("screenshotKey");
+    const database = new DatabaseSync(join(dir, "flash-flood.sqlite"), { readOnly: true });
+    try {
+      const stored = JSON.parse(String(database.prepare("SELECT summary FROM launches").get()?.summary));
+      expect(stored.checks[0].citations[0]).toMatchObject({ screenshotKey: privateKey, pageUrl: run.scope.targetUrl });
+    } finally { database.close(); }
+  });
+
+  it("cancellation fences a pending real evaluator and drains its RPC before settling", async () => {
+    vi.useFakeTimers();
+    const run = controlled();
+    let complete!: (value: unknown) => void;
+    const extract = vi.fn(() => new Promise((resolve) => { complete = resolve; }));
+    const launch = deps.launch;
+    deps.launch = async (options) => {
+      const execution = await launch(options);
+      execution.brain = new GatewayBrain({ extract } as unknown as Stagehand, {} as Page);
+      execution.driver.observe = async () => ({ ...observed, url: run.scope.targetUrl, checks: [] });
+      return execution;
+    };
+    const worker = new DurableWorker(repository, deps, 4321);
+    const running = worker.executeClaim(repository.claim(worker.id)!, new AbortController().signal);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(extract).toHaveBeenCalledTimes(1);
+    repository.cancelRun(owner, run.id);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(repository.getRun(owner, run.id).status).toBe("running");
+    complete({ data: { checks: [] } });
+    await running;
+    expect(repository.getRun(owner, run.id).status).toBe("cancelled");
+    expect(repository.attemptSummaries(owner, run.id)[0].summary).toMatchObject({
+      modelCalls: 1, modelOperations: { decision: 0, evaluation: 1, retry: 0, total: 1 },
+    });
+  });
+
+  it("evaluation consumes the shared durable model-call limit before any decision", async () => {
+    repository.close();
+    rmSync(dir, { recursive: true, force: true });
+    repository = new WorkerRepository(dir, { maxModelCalls: 1 });
+    owner = repository.createSession().ownerId;
+    const run = controlled();
+    const extract = vi.fn(async () => ({ data: { checks: [] } }));
+    const launch = deps.launch;
+    deps.launch = async (options) => {
+      const execution = await launch(options);
+      execution.brain = new GatewayBrain({ extract } as unknown as Stagehand, {} as Page);
+      execution.driver.observe = async () => ({ ...observed, url: run.scope.targetUrl, checks: [] });
+      return execution;
+    };
+    const worker = new DurableWorker(repository, deps, 4321);
+    await worker.executeClaim(repository.claim(worker.id)!, new AbortController().signal);
+    expect(repository.getRun(owner, run.id).status).toBe("limit_reached");
+    expect(extract).toHaveBeenCalledTimes(1);
+    expect(repository.attemptSummaries(owner, run.id)[0].summary).toMatchObject({
+      modelCalls: 1, modelOperations: { decision: 0, evaluation: 1, retry: 0, total: 1 },
+    });
+
+  });
+
+  it("does not accept evaluator results from an expired, reclaimed lease", async () => {
+    vi.useFakeTimers();
+    const run = controlled();
+    let complete!: (value: unknown) => void;
+    const extract = vi.fn(() => new Promise((resolve) => { complete = resolve; }));
+    const launch = deps.launch;
+    deps.launch = async (options) => {
+      const execution = await launch(options);
+      execution.brain = new GatewayBrain({ extract } as unknown as Stagehand, {} as Page);
+      execution.driver.observe = async () => ({ ...observed, url: run.scope.targetUrl, checks: [] });
+      return execution;
+    };
+    const worker = new DurableWorker(repository, deps, 4321);
+    const first = repository.claim(worker.id)!;
+    const running = worker.executeClaim(first, new AbortController().signal);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(extract).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(Date.now() + 31000);
+    const recovered = repository.claim("replacement")!;
+    expect(recovered.recovery).toBe(true);
+    complete({ data: { checks: [] } });
+    await running;
+    expect(repository.getRun(owner, run.id).status).toBe("running");
+    expect(repository.attemptSummaries(owner, run.id)[0].summary).toBeNull();
+    expect(repository.events(owner, run.id, { after: 0, limit: 100 }).items.some((event) => event.kind === "attempt.finished")).toBe(false);
+    expect(usage.remoteStatus).toBe("COMPLETED");
+    expect(repository.accounting(owner).reservedSeconds).toBe(240);
   });
 
   it("never finalizes from a success finished hook when the authoritative return failed", async () => {
