@@ -338,3 +338,13 @@ readback and unchanged session/context inventories. Resume made no allocation
 or resource mutation. Every proof credential, owned worker/server and invocation
 lock was removed; the attached guardian exited. Initial paid mode's exit code
 2 denotes its deliberate inspection/resume handoff, not the final result.
+
+The first push CI passed; its parallel PR CI exposed a report-test virtual-clock
+race (102/103 browser tests passed). The fixture counted request arrival before
+the response was consumed and the next timer registered. A test-only correction
+waits for each unique rendered report timestamp before advancing the clock;
+an explicitly held thirteenth response exercises that ordering. Exact 24-read
+automatic bounds, no reads after pause and the twenty-fifth manual read remain
+asserted. The corrected case passed 30/30 repetitions, followed by all local
+gates. Coordinator review cleared the synchronization barrier. No product
+behavior changed and no additional paid browser was needed.
