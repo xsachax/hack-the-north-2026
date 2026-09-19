@@ -8,6 +8,8 @@ import { executePersona } from "../execution/loop";
 import type { Brain, BrowserDriver, ExecutionEvent, ExecutionResult } from "../execution/types";
 import { LeaseLostError, WorkerRepository, type Claim } from "./repository";
 import { createCloudRecovery } from "./cloud-recovery";
+import { workerExecutionLimits } from "./config";
+import { publicPageUrl } from "../public-page-url";
 
 export type WorkerDependencies = {
   launch: (options: FixtureExecutionOptions) => Promise<{ driver: BrowserDriver; brain: Brain; usage: CloudUsage }>;
@@ -140,6 +142,7 @@ export class DurableWorker {
       });
       launched = execution;
       usage = execution.usage;
+      let pageUrl: string | undefined;
       const onEvent = async (event: ExecutionEvent) => {
         // Lifecycle belongs to the durable transaction, not the loop hook.
         if (event.kind === "started" || event.kind === "finished") {
@@ -147,9 +150,14 @@ export class DurableWorker {
           return;
         }
         assertActive();
+        if (event.kind === "observation") {
+          pageUrl = publicPageUrl(event.observation.url, this.dependencies.knownSecrets);
+          if (pageUrl && new URL(pageUrl).origin !== new URL(claim.scope.targetUrl).origin) pageUrl = undefined;
+        }
         const stored = await artifacts.json(event);
         const evidenceId = evidenceIds.get(stored.key)!;
         this.repository.recordStep(claim, event.kind, evidenceId, {
+          ...(pageUrl ? { pageUrl } : {}),
           ...(event.kind === "action" ? { step: event.steps, action: event.action.action } : {}),
           ...(event.kind === "decision" ? {
             modelCalls: event.modelCalls, action: event.decision.action,
@@ -160,10 +168,7 @@ export class DurableWorker {
       result = await (this.dependencies.execute ?? executePersona)({
         persona: claim.attempt.persona, goal: claim.attempt.goal, criteria: claim.attempt.criteria,
         signal: controller.signal,
-        limits: {
-          maxSteps: this.repository.policy.maxSteps, maxModelCalls: this.repository.policy.maxModelCalls,
-          maxDurationMs: Math.max(1000, (this.repository.policy.sessionSeconds - 60) * 1000),
-        },
+        limits: workerExecutionLimits(this.repository.policy, claim.attempt.limits),
       }, {
         driver: {
           observe: async (signal) => { assertActive(); return execution.driver.observe(signal); },

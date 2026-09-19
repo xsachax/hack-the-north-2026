@@ -18,6 +18,8 @@ import { referenceSchema } from "./worker/session-reference";
 import { resultSchema } from "./worker/result";
 import { controlledRunSchema, resolveControlledScope, type ControlledRun } from "../lib/controlled-run";
 import { isLegacyCriterion } from "../lib/criteria";
+import { attemptSummarySchema, sessionViewSchema, type AttemptSummary, type SessionView } from "../lib/ui-contracts";
+import { workerExecutionLimits, workerPolicySchema } from "./worker/config";
 
 type Row = Record<string, SQLOutputValue>;
 const parseJson = (value: unknown): unknown => JSON.parse(z.string().parse(value));
@@ -78,6 +80,10 @@ export class Repository {
   }
 
   close(): void { this.db.close(); }
+  persistedExecutionLimits() {
+    const row = this.db.prepare("SELECT configuration FROM worker_policy WHERE singleton=1").get();
+    return row ? workerExecutionLimits(workerPolicySchema.parse(parseJson(row.configuration))) : null;
+  }
   protected now(): string { return new Date(this.clock()).toISOString(); }
   protected transaction<T>(work: () => T): T {
     this.db.exec("BEGIN IMMEDIATE");
@@ -214,6 +220,7 @@ export class Repository {
       for (const { assignment, persona } of snapshots) {
         const attempt = attemptSchema.parse({
           id: randomUUID(), runId: id, persona, goal: assignment.goal, criteria: assignment.criteria,
+          ...(assignment.limits ? { limits: assignment.limits } : {}),
           status: "queued", createdAt: time, updatedAt: time,
         });
         this.db.prepare("INSERT INTO attempts VALUES(?, ?, ?, ?)").run(attempt.id, id, "queued", JSON.stringify(attempt));
@@ -245,22 +252,22 @@ export class Repository {
       .map((row) => attemptSchema.parse(parseJson(row.snapshot)));
   }
 
-  sessionViews(owner: string, runId: string) {
+  sessionViews(owner: string, runId: string): SessionView[] {
     const run = this.getRun(owner, runId);
     return this.db.prepare(`SELECT j.attempt_id,j.lease_expires_at,a.status,l.state,l.session_reference FROM launches l
       JOIN jobs j ON j.id=l.job_id JOIN attempts a ON a.id=j.attempt_id WHERE j.run_id=?`).all(runId).map((row) => {
       const reference = row.session_reference ? referenceSchema.parse(parseJson(row.session_reference)) : null;
       const active = row.state === "active" && row.status === "running" && !run.cancelRequestedAt &&
         typeof row.lease_expires_at === "string" && row.lease_expires_at > this.now();
-      return {
+      return sessionViewSchema.parse({
         attemptId: z.string().parse(row.attempt_id),
         available: active && !!reference?.liveViewUrl,
         liveViewUrl: active ? reference?.liveViewUrl || null : null,
-      };
+      });
     });
   }
 
-  attemptSummaries(owner: string, runId: string) {
+  attemptSummaries(owner: string, runId: string): AttemptSummary[] {
     this.getRun(owner, runId);
     return this.db.prepare(`SELECT j.attempt_id,a.status,l.state,l.summary,l.usage,
       u.reserved_seconds,u.consumed_seconds,u.released_seconds
@@ -300,11 +307,11 @@ export class Repository {
           return Object.keys(counters).length ? gatewayMetricsSchema.parse(counters) : undefined;
         }),
       }).parse(parseJson(row.usage)) : null;
-      return {
+      return attemptSummarySchema.parse({
         attemptId: row.attempt_id, status: row.status, launchState: row.state ?? "not_launched",
         summary, usage, reservedSeconds: row.reserved_seconds,
         consumedSeconds: row.consumed_seconds, releasedSeconds: row.released_seconds,
-      };
+      });
     });
   }
 

@@ -34,10 +34,17 @@ const criteriaSchema = z.array(criterionSchema).min(1).max(12).refine(
   (criteria) => new Set(criteria.map(criterionKey)).size === criteria.length,
   "Criteria must have unique identities",
 );
+export const executionLimitsSchema = z.strictObject({
+  maxSteps: z.int().min(1).max(30).optional(),
+  maxModelCalls: z.int().min(1).max(30).optional(),
+  maxDurationMs: z.int().min(1000).max(240_000).optional(),
+});
+export type ExecutionLimits = z.infer<typeof executionLimitsSchema>;
 export const assignmentSchema = z.strictObject({
   personaId: personaIdSchema,
   goal: text(2000),
   criteria: criteriaSchema,
+  limits: executionLimitsSchema.optional(),
 });
 export const createRunSchema = z.strictObject({
   authorizationAcknowledged: z.literal(true),
@@ -66,6 +73,7 @@ export const attemptSchema = z.strictObject({
   goal: text(2000),
   // Historical website snapshots may contain duplicates; uniqueness belongs to admission.
   criteria: z.array(criterionSchema).min(1).max(12),
+  limits: executionLimitsSchema.optional(),
   status: statusSchema,
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
@@ -90,6 +98,11 @@ export const eventSchema = z.strictObject({
     modelCalls: z.int().min(0).max(30).optional(),
     action: z.enum(["click", "type", "select", "navigate", "back", "scroll", "key", "wait", "done", "give_up"]).optional(),
     commentary: z.string().max(240).optional(),
+    pageUrl: z.url().max(4096).refine((value) => {
+      const url = new URL(value);
+      return ["http:", "https:"].includes(url.protocol) &&
+        !url.username && !url.password && !url.search && !url.hash;
+    }).optional(),
     reason: z.enum(["blocked_unsupported", "unsupported_criteria", "budget_exhausted", "worker_recovery", "cleanup_unconfirmed", "execution_complete"]).optional(),
   }),
 });

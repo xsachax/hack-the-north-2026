@@ -9,12 +9,16 @@ import { Repository, type OwnerSession } from "./repository";
 import { ServiceError } from "./errors";
 import { createEventStreamHandler, type EventStreamOptions } from "./event-stream";
 import { TargetPolicyError, validateTargetScope, type PolicyOptions } from "./target-policy";
+import { capabilitiesSchema, type Capabilities } from "../lib/ui-contracts";
+import { workerExecutionLimits, workerPolicySchema } from "./worker/config";
 
 export type ApiConfiguration = {
   origin: string;
   production: boolean;
   accessCode?: string;
   allowDemoRuns?: boolean;
+  browserbaseKeyConfigured?: boolean;
+  executionLimits?: Capabilities["executionLimits"];
   policy?: PolicyOptions;
 };
 type Dependencies = {
@@ -125,6 +129,21 @@ export function createApi({ repository, configuration, validateScope = validateT
       const parts = url.pathname.split("/").filter(Boolean);
       if (parts[0] !== "api" || parts[1] !== "v1") fail("not_found", 404);
       const path = parts.slice(2);
+      if (path.length === 1 && path[0] === "capabilities" && request.method === "GET") {
+        if (url.search) fail("invalid_request", 400);
+        const persisted = repository.persistedExecutionLimits();
+        return respond(capabilitiesSchema.parse({
+          controlledRunsEnabled: configuration.allowDemoRuns === true && !!configuration.accessCode &&
+            configuration.accessCode.length >= 32,
+          websiteExecutionEnabled: false,
+          maxActiveViews: 3,
+          accessCodeConfigured: !!configuration.accessCode,
+          browserbaseKeyConfigured: configuration.browserbaseKeyConfigured === true,
+          executionLimits: persisted ?? configuration.executionLimits ?? workerExecutionLimits(workerPolicySchema.parse({})),
+          executionLimitsSource: persisted ? "persisted-worker-policy" :
+            configuration.executionLimits ? "configuration" : "defaults",
+        }));
+      }
       if (path.length === 1 && path[0] === "session" && request.method === "POST") {
         if (url.search) fail("invalid_request", 400);
         repository.consumeRate("bootstrap", 30);

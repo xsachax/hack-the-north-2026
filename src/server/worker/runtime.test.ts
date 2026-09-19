@@ -102,6 +102,99 @@ describe("durable worker with injected execution adapters", () => {
     expect(options.criteria).toEqual(claim.attempt.criteria);
   });
 
+  it("passes clamped assignment limits to execution and persists sanitized page context", async () => {
+    const run = repository.createDemoRun(owner, randomUUID(), {
+      authorizationAcknowledged: true, scenario: "fixed",
+      assignments: [{
+        personaId: personas[0].id, goal: "Read the cart", criteria: [demoCriteria[0]],
+        limits: { maxSteps: 2, maxModelCalls: 30, maxDurationMs: 1000 },
+      }],
+    }).run;
+    deps.knownSecrets = ["private-path"];
+    deps.execute = vi.fn(async (input, adapters) => {
+      expect(input.limits).toEqual({ maxSteps: 2, maxModelCalls: 14, maxDurationMs: 1000 });
+      await adapters.onEvent!({
+        kind: "observation", actor: "agent",
+        observation: { ...observed, url: "https://user:pass@fixture.flash-flood.invalid/private-path?token=secret#fragment" },
+      }, input.signal!);
+      await adapters.onEvent!({
+        kind: "action", actor: "agent", steps: 1,
+        action: { action: "wait", actor: "agent", candidateId: null, value: null, commentary: "" },
+      }, input.signal!);
+      await adapters.onEvent!({
+        kind: "observation", actor: "agent",
+        observation: { ...observed, url: "https://www.browserbase.com/sessions/private" },
+      }, input.signal!);
+      await adapters.driver.close();
+      return finish;
+    });
+    const worker = new DurableWorker(repository, deps, 4321);
+    await worker.executeClaim(repository.claim(worker.id)!, new AbortController().signal);
+    const events = repository.events(owner, run.id, { after: 0, limit: 100 }).items;
+    for (const kind of ["attempt.observation", "attempt.action"]) {
+      expect(events.find((event) => event.kind === kind)?.data.pageUrl)
+        .toBe("https://fixture.flash-flood.invalid/%5BREDACTED%5D");
+    }
+    expect(JSON.stringify(events)).not.toMatch(/private-path|token=|user:pass|fragment/);
+    expect(events.filter((event) => event.kind === "attempt.observation").at(-1)?.data.pageUrl).toBeUndefined();
+    expect(JSON.stringify(events)).not.toContain("browserbase.com");
+    expect(repository.attempts(owner, run.id)[0].limits)
+      .toEqual({ maxSteps: 2, maxModelCalls: 30, maxDurationMs: 1000 });
+    expect(repository.accounting().reservedSeconds).toBe(240);
+  });
+
+  it.each([{ maxSteps: 1 }, { maxModelCalls: 1 }])("enforces per-assignment %j in the real loop", async (limits) => {
+    vi.useFakeTimers();
+    observed = { ...observed, checks: [] };
+    const run = repository.createDemoRun(owner, randomUUID(), {
+      authorizationAcknowledged: true, scenario: "fixed", assignments: [{
+        personaId: personas[0].id, goal: "Read the cart", criteria: [demoCriteria[0]], limits,
+      }],
+    }).run;
+    const launch = deps.launch;
+    deps.launch = async (options) => {
+      const execution = await launch(options);
+      execution.brain.decide = vi.fn(async () => ({
+        action: "wait" as const, candidateId: null, value: null, commentary: "Read again",
+      }));
+      return execution;
+    };
+    const worker = new DurableWorker(repository, deps, 4321);
+    const task = worker.executeClaim(repository.claim(worker.id)!, new AbortController().signal);
+    await vi.advanceTimersByTimeAsync(1000);
+    await task;
+    expect(repository.getRun(owner, run.id).status).toBe("limit_reached");
+    expect(repository.attemptSummaries(owner, run.id)[0].summary).toMatchObject({
+      steps: 1, modelCalls: 1, cleanup: { status: "closed" },
+    });
+  });
+
+  it("enforces the assignment deadline in the real loop without skipping cleanup", async () => {
+    vi.useFakeTimers();
+    const run = repository.createDemoRun(owner, randomUUID(), {
+      authorizationAcknowledged: true, scenario: "fixed", assignments: [{
+        personaId: personas[0].id, goal: "Read the cart", criteria: [demoCriteria[0]],
+        limits: { maxDurationMs: 1000 },
+      }],
+    }).run;
+    const launch = deps.launch;
+    deps.launch = async (options) => {
+      const execution = await launch(options);
+      execution.driver.observe = (signal) => new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+      return execution;
+    };
+    const worker = new DurableWorker(repository, deps, 4321);
+    const task = worker.executeClaim(repository.claim(worker.id)!, new AbortController().signal);
+    await vi.advanceTimersByTimeAsync(1100);
+    await task;
+    expect(repository.getRun(owner, run.id).status).toBe("limit_reached");
+    expect(repository.attemptSummaries(owner, run.id)[0].summary).toMatchObject({
+      steps: 0, modelCalls: 0, durationMs: 1000, cleanup: { status: "closed" },
+    });
+  });
+
   it("runs controlled snapshots through the real loop and Gateway evaluator and publishes only evidence IDs", async () => {
     const run = controlled();
     let privateKey = "";

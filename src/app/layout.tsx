@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Flash Flood | User testing before you have users",
-  description: "A foundation for evidence-backed, persona-driven browser testing.",
+  description: "Scoped persona missions, real cloud browsers, and evidence-backed live logs.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
