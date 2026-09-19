@@ -176,9 +176,11 @@ running; it does not invent success, retry a browser, or pretend cleanup happene
 Evidence records use server-generated IDs and internal 64-character hex storage
 keys, never caller-supplied file paths. Finding references must exist, belong to
 the same owner/run/attempt, and remain durable. Storage keys are never returned
-over HTTP. This layer stores references/metadata only: artifact writing,
-size/type validation, sanitization/redaction and protected streaming are later
-work. Untrusted summaries must be escaped on display and are not trusted policy.
+over HTTP. This API stores references/metadata only. Layer03 adds an internal bounded
+private artifact writer and execution engine, described in [EXECUTION.md](EXECUTION.md);
+it is not wired to these queued jobs or exposed by a paid endpoint. Protected
+artifact streaming remains later work. Untrusted summaries must be escaped on
+display and are not trusted policy.
 
 ## Persisted abuse controls
 
@@ -209,12 +211,15 @@ the page. External CDNs/APIs are not silently exempt from the explicit scope.
 
 **Admission and DNS rechecks do not solve DNS rebinding.** A browser can resolve
 again after validation, bypass interception, or follow redirects automatically.
-Layer 03 must connect the policy to the browser's actual network boundary,
+The arbitrary-target runner must connect the policy to the browser's actual network boundary,
 prevent unchecked redirects/requests, and verify/enforce the destination at
 connection time (or use a trusted egress proxy/network allowlist). Browserbase's
 top-level domain setting alone is insufficient for subresource traffic.
 Do not claim arbitrary remote targets are safely runnable until that capability
-is demonstrated. Development-only localhost exceptions must be narrowly
+is demonstrated. Layer03 therefore ships only the explicit trusted fixture
+transport in [EXECUTION.md](EXECUTION.md), and rejects arbitrary targets before
+paid launch. The offline API's ability to store a valid target does not mean a
+worker may execute it. Development-only localhost exceptions must be narrowly
 configured and cannot be enabled in production. No environment-driven localhost
 bypass is enabled by the API in this layer; fixture integration belongs to 02/03.
 

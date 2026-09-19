@@ -134,6 +134,12 @@ emulation. WebKit/Firefox and real assistive technology remain untested.
 
 ## Cloud reachability and authorization
 
+Layer03 now provides an alternative that requires no public deployment:
+the [explicit persona harness](EXECUTION.md) fulfills a synthetic HTTPS fixture
+origin through the trusted local demo transport. It runs the same built pages
+and assets, seeds scenarios outside the persona prompt and never exposes owner
+APIs. The deployment guidance below still applies if using a real public demo.
+
 Remote Browserbase browsers **cannot reach your developer's localhost**.
 When layer 03 is authorized to spend, use a controlled public demo deployment
 or an explicitly authorized, temporary tunnel with a reverse-proxy allowlist
