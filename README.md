@@ -2,7 +2,7 @@
 
 User testing before you have users. A crowd of AI personas uses an authorized web app in real Browserbase browsers, with a live wall and evidence-backed bug and friction reports.
 
-**Current phase: foundation, not the full MVP.** This repository includes a Next.js dashboard preview, twelve persona profiles, shared run/evidence types, validated configuration, a Browserbase + Stagehand integration, offline tests, and a manually triggered cloud smoke test. The UI does not start sessions or display fabricated results.
+**Current phase: durable offline backend, not the full MVP.** This repository includes a Next.js dashboard preview, twelve persona profiles, canonical runtime schemas, private SQLite persistence and owner-scoped APIs, plus the foundation's Browserbase + Stagehand smoke integration. The UI does not start sessions or display fabricated results. The [API reference](docs/API.md) covers bootstrap, persona CRUD, scoped run creation/cancellation, events and private evidence references. No API endpoint launches paid browsers.
 
 The [delivery plan](docs/DELIVERY_PLAN.md) defines the architecture, sequential PR layers, acceptance gates, capability matrix and accountability ledger for the end-to-end build.
 
@@ -13,10 +13,16 @@ Requires Node.js 22.18+ (22.x) and npm.
 ```sh
 nvm use
 npm ci
+npm run dev
+# No .env.local or Browserbase key is needed for the offline API.
+```
+
+For the optional, paid cloud smoke only:
+
+```sh
 cp .env.example .env.local
 chmod 600 .env.local
 # Edit .env.local and add your Browserbase key.
-npm run dev
 ```
 
 If `.env.local` already exists, keep it rather than copying over it. Open http://127.0.0.1:3000. The app binds to loopback by default. `/api/health` is a liveness endpoint; it does not contact Browserbase. The dashboard shows configuration validity, not proof that credentials work.
@@ -24,10 +30,11 @@ If `.env.local` already exists, keep it rather than copying over it. Open http:/
 ```sh
 npm run check              # Lint, types, offline tests; no Browserbase credits
 npm run build              # Production build; no Browserbase credits
+npm run test:http          # Built-app offline HTTP smoke (run build first)
 npm run browserbase:smoke  # Paid, explicit integration check
 ```
 
-The smoke command creates **one browser**, requests a maximum **120-second session lifetime**, and calls `extract` and `observe` once each through Model Gateway. It reads the heading on `example.com`, replays one observed click with `act`, verifies the IANA destination, and saves a screenshot, token metrics, and session references under `data/smoke/<run-id>/`. Browserbase/provider-internal retries may still occur; these are operational limits, not a dollar-spend guarantee. Each AI operation has a 30-second timeout.
+The `browserbase:smoke` command creates **one browser**, requests a maximum **120-second session lifetime**, and calls `extract` and `observe` once each through Model Gateway. It reads the heading on `example.com`, replays one observed click with `act`, verifies the IANA destination, and saves a screenshot, token metrics, and session references under `data/smoke/<run-id>/`. Browserbase/provider-internal retries may still occur; these are operational limits, not a dollar-spend guarantee. Each AI operation has a 30-second timeout.
 
 The integration attempts to release Stagehand and the browser after success or failure. Cleanup failures remain failures. Browserbase's remote session timeout is the backstop if the process dies. Successful smoke reports are only written after cleanup completes. Live URLs are saved privately, not printed; the dashboard session link opens the recording inspector after completion.
 
@@ -39,7 +46,7 @@ The integration attempts to release Stagehand and the browser after success or f
 - Rotate any key pasted into chat. Update both the local environment and GitHub secret when rotating.
 - `data/`, `artifacts/`, and Stagehand caches are ignored. Screenshots, live-view URLs, recordings, and browser logs can expose user data or browser access; do not commit or publish them.
 - Regular CI uses no secrets and makes no cloud calls. The paid smoke workflow is manual, requires explicit confirmation, and never uploads evidence as public Actions artifacts. Workflows become available after they are pushed (manual dispatch normally requires the workflow on the default branch).
-- This is a local development foundation, not an authenticated hosted service. Add authentication, authorization, run ownership, target validation and quotas before exposing paid run endpoints.
+- Owner cookies, CSRF/exact-origin defenses, persisted admission limits and a production access-code gate now protect offline APIs. This is not named-account authentication or a complete public multi-tenant service; see [identity and deployment limitations](docs/API.md#deployment-and-identity). Paid endpoints and worker spending control do not exist yet.
 
 To set or rotate the GitHub secret without including its value in a shell command:
 
@@ -58,18 +65,20 @@ gh secret set BROWSERBASE_API_KEY --repo xsachax/hack-the-north-2026
 | `MAX_STEPS_PER_PERSONA` | `12` | Future run cap, validated between 1 and 30 |
 | `SESSION_TIMEOUT_SECONDS` | `120` | Browser lifetime, 60-300 seconds; smoke further caps at 120 |
 | `DATA_DIR` | `./data` | Local, private evidence storage |
+| `APP_ORIGIN` | `http://127.0.0.1:3000` | Exact API origin; production requires HTTPS, with no trailing slash |
+| `FLASH_FLOOD_ACCESS_CODE` | None in local development | Production API requires a high-entropy secret of at least 32 characters for owner/session admission |
 
 ## Layout
 
 ```text
 src/app/              Next.js dashboard preview and health endpoint
-src/lib/              Configuration schema, twelve personas, run contracts
-src/server/           Cloud-browser lifecycle and safe diagnostics
+src/lib/              Configuration, personas, canonical runtime domain/scope schemas
+src/server/           SQLite repository/migrations, safe APIs, target policy, cloud smoke
 scripts/              Explicit, paid Browserbase smoke command
 .github/workflows/    Offline CI and opt-in cloud smoke
 ```
 
-The application and future orchestrator use Node/TypeScript. Keep long-running persona loops in a dedicated worker, not a short-lived serverless request. Local JSON evidence is sufficient for the foundation; durable run storage and live SSE events are not implemented yet.
+The application and future orchestrator use Node/TypeScript. Keep long-running persona loops in a dedicated worker, not a short-lived serverless request. SQLite uses Node 22.18+ (22.x) `node:sqlite`, which needs no flag on this runtime but remains experimental and emits a warning. Mount `DATA_DIR` on a private persistent local volume on a single host; ephemeral/serverless disks, network filesystems and distributed replicas are unsupported. The directory/database use `700`/`600` permissions. Migrations, WAL recovery, transaction ordering and owner isolation are covered offline. See the [storage contract](docs/API.md#state-storage-and-internal-worker-boundary) before backing up or adding workers. Durable event pagination exists; SSE, worker leases/recovery and spending enforcement are still future layers.
 
 ## Verified API choices and remaining questions
 
