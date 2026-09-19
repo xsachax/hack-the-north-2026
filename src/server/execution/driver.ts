@@ -24,10 +24,13 @@ export type CriterionVerifier = (page: Page, observation: Pick<Observation, "id"
 export type DriverOptions = {
   page: Page;
   artifacts: ArtifactSinks;
+  cleanupJson?: ArtifactSinks["json"];
+  onCleanupError?: (code: "telemetry_write_failed", error: unknown) => void;
   verify: CriterionVerifier;
   close: () => Promise<CleanupOutcome>;
   networkErrors: readonly string[];
   keyboardOnly?: boolean;
+  assertActive?: () => void;
 };
 
 export class FixtureDriver implements BrowserDriver {
@@ -90,6 +93,7 @@ export class FixtureDriver implements BrowserDriver {
 
   private guard(signal: AbortSignal): void {
     signal.throwIfAborted();
+    this.options.assertActive?.();
     if (this.closed) throw new ExecutionError("infra", "driver_closed");
     if (this.options.networkErrors.length) throw new ExecutionError("infra", "fixture_network_failed");
     if (this.errors.length) throw new ExecutionError("limit", "telemetry_limit");
@@ -153,6 +157,7 @@ export class FixtureDriver implements BrowserDriver {
     this.candidates = new Map(visible.candidates.map((candidate) => [candidate.id, candidate]));
     const id = createHash("sha256").update(JSON.stringify({ url, ...visible })).digest("hex");
     const screenshot = await this.options.artifacts.screenshot(await this.page.screenshot({ fullPage: false, timeout: 5000 }));
+    this.guard(signal);
     const checks = await this.options.verify(this.page, { id, text: visible.text });
     if (this.telemetry.length) {
       await this.options.artifacts.json({ telemetry: this.telemetry.splice(0) });
@@ -240,9 +245,12 @@ export class FixtureDriver implements BrowserDriver {
 
   async diagnostics(): Promise<{ name: string; value: number }[]> {
     if (this.closed) throw new ExecutionError("infra", "driver_closed");
+    this.options.assertActive?.();
     const cdp = await this.page.context().newCDPSession(this.page);
     try {
+      this.options.assertActive?.();
       await cdp.send("Performance.enable");
+      this.options.assertActive?.();
       const result = await cdp.send("Performance.getMetrics");
       return result.metrics.filter((metric) => ["Documents", "Nodes", "JSHeapUsedSize", "TaskDuration"].includes(metric.name));
     } finally { await cdp.detach(); }
@@ -256,8 +264,11 @@ export class FixtureDriver implements BrowserDriver {
     this.closed = true;
     const errors: string[] = [];
     try {
-      if (this.telemetry.length) await this.options.artifacts.json({ telemetry: this.telemetry.splice(0) });
-    } catch { errors.push("telemetry_write_failed"); }
+      if (this.telemetry.length) await (this.options.cleanupJson ?? this.options.artifacts.json)({ telemetry: this.telemetry.splice(0) });
+    } catch (error) {
+      errors.push("telemetry_write_failed");
+      this.options.onCleanupError?.("telemetry_write_failed", error);
+    }
     const outcome = await this.options.close();
     return { status: errors.length || outcome.status === "failed" ? "failed" : "closed", errors: [...errors, ...outcome.errors] };
   }

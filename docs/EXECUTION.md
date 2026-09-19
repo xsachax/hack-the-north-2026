@@ -1,7 +1,9 @@
 # Single-persona execution (layer 03)
 
 This layer supplies a typed execution engine and an **explicit, controlled-fixture
-integration command**, not a public browser-start API or durable scheduler.
+integration command**. Layer04 now integrates it with a separate
+[durable worker](WORKER.md), protected demo admission, private artifact mapping
+and owner SSE. The standalone layer03 command remains a separate manual ledger.
 Arbitrary website execution is disabled (release blocker #8). Passing a public target to the cloud
 factory fails before a browser is launched. This is a release blocker, not a
 claim that the final product no longer needs authorized arbitrary websites.
@@ -68,9 +70,9 @@ idempotent `close()` cleanup fence. `Brain.decide(input, signal)` supplies one
 strict-schema decision. The brain cannot supply code or replace policy or
 criterion verifiers. `onEvent(event, signal)` is awaited and receives `started`,
 `observation`, `decision`, `action`, `finished` events, all with actor `agent`.
-These are internal execution events, **not yet repository/SSE event records**.
-Layer04 must persist them with owner/attempt identity and a monotonic sequence,
-honor cancellation, and acquire/fence jobs and money before calling the factory.
+These are internal execution events, not directly browser-safe payloads.
+Layer04 persists fenced observation/decision/action evidence and bounded canonical
+events, and acquires/fences jobs and money before calling the factory.
 
 `createFixtureExecution(config, options)` in `cloud.ts` returns `{driver, brain,
 usage}`. Its options require `mode: "controlled-fixture"`, run/persona IDs,
@@ -80,8 +82,16 @@ during cleanup with Gateway token counters, elapsed time, available remote
 browser duration and final remote status. Startup failures throw
 `CloudStartupError` with cleanup and usage metadata. SDK live/replay references
 belong only in the private hook, never in browser-safe event payloads.
-Context reference and human actor seams reject unsupported use rather than
+Optional `correlationToken` and synchronous `assertActive` hooks let the worker
+tag launches and fence dispatch at the actual driver guard. Unsupported/duplicate
+fixture criteria fail before launch. Context reference and human actor seams reject unsupported use rather than
 pretending reuse/takeover is implemented.
+Layer04 uses explicit no-retry session allocation plus connection rather than
+the SDK launch convenience function. Its optional `cleanupJson` hook persists
+teardown telemetry after cancellation without relaxing lease fencing. Existing
+Gateway RPCs drain before metrics/SDK teardown; errors remain fixed-code
+diagnostics and failures, not clean cancellation. See [the worker runbook](WORKER.md)
+for the pinned extension archive dependency and the complete live acceptance ledger.
 
 `ExecutionResult` contains canonical terminal status, reason, criterion checks,
 step/model counts, elapsed time, cleanup outcome and the original terminal
@@ -102,7 +112,7 @@ returned result, not from the `finished` event alone.
 `ArtifactWriter.createSinks(runId, attemptId)` writes immutable generated keys
 under the private data directory. The current CLI persists events/evidence and
 session/accounting manifests there; it does not mutate queued repository jobs.
-Layer04 must map keys to owner-scoped repository evidence and reserve before
+Layer04 maps keys to owner-scoped repository evidence and reserves before
 launch. Layer06 will classify/group findings; this layer makes no grouped-bug
 or globally shortest reproduction claims.
 

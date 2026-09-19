@@ -13,6 +13,8 @@ import {
 import { personas } from "../lib/personas";
 import { ServiceError } from "./errors";
 import { migrations } from "./migrations";
+import { demoRunSchema, demoScope, supportedDemoCriteria, type DemoRun } from "../lib/demo-run";
+import { referenceSchema } from "./worker/session-reference";
 
 type Row = Record<string, SQLOutputValue>;
 const parseJson = (value: unknown): unknown => JSON.parse(z.string().parse(value));
@@ -27,12 +29,13 @@ function readRun(row: Row): Run {
     id: row.id, cursor: row.cursor, status: row.status, authorizationAcknowledged: true,
     scope: parseJson(row.scope), createdAt: row.created_at, updatedAt: row.updated_at,
     cancelRequestedAt: row.cancel_requested_at,
+    executionMode: row.execution_mode,
   });
 }
 
 export class Repository {
-  private readonly db: DatabaseSync;
-  constructor(dataDir: string, private readonly clock = () => Date.now()) {
+  protected readonly db: DatabaseSync;
+  constructor(dataDir: string, protected readonly clock = () => Date.now()) {
     const dir = resolve(dataDir);
     if (dir === resolve("/")) throw new Error("A dedicated private data directory is required");
     mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -70,8 +73,8 @@ export class Repository {
   }
 
   close(): void { this.db.close(); }
-  private now(): string { return new Date(this.clock()).toISOString(); }
-  private transaction<T>(work: () => T): T {
+  protected now(): string { return new Date(this.clock()).toISOString(); }
+  protected transaction<T>(work: () => T): T {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const result = work();
@@ -148,9 +151,23 @@ export class Repository {
   }
 
   createRun(owner: string, key: string, input: CreateRun): { run: Run; created: boolean } {
+    return this.insertRun(owner, key, input);
+  }
+
+  createDemoRun(owner: string, key: string, input: DemoRun): { run: Run; created: boolean } {
+    const request = demoRunSchema.parse(input);
+    if (!request.assignments.every((a) => supportedDemoCriteria(a.criteria))) {
+      throw new ServiceError("unsupported_criteria", 400);
+    }
+    return this.insertRun(owner, key, {
+      authorizationAcknowledged: true, scope: demoScope, assignments: request.assignments,
+    }, request.scenario);
+  }
+
+  private insertRun(owner: string, key: string, input: CreateRun, scenario?: DemoRun["scenario"]): { run: Run; created: boolean } {
     const request = createRunSchema.parse(input);
     idempotencyKeySchema.parse(key);
-    const hash = digest(JSON.stringify(request));
+    const hash = digest(JSON.stringify(scenario ? { request, scenario, mode: "controlled-fixture" } : request));
     return this.transaction(() => {
       const existing = this.db.prepare("SELECT * FROM runs WHERE owner_id=? AND idempotency_key=?").get(owner, key);
       if (existing) {
@@ -169,8 +186,9 @@ export class Repository {
       });
       const id = randomUUID();
       const time = this.now();
-      this.db.prepare(`INSERT INTO runs(id, owner_id, idempotency_key, request_hash, status, scope, created_at, updated_at)
-        VALUES(?, ?, ?, ?, 'queued', ?, ?, ?)`).run(id, owner, key, hash, JSON.stringify(request.scope), time, time);
+      this.db.prepare(`INSERT INTO runs(id, owner_id, idempotency_key, request_hash, status, scope, created_at, updated_at, execution_mode, scenario)
+        VALUES(?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`).run(id, owner, key, hash, JSON.stringify(request.scope), time, time,
+          scenario ? "controlled-fixture" : "website", scenario ?? null);
       for (const { assignment, persona } of snapshots) {
         const attempt = attemptSchema.parse({
           id: randomUUID(), runId: id, persona, goal: assignment.goal, criteria: assignment.criteria,
@@ -205,6 +223,44 @@ export class Repository {
       .map((row) => attemptSchema.parse(parseJson(row.snapshot)));
   }
 
+  sessionViews(owner: string, runId: string) {
+    const run = this.getRun(owner, runId);
+    return this.db.prepare(`SELECT j.attempt_id,j.lease_expires_at,a.status,l.state,l.session_reference FROM launches l
+      JOIN jobs j ON j.id=l.job_id JOIN attempts a ON a.id=j.attempt_id WHERE j.run_id=?`).all(runId).map((row) => {
+      const reference = row.session_reference ? referenceSchema.parse(parseJson(row.session_reference)) : null;
+      const active = row.state === "active" && row.status === "running" && !run.cancelRequestedAt &&
+        typeof row.lease_expires_at === "string" && row.lease_expires_at > this.now();
+      return {
+        attemptId: z.string().parse(row.attempt_id),
+        available: active && !!reference?.liveViewUrl,
+        liveViewUrl: active ? reference?.liveViewUrl || null : null,
+      };
+    });
+  }
+
+  attemptSummaries(owner: string, runId: string) {
+    this.getRun(owner, runId);
+    return this.db.prepare(`SELECT j.attempt_id,a.status,l.state,l.summary,l.usage,
+      u.reserved_seconds,u.consumed_seconds,u.released_seconds
+      FROM jobs j JOIN attempts a ON a.id=j.attempt_id JOIN usage_reservations u ON u.job_id=j.id
+      LEFT JOIN launches l ON l.job_id=j.id WHERE j.run_id=? ORDER BY j.rowid`).all(runId).map((row) => {
+      const summary = row.summary ? z.object({
+        steps: z.int().nonnegative(), modelCalls: z.int().nonnegative(), durationMs: z.number().nonnegative(),
+        cleanup: z.object({ status: z.enum(["closed", "failed"]) }),
+      }).parse(parseJson(row.summary)) : null;
+      const usage = row.usage ? z.object({
+        actualBrowserSeconds: z.number().nonnegative().optional(),
+        elapsedSeconds: z.number().nonnegative(),
+        remoteStatus: z.enum(["PENDING", "RUNNING", "COMPLETED", "ERROR", "TIMED_OUT"]).optional(),
+      }).parse(parseJson(row.usage)) : null;
+      return {
+        attemptId: row.attempt_id, status: row.status, launchState: row.state ?? "not_launched",
+        summary, usage, reservedSeconds: row.reserved_seconds,
+        consumedSeconds: row.consumed_seconds, releasedSeconds: row.released_seconds,
+      };
+    });
+  }
+
   events(owner: string, runId: string, pagination: Pagination): Page<RunEvent> {
     this.getRun(owner, runId);
     const { after, limit } = paginationSchema.parse(pagination);
@@ -214,13 +270,13 @@ export class Repository {
     return { items, nextCursor: rows.length > limit ? items.at(-1)!.sequence : null };
   }
 
-  private append(runId: string, attemptId: string | null, kind: RunEvent["kind"], data: RunEvent["data"]): void {
+  protected append(runId: string, attemptId: string | null, kind: RunEvent["kind"], data: RunEvent["data"]): void {
     const sequence = z.number().parse(this.db.prepare("UPDATE runs SET next_sequence=next_sequence+1 WHERE id=? RETURNING next_sequence-1 AS sequence").get(runId)?.sequence);
     const event = eventSchema.parse({ runId, attemptId, sequence, timestamp: this.now(), kind, data });
     this.db.prepare("INSERT INTO events VALUES(?, ?, ?)").run(runId, sequence, JSON.stringify(event));
   }
 
-  private saveAttempt(attempt: Attempt): void {
+  protected saveAttempt(attempt: Attempt): void {
     this.db.prepare("UPDATE attempts SET status=?, snapshot=? WHERE id=?")
       .run(attempt.status, JSON.stringify(attempt), attempt.id);
   }
@@ -247,6 +303,7 @@ export class Repository {
   // Internal state primitives, not a lease/launch protocol. Layer 04 must fence paid work.
   startAttempt(owner: string, runId: string, attemptId: string): Attempt {
     return this.transaction(() => {
+      if (this.db.prepare("SELECT l.job_id FROM launches l JOIN jobs j ON j.id=l.job_id WHERE j.attempt_id=?").get(attemptId)) throw conflict();
       const run = this.getRun(owner, runId);
       const attempt = this.attempts(owner, runId).find((entry) => entry.id === attemptId);
       if (!attempt) throw notFound();
@@ -263,6 +320,7 @@ export class Repository {
   finishAttempt(owner: string, runId: string, attemptId: string, outcome: TerminalStatus): Attempt {
     terminalStatusSchema.parse(outcome);
     return this.transaction(() => {
+      if (this.db.prepare("SELECT l.job_id FROM launches l JOIN jobs j ON j.id=l.job_id WHERE j.attempt_id=?").get(attemptId)) throw conflict();
       const run = this.getRun(owner, runId);
       const attempt = this.attempts(owner, runId).find((entry) => entry.id === attemptId);
       if (!attempt) throw notFound();
@@ -280,7 +338,7 @@ export class Repository {
     });
   }
 
-  private reconcile(owner: string, runId: string): void {
+  protected reconcile(owner: string, runId: string): void {
     const attempts = this.attempts(owner, runId);
     if (attempts.some((entry) => entry.status === "running" || entry.status === "queued")) return;
     const run = this.getRun(owner, runId);

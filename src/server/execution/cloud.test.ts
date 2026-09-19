@@ -1,10 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { StagehandMetrics } from "@browserbasehq/stagehand";
 import { configSchema } from "../../lib/config";
 import { DEMO_STORAGE_KEY, fixedFixtures, freshDemo } from "../../lib/demo";
 import { CloudStartupError, createFixtureExecution, type FixtureExecutionOptions } from "./cloud";
 import { FIXTURE_ORIGIN } from "./fixture-network";
 import type { ArtifactSinks } from "./artifacts";
+import { COMPLETE_CRITERION, COUPON_CRITERION, FixtureDriver } from "./driver";
+import type { Page } from "playwright-core";
+import { personas } from "../../lib/personas";
+import type { BrainInput } from "./types";
 
 const mocks = vi.hoisted(() => {
   const page = {
@@ -33,6 +37,7 @@ const mocks = vi.hoisted(() => {
   const contextAccess = vi.fn(() => stagehandContext);
   const browser = {
     sessionId: "session-fixture",
+    get id() { return this.sessionId; },
     get context() { return contextAccess(); },
     close: vi.fn<() => Promise<void>>(),
   };
@@ -41,6 +46,7 @@ const mocks = vi.hoisted(() => {
     close: vi.fn<() => Promise<void>>(),
   };
   const stagehand = {
+    extract: vi.fn<() => Promise<{ data: { action: "give_up"; candidateId: null; value: null; commentary: string } }>>(),
     metrics: vi.fn<() => Promise<StagehandMetrics>>(),
     close: vi.fn<() => Promise<void>>(),
   };
@@ -49,6 +55,7 @@ const mocks = vi.hoisted(() => {
     status: string; projectId: string; connectUrl?: string; startedAt: string; endedAt?: string;
   };
   const sessions = {
+    create: vi.fn<(params: unknown) => Promise<typeof browser>>(async () => browser),
     retrieve: vi.fn<(id: string) => Promise<Session>>(),
     update: vi.fn<(id: string, body: { status: string; projectId: string }) => Promise<void>>(),
     debug: vi.fn(async () => ({ debuggerFullscreenUrl: "https://example.invalid/private-debug" })),
@@ -57,7 +64,10 @@ const mocks = vi.hoisted(() => {
     page, context, stagehandPage, stagehandContext, contextAccess, browser, playwright, stagehand,
     network, sessions,
     sdk: vi.fn(),
-    launch: vi.fn(async () => browser),
+    launch: sessions.create,
+    forbiddenLaunch: vi.fn(),
+    attach: vi.fn(async () => browser),
+    extensions: { create: vi.fn(async () => ({ id: "fake-extension" })), delete: vi.fn() },
     create: vi.fn(async () => stagehand),
     connect: vi.fn(async () => playwright),
     install: vi.fn(async () => network),
@@ -67,11 +77,12 @@ const mocks = vi.hoisted(() => {
 vi.mock("@browserbasehq/sdk", () => ({
   default: class {
     sessions = mocks.sessions;
+    extensions = mocks.extensions;
     constructor(options: unknown) { mocks.sdk(options); }
   },
 }));
 vi.mock("@browserbasehq/stagehand", () => ({
-  browserbase: { launch: mocks.launch },
+  browserbase: { launch: mocks.forbiddenLaunch, connect: mocks.attach },
   Stagehand: { create: mocks.create },
 }));
 vi.mock("playwright-core", () => ({ chromium: { connectOverCDP: mocks.connect } }));
@@ -110,7 +121,7 @@ function options(overrides: Partial<FixtureExecutionOptions> = {}): FixtureExecu
   return {
     mode: "controlled-fixture",
     runId: "00000000-0000-4000-8000-000000000002", personaId: "careful",
-    targetUrl: `${FIXTURE_ORIGIN}/demo`, criteria: ["Complete the demo order"],
+    targetUrl: `${FIXTURE_ORIGIN}/demo`, criteria: [COMPLETE_CRITERION],
     fixturePort: 3000, fixtures: fixedFixtures, viewport: { width: 1280, height: 720 },
     artifacts, signal: new AbortController().signal, onSession: vi.fn(async () => {}),
     ...overrides,
@@ -129,12 +140,21 @@ async function startupError(input = options()): Promise<CloudStartupError> {
   }
 }
 
+function brainInput(): BrainInput {
+  return {
+    persona: personas[0], goal: "Complete the fixture", criteria: [COMPLETE_CRITERION], history: [],
+    observation: { id: "fixture", url: `${FIXTURE_ORIGIN}/demo`, title: "Fixture", text: "", candidates: [], checks: [], signals: [] },
+  };
+}
+
 beforeEach(() => {
   vi.resetAllMocks();
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
   mocks.browser.sessionId = "session-fixture";
   mocks.launch.mockResolvedValue(mocks.browser);
+  mocks.attach.mockResolvedValue(mocks.browser);
+  mocks.extensions.create.mockResolvedValue({ id: "fake-extension" });
   mocks.create.mockResolvedValue(mocks.stagehand);
   mocks.connect.mockResolvedValue(mocks.playwright);
   mocks.install.mockResolvedValue(mocks.network);
@@ -154,6 +174,7 @@ beforeEach(() => {
   mocks.sessions.debug.mockResolvedValue({ debuggerFullscreenUrl: "https://example.invalid/private-debug" });
 });
 afterEach(() => {
+  expect(mocks.forbiddenLaunch).not.toHaveBeenCalled();
   expect(vi.getTimerCount()).toBe(0);
   vi.useRealTimers();
 });
@@ -189,6 +210,9 @@ describe("fixture-only cloud admission", () => {
     { criteria: [""] },
     { criteria: ["criterion".repeat(100)] },
     { criteria: ["Same criterion", " Same criterion "] },
+    { criteria: ["Unknown criterion"] },
+    { criteria: [COUPON_CRITERION, COUPON_CRITERION] },
+    { correlationToken: "not-a-uuid" },
     { viewport: { width: 0, height: 720 } },
     { viewport: { width: 1280, height: 10000 } },
     { viewport: { width: 1280.5, height: 720 } },
@@ -210,6 +234,120 @@ describe("fixture-only cloud admission", () => {
 });
 
 describe("startup and private session setup", () => {
+  it.each(["lost response", "server failure"])("does not retry allocation after %s using the actual SDK transport", async (failure) => {
+    const { default: ActualBrowserbase } = await vi.importActual<typeof import("@browserbasehq/sdk")>("@browserbasehq/sdk");
+    let outgoingCreationPosts = 0;
+    const transport = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      expect(new URL(String(url)).pathname).toBe("/v1/sessions");
+      expect(init?.method).toBe("POST");
+      outgoingCreationPosts++;
+      // The provider may already have allocated a session when its reply is lost.
+      if (failure === "lost response") throw new Error("offline lost response");
+      return new Response("{}", { status: 500, headers: { "content-type": "application/json", "retry-after-ms": "1" } });
+    });
+    mocks.sessions.create.mockImplementationOnce(async (allocation) => {
+      const clientOptions = mocks.sdk.mock.calls[0][0] as ConstructorParameters<typeof ActualBrowserbase>[0];
+      const actual = new ActualBrowserbase({ ...clientOptions, fetch: transport });
+      return await actual.sessions.create(allocation as Parameters<typeof actual.sessions.create>[0]) as unknown as typeof mocks.browser;
+    });
+    const input = options();
+    const error = await startupError(input);
+    expect(error.cleanup).toEqual({ status: "failed", errors: ["startup_session_unconfirmed"] });
+    expect(error.usage.reservedSeconds).toBe(120);
+    expect(error.usage.actualBrowserSeconds).toBeUndefined();
+    expect(input.onSession).not.toHaveBeenCalled();
+    expect(outgoingCreationPosts).toBe(1);
+    expect(transport).toHaveBeenCalledOnce();
+    expect(mocks.attach).not.toHaveBeenCalled();
+    expect(mocks.extensions.delete).toHaveBeenCalledOnce();
+  });
+
+  it("uploads the pinned extension and deletes it after remote cleanup", async () => {
+    const execution = await createFixtureExecution(config, options());
+    expect(mocks.extensions.create).toHaveBeenCalledWith({ file: expect.objectContaining({ path: expect.stringContaining("dist/assets/stagehand-extension.zip") }) });
+    expect(mocks.extensions.create.mock.invocationCallOrder[0]).toBeLessThan(mocks.launch.mock.invocationCallOrder[0]);
+    await execution.driver.close();
+    expect(mocks.extensions.delete).toHaveBeenCalledExactlyOnceWith("fake-extension", { headers: { "Content-Type": null } });
+    expect(mocks.extensions.delete.mock.invocationCallOrder[0]).toBeGreaterThan(mocks.sessions.retrieve.mock.invocationCallOrder.at(-1)!);
+  });
+
+  it("records and releases allocation before any browser connection when the lease is lost during allocation", async () => {
+    let active = true;
+    const onSession = vi.fn(async () => {});
+    mocks.launch.mockImplementationOnce(async () => { active = false; return mocks.browser; });
+    mocks.sessions.retrieve.mockResolvedValueOnce({ ...completed, status: "RUNNING", endedAt: undefined }).mockResolvedValueOnce(completed);
+    const result = await startupError(options({
+      onSession, assertActive: () => { if (!active) throw new Error("lease_lost"); },
+    }));
+    expect(onSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: mocks.browser.sessionId }));
+    expect(mocks.attach).not.toHaveBeenCalled();
+    expect(mocks.sessions.update).toHaveBeenCalledWith(mocks.browser.sessionId, { projectId: completed.projectId, status: "REQUEST_RELEASE" });
+    expect(result.cleanup.status).toBe("closed");
+  });
+
+  it("does not allocate a session after lease loss during extension upload", async () => {
+    let active = true;
+    mocks.extensions.create.mockImplementationOnce(async () => { active = false; return { id: "fake-extension" }; });
+    const result = await startupError(options({ assertActive: () => { if (!active) throw new Error("lease_lost"); } }));
+    expect(mocks.launch).not.toHaveBeenCalled();
+    expect(mocks.extensions.delete).toHaveBeenCalledOnce();
+    expect(result.cleanup.status).toBe("closed");
+  });
+
+  it("attaches bounded layer04 correlation metadata without changing layer03 defaults", async () => {
+    const correlationToken = "00000000-0000-4000-8000-000000000003";
+    const input = options({ correlationToken, criteria: [COUPON_CRITERION, COMPLETE_CRITERION] });
+    const execution = await createFixtureExecution(config, input);
+    const metadata = mocks.launch.mock.calls[0] as unknown as [{ userMetadata: unknown }];
+    expect(metadata[0].userMetadata).toEqual({
+      purpose: "layer04", correlationToken, runId: input.runId, personaId: input.personaId,
+    });
+    expect(Buffer.byteLength(JSON.stringify(metadata[0].userMetadata))).toBeLessThan(512);
+    await execution.driver.close();
+  });
+
+  it("does not spend on a synchronously revoked launch", async () => {
+    await expect(createFixtureExecution(config, options({ assertActive: () => { throw new Error("lease_lost"); } })))
+      .rejects.toThrow("lease_lost");
+    expect(mocks.launch).not.toHaveBeenCalled();
+  });
+
+  it("rechecks ownership immediately before paid launch", async () => {
+    const assertActive = vi.fn().mockImplementationOnce(() => {}).mockImplementation(() => { throw new Error("lease_lost"); });
+    const error = await startupError(options({ assertActive }));
+    expect(error.cleanup).toEqual({ status: "closed", errors: [] });
+    expect(mocks.launch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["launch", mocks.launch, mocks.attach],
+    ["browser connection", mocks.attach, mocks.create],
+    ["Stagehand initialization", mocks.create, mocks.connect],
+    ["session retrieval", mocks.sessions.retrieve, mocks.connect],
+    ["CDP connection", mocks.connect, mocks.page.setViewportSize],
+    ["viewport", mocks.page.setViewportSize, mocks.install],
+    ["network installation", mocks.install, mocks.page.goto],
+    ["navigation", mocks.page.goto, mocks.page.evaluate],
+    ["fixture seed", mocks.page.evaluate, mocks.page.reload],
+    ["fixture reload", mocks.page.reload, mocks.stagehandContext.pages],
+    ["page listing", mocks.stagehandContext.pages, mocks.stagehandPage.url],
+    ["candidate URL", mocks.stagehandPage.url, mocks.stagehandContext.setActivePage],
+    ["active page", mocks.stagehandContext.setActivePage, mocks.sessions.debug],
+  ] as const)("fences startup after ownership is lost during %s", async (_name, previous, next) => {
+    let active = true;
+    const operation = previous as unknown as Mock<(...args: unknown[]) => unknown>;
+    const original = operation.getMockImplementation();
+    operation.mockImplementationOnce(async (...args) => {
+      const result = await original?.(...args);
+      active = false;
+      return result;
+    });
+    const error = await startupError(options({ assertActive: () => { if (!active) throw new Error("lease_lost"); } }));
+    expect(error.message).toBe("cloud_startup_failed");
+    expect(next).not.toHaveBeenCalled();
+    expect(mocks.browser.close).toHaveBeenCalledTimes(_name === "launch" ? 0 : 1);
+  });
+
   it("does not access either context while Stagehand.create is still pending", async () => {
     let resolve!: (stagehand: typeof mocks.stagehand) => void;
     mocks.create.mockImplementationOnce(() => new Promise((yes) => { resolve = yes; }));
@@ -229,11 +367,12 @@ describe("startup and private session setup", () => {
     const execution = await createFixtureExecution(config, input);
     expect(mocks.create.mock.invocationCallOrder[0]).toBeLessThan(mocks.contextAccess.mock.invocationCallOrder[0]);
     expect(mocks.launch).toHaveBeenCalledWith({
-      apiKey: config.BROWSERBASE_API_KEY, projectId: config.BROWSERBASE_PROJECT_ID,
+      projectId: config.BROWSERBASE_PROJECT_ID, extensionId: "fake-extension",
       api_timeout: 120, keepAlive: false, proxies: false,
       browserSettings: { recordSession: true, solveCaptchas: false, viewport: input.viewport },
       userMetadata: { runId: input.runId, personaId: input.personaId, purpose: "layer03" },
     });
+    expect(mocks.attach).toHaveBeenCalledWith({ apiKey: config.BROWSERBASE_API_KEY, sessionId: mocks.browser.sessionId });
     expect(mocks.create).toHaveBeenCalledWith({
       browser: mocks.browser, apiKey: config.BROWSERBASE_API_KEY,
       model: { modelName: config.STAGEHAND_MODEL }, cache: false, selfHeal: false,
@@ -307,7 +446,9 @@ describe("startup and private session setup", () => {
     const error = await startupError(options({ signal: controller.signal }));
     expect(error.cleanup.status).toBe("closed");
     expect(mocks.create).not.toHaveBeenCalled();
-    expect(mocks.browser.close).toHaveBeenCalledOnce();
+    expect(mocks.attach).not.toHaveBeenCalled();
+    expect(mocks.sessions.retrieve).toHaveBeenCalledWith(mocks.browser.sessionId);
+    expect(mocks.browser.close).not.toHaveBeenCalled();
   });
 
   it("closes both owners if cancellation occurs during Stagehand initialization", async () => {
@@ -325,6 +466,36 @@ describe("startup and private session setup", () => {
 
 describe("startup failure cleanup", () => {
   const failure = new Error("private provider details must not escape");
+  it("does not allocate after failed extension provisioning", async () => {
+    mocks.extensions.create.mockRejectedValueOnce(failure);
+    const error = await startupError();
+    expect(error.cleanup).toEqual({ status: "closed", errors: [] });
+    expect(mocks.launch).not.toHaveBeenCalled();
+  });
+
+  it("releases the paid allocation if connection to Stagehand fails before a browser handle exists", async () => {
+    mocks.attach.mockRejectedValueOnce(failure);
+    mocks.sessions.retrieve.mockResolvedValueOnce({ ...completed, status: "RUNNING", endedAt: undefined }).mockResolvedValueOnce(completed);
+    const error = await startupError();
+    expect(error.cleanup).toEqual({ status: "closed", errors: [] });
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.sessions.update).toHaveBeenCalledOnce();
+    expect(mocks.extensions.delete).toHaveBeenCalledOnce();
+  });
+
+  it("bounds browser connection and closes a handle returned after timeout", async () => {
+    let resolve!: (browser: typeof mocks.browser) => void;
+    mocks.attach.mockImplementationOnce(() => new Promise((yes) => { resolve = yes; }));
+    const pending = startupError();
+    await vi.advanceTimersByTimeAsync(30001);
+    expect((await pending).cleanup.status).toBe("closed");
+    expect(mocks.sessions.retrieve).toHaveBeenCalledWith(mocks.browser.sessionId);
+    resolve(mocks.browser);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.browser.close).toHaveBeenCalledOnce();
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
   it("reports launch failure without attempting nonexistent owner cleanup", async () => {
     mocks.launch.mockRejectedValueOnce(failure);
     const error = await startupError();
@@ -332,13 +503,52 @@ describe("startup failure cleanup", () => {
     expect(error.cleanup).toEqual({ status: "failed", errors: ["startup_session_unconfirmed"] });
     expect(error.usage).toMatchObject({ reservedSeconds: 120, elapsedSeconds: 0 });
     expect(mocks.browser.close).not.toHaveBeenCalled();
+    expect(mocks.launch).toHaveBeenCalledOnce();
+  });
+
+  describe("driver synchronous ownership fence", () => {
+    it("rejects action dispatch when ownership changes during candidate checks", async () => {
+      let active = true;
+      const locator = {
+        isVisible: vi.fn(async () => true), isEnabled: vi.fn(async () => true),
+        boundingBox: vi.fn(async () => { active = false; return { y: 0, height: 20 }; }),
+        click: vi.fn(),
+      };
+      const page = {
+        ...mocks.page, frames: () => [{}], screenshot: vi.fn(async () => Buffer.from("fixture")),
+        evaluate: vi.fn(async () => ({ title: "fixture", text: "", candidates: [{ id: "c0", kind: "button", label: "Next" }] })),
+        locator: () => locator, viewportSize: () => ({ width: 1280, height: 720 }),
+      };
+      const driver = new FixtureDriver({
+        page: page as unknown as Page, artifacts: options().artifacts, verify: async () => [],
+        close: async () => ({ status: "closed", errors: [] }), networkErrors: [],
+        assertActive: () => { if (!active) throw new Error("lease_lost"); },
+      });
+      await driver.observe(new AbortController().signal);
+      await expect(driver.act({ actor: "agent", action: "click", candidateId: "c0", value: null, commentary: "" }, new AbortController().signal))
+        .rejects.toThrow("lease_lost");
+      expect(locator.click).not.toHaveBeenCalled();
+      await driver.close();
+    });
+
+    it("propagates the cloud fence to the returned driver without requiring cancellation", async () => {
+      let active = true;
+      const execution = await createFixtureExecution(config, options({
+        assertActive: () => { if (!active) throw new Error("lease_lost"); },
+      }));
+      mocks.page.evaluate.mockClear();
+      active = false;
+      await expect(execution.driver.observe(new AbortController().signal)).rejects.toThrow("lease_lost");
+      expect(mocks.page.evaluate).not.toHaveBeenCalled();
+      expect(await execution.driver.close()).toEqual({ status: "closed", errors: [] });
+    });
   });
 
   it("reports unknown remote cleanup when the SDK returns no session ID", async () => {
     mocks.browser.sessionId = "";
     const error = await startupError();
     expect(error.cleanup).toEqual({ status: "failed", errors: ["startup_session_unconfirmed"] });
-    expect(mocks.browser.close).toHaveBeenCalledOnce();
+    expect(mocks.browser.close).not.toHaveBeenCalled();
     expect(mocks.create).not.toHaveBeenCalled();
   });
 
@@ -353,7 +563,7 @@ describe("startup failure cleanup", () => {
     await vi.advanceTimersByTimeAsync(5001);
     const error = await pending;
     expect(error.cleanup.status).toBe("closed");
-    expect(mocks.browser.close).toHaveBeenCalledOnce();
+    expect(mocks.browser.close).toHaveBeenCalledTimes(hookNumber - 1);
     expect(mocks.stagehand.close).toHaveBeenCalledTimes(hookNumber - 1);
   });
 
@@ -400,12 +610,145 @@ describe("startup failure cleanup", () => {
       onSession: async () => { if (++calls === hookNumber) throw failure; },
     }));
     expect(error.cleanup.status).toBe("closed");
-    expect(mocks.browser.close).toHaveBeenCalledOnce();
+    expect(mocks.browser.close).toHaveBeenCalledTimes(hookNumber - 1);
     expect(mocks.stagehand.close).toHaveBeenCalledTimes(hookNumber - 1);
   });
 });
 
 describe("cleanup fences, accounting, and bounded failures", () => {
+  it("drains a cancelled pending extraction before metrics/close and awaits every resource release", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled");
+    let resolveExtract!: (value: Awaited<ReturnType<typeof mocks.stagehand.extract>>) => void;
+    const extraction = new Promise<Awaited<ReturnType<typeof mocks.stagehand.extract>>>((resolve) => { resolveExtract = resolve; });
+    mocks.stagehand.extract.mockReturnValueOnce(extraction);
+    const resources = { stagehand: false, playwright: false, browser: false, network: false, extension: false };
+    mocks.stagehand.metrics.mockImplementation(async () => { await extraction; return metrics; });
+    mocks.stagehand.close.mockImplementation(async () => {
+      await extraction;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      resources.stagehand = true;
+    });
+    mocks.playwright.close.mockImplementation(async () => { resources.playwright = true; });
+    mocks.browser.close.mockImplementation(async () => { resources.browser = true; });
+    mocks.network.close.mockImplementation(async () => { resources.network = true; });
+    mocks.extensions.delete.mockImplementation(async () => { resources.extension = true; });
+    const artifacts = options().artifacts;
+    const cleanupJson = artifacts.json;
+    const ordinaryJson = vi.fn<ArtifactSinks["json"]>(async (value) => {
+      controller.signal.throwIfAborted();
+      return cleanupJson(value);
+    });
+    const execution = await createFixtureExecution(config, options({
+      signal: controller.signal, artifacts: { ...artifacts, json: ordinaryJson }, cleanupJson,
+    }));
+    execution.driver.policySignal(`${FIXTURE_ORIGIN}/demo`);
+    const deciding = expect(execution.brain.decide(brainInput(), controller.signal)).rejects.toBe(reason);
+    controller.abort(reason);
+    let cleanupReturned = false;
+    const closing = execution.driver.close().then((outcome) => { cleanupReturned = true; return outcome; });
+    setTimeout(() => resolveExtract({ data: { action: "give_up", candidateId: null, value: null, commentary: "Stopped." } }), 12000);
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(mocks.stagehand.metrics).not.toHaveBeenCalled();
+    expect(mocks.stagehand.close).not.toHaveBeenCalled();
+    expect(cleanupReturned).toBe(false);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(mocks.stagehand.metrics).toHaveBeenCalledOnce();
+    expect(mocks.stagehand.close).toHaveBeenCalledOnce();
+    expect(cleanupReturned).toBe(false);
+    expect(resources.stagehand).toBe(false);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(await closing).toEqual({ status: "closed", errors: [] });
+    await deciding;
+    expect(resources).toEqual({ stagehand: true, playwright: true, browser: true, network: true, extension: true });
+    expect(execution.usage).toMatchObject({ modelMetrics: metrics, remoteStatus: "COMPLETED", actualBrowserSeconds: 8 });
+    expect(execution.usage.cleanupDiagnostics).toBeUndefined();
+    expect(execution.usage.cleanupErrors).toBeUndefined();
+    expect(ordinaryJson).not.toHaveBeenCalled();
+    expect(cleanupJson).toHaveBeenCalledExactlyOnceWith({ telemetry: [expect.objectContaining({ code: "POLICY_BLOCK" })] });
+    expect(mocks.stagehand.extract).toHaveBeenCalledOnce();
+    await expect(execution.brain.decide(brainInput(), new AbortController().signal)).rejects.toThrow("gateway_closed");
+    expect(mocks.stagehand.extract).toHaveBeenCalledOnce();
+  });
+
+  it("reproduces cancellation-rejected telemetry persistence and records the previously missing cleanup code", async () => {
+    const controller = new AbortController();
+    const artifacts = options().artifacts;
+    artifacts.json = vi.fn(async () => { controller.signal.throwIfAborted(); throw new Error("unexpected write"); });
+    const execution = await createFixtureExecution(config, options({ signal: controller.signal, artifacts }));
+    execution.driver.policySignal(`${FIXTURE_ORIGIN}/demo`);
+    controller.abort();
+    expect(await execution.driver.close()).toEqual({ status: "failed", errors: ["telemetry_write_failed"] });
+    expect(execution.usage.cleanupErrors).toEqual(["telemetry_write_failed"]);
+    expect(execution.usage.cleanupDiagnostics).toEqual([{ operation: "telemetry_write_failed", category: "rejected" }]);
+    expect(execution.usage.remoteStatus).toBe("COMPLETED");
+    expect(mocks.stagehand.close).toHaveBeenCalledOnce();
+    expect(mocks.browser.close).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a genuine ownership/write failure in the cancellation-permitted teardown sink", async () => {
+    const controller = new AbortController();
+    let owned = true;
+    const write = options().artifacts.json;
+    const cleanupJson = vi.fn<ArtifactSinks["json"]>(async (value) => {
+      if (!owned) throw new Error("private lease details");
+      const artifact = await write(value);
+      if (!owned) throw new Error("private lease details");
+      return artifact;
+    });
+    const execution = await createFixtureExecution(config, options({ signal: controller.signal, cleanupJson }));
+    execution.driver.policySignal(`${FIXTURE_ORIGIN}/demo`);
+    controller.abort();
+    owned = false;
+    expect(await execution.driver.close()).toEqual({ status: "failed", errors: ["telemetry_write_failed"] });
+    expect(write).not.toHaveBeenCalled();
+    expect(execution.usage.cleanupErrors).toEqual(["telemetry_write_failed"]);
+    expect(JSON.stringify(execution.usage)).not.toContain("private lease details");
+    expect(mocks.browser.close).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a real drain timeout and releases remote work before further worker RPCs", async () => {
+    let rejectExtract!: (error: Error) => void;
+    mocks.stagehand.extract.mockImplementationOnce(() => new Promise((_, reject) => { rejectExtract = reject; }));
+    const execution = await createFixtureExecution(config, options());
+    const deciding = expect(execution.brain.decide(brainInput(), new AbortController().signal)).rejects.toThrow("remote_released");
+    mocks.sessions.retrieve.mockResolvedValueOnce({ ...completed, status: "RUNNING", endedAt: undefined }).mockResolvedValueOnce(completed);
+    mocks.sessions.update.mockImplementationOnce(async () => { rejectExtract(new Error("remote_released")); });
+    const closing = execution.driver.close();
+    await vi.advanceTimersByTimeAsync(40001);
+    expect(await closing).toEqual({ status: "failed", errors: ["gateway_drain"] });
+    await deciding;
+    expect(mocks.sessions.update.mock.invocationCallOrder[0]).toBeLessThan(mocks.stagehand.metrics.mock.invocationCallOrder[0]);
+    expect(mocks.stagehand.close).toHaveBeenCalledOnce();
+    expect(execution.usage.cleanupDiagnostics).toEqual([{ operation: "gateway_drain", category: "timeout" }]);
+    expect(execution.usage.remoteStatus).toBe("COMPLETED");
+  });
+
+  it("reports extension deletion failure without losing release accounting", async () => {
+    mocks.extensions.delete.mockRejectedValueOnce(new Error("private details"));
+    const execution = await createFixtureExecution(config, options());
+    expect(await execution.driver.close()).toEqual({ status: "failed", errors: ["extension_delete"] });
+    expect(execution.usage.actualBrowserSeconds).toBe(8);
+    expect(execution.usage.cleanupErrors).toEqual(["extension_delete"]);
+    expect(execution.usage.cleanupDiagnostics).toEqual([{ operation: "extension_delete", category: "rejected" }]);
+  });
+
+  it("bounds extension deletion", async () => {
+    mocks.extensions.delete.mockImplementationOnce(() => new Promise(() => {}));
+    const execution = await createFixtureExecution(config, options());
+    const closing = execution.driver.close();
+    await vi.advanceTimersByTimeAsync(5001);
+    expect(await closing).toEqual({ status: "failed", errors: ["extension_delete"] });
+    expect(execution.usage.cleanupDiagnostics).toEqual([{ operation: "extension_delete", category: "timeout" }]);
+  });
+
+  it.each([undefined, "invalid", "2025-12-31T23:59:59Z"])("leaves unavailable duration uncharged as actual usage: %s", async (endedAt) => {
+    mocks.sessions.retrieve.mockResolvedValue({ ...completed, endedAt });
+    const execution = await createFixtureExecution(config, options());
+    expect(await execution.driver.close()).toEqual({ status: "closed", errors: [] });
+    expect(execution.usage.actualBrowserSeconds).toBeUndefined();
+  });
+
   it("closes once, captures metrics before closing, and exposes updated usage", async () => {
     const execution = await createFixtureExecution(config, options());
     vi.setSystemTime(new Date("2026-01-01T00:00:03.250Z"));
@@ -445,6 +788,8 @@ describe("cleanup fences, accounting, and bounded failures", () => {
     expect(await execution.driver.close()).toEqual({ status: "failed", errors: ["remote_release_unconfirmed"] });
     expect(execution.usage.remoteStatus).toBe("RUNNING");
     expect(execution.usage.actualBrowserSeconds).toBeUndefined();
+    expect(execution.usage.cleanupErrors).toEqual(["remote_release_unconfirmed"]);
+    expect(execution.usage.cleanupDiagnostics).toEqual([{ operation: "remote_release_unconfirmed", category: "unconfirmed" }]);
   });
 
   it.each(["ERROR", "TIMED_OUT"])("recognizes terminal remote status %s without releasing twice", async (status) => {
@@ -462,6 +807,8 @@ describe("cleanup fences, accounting, and bounded failures", () => {
     expect(await execution.driver.close()).toEqual({ status: "failed", errors: ["remote_release_unconfirmed"] });
     expect(mocks.browser.close).toHaveBeenCalledOnce();
     expect(execution.usage.modelMetrics).toEqual(metrics);
+    expect(execution.usage.cleanupErrors).toEqual(["remote_release_unconfirmed"]);
+    expect(execution.usage.cleanupDiagnostics).toEqual([{ operation: "remote_release_unconfirmed", category: "rejected" }]);
   });
 
   it("continues all lifecycle closes and remote verification after Stagehand.close rejects", async () => {
@@ -491,6 +838,7 @@ describe("cleanup fences, accounting, and bounded failures", () => {
     expect(execution.usage.remoteStatus).toBe("COMPLETED");
     expect(execution.usage.modelMetrics).toBeUndefined();
     expect(execution.usage.cleanupDiagnostics).toEqual([
+      { operation: "metrics", category: "rejected" },
       { operation: "stagehand_close", category: "rejected" },
       { operation: "playwright_close", category: "rejected" },
       { operation: "browser_close", category: "rejected" },
@@ -521,9 +869,7 @@ describe("cleanup fences, accounting, and bounded failures", () => {
     expect(await closing).toEqual({ status: "failed", errors: [code] });
     expect(mocks.browser.close).toHaveBeenCalledOnce();
     expect(mocks.network.close).toHaveBeenCalledOnce();
-    if (code !== "metrics_unavailable") {
-      expect(execution.usage.cleanupDiagnostics).toEqual([{ operation: code, category: "timeout" }]);
-    }
+    expect(execution.usage.cleanupDiagnostics).toEqual([{ operation: code === "metrics_unavailable" ? "metrics" : code, category: "timeout" }]);
   });
 
   it("bounds Stagehand initialization timeout and releases the known browser", async () => {
