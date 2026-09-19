@@ -8,6 +8,13 @@ exception. Layer 04b (#11) adds custom structural and evidence-grounded semantic
 criteria for the store and project board before the layer 05 wall. Natural-language
 evaluation is a recorded heuristic, not a deterministic outcome oracle.
 
+The #8 [native-policy probe](EXECUTION.md#native-browser-policy-candidate-offline-phase-a)
+is offline-only. It is not imported by the worker/cloud factory and changes no
+admission, returning-context, recovery or budget behavior. Running it uploads no
+extension and allocates no provider browser/model work. A provider proof requires
+fresh coordinator approval and a separately reviewed bounded harness; existing
+API credentials do not grant that approval.
+
 Layer07 adds [advanced controlled workflows](ADVANCED_WORKFLOWS.md) on this same
 worker: private context creation/adoption/retirement, acknowledged exclusive
 human control, immutable reruns and deterministic bounded reproduction jobs.

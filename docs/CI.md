@@ -92,6 +92,136 @@ must include caches rather than silently excluding the location of a leak.
 Turbopack's root is the build working directory so a nested clean package cannot
 silently select the developer checkout's outer lockfile.
 
+## Native-policy Linux namespace acceptance
+
+The dedicated native-policy job is independent of the application and container
+gates. It evaluates the native Chromium extension hypothesis with owned local
+listeners, not Playwright request interception. It requires Linux and fails
+rather than skipping when namespaces, IPv6, DNS, or browser dependencies are
+unavailable. macOS lint/type checks are not Linux acceptance evidence.
+
+### Installation and invocation
+
+Use the repository's Node 22 runtime (at least 22.18), locked Playwright 1.58.2,
+and Ubuntu `iproute2`, `util-linux`, and `procps`. Install the **full Chromium
+build**: the ordinary e2e `--only-shell` installation is insufficient for
+extension loading.
+
+```sh
+umask 077
+mkdir -p data/ci-scratch
+export TMPDIR="$PWD/data/ci-scratch"
+npm ci --no-audit --no-fund
+sudo apt-get update
+sudo apt-get install -y iproute2 util-linux procps
+npx --no-install playwright install --with-deps chromium
+CI=true node node_modules/tsx/dist/cli.mjs scripts/native-policy-linux.ts --ci-sudo
+```
+
+The explicit CI-only switch requires passwordless `sudo --non-interactive`.
+It creates network, mount, and PID namespaces with `unshare`, then launches
+Playwright as the original invoking UID/GID, not host root. The default local
+Linux mode instead uses `unshare --user --map-root-user`:
+
+```sh
+node node_modules/tsx/dist/cli.mjs scripts/native-policy-linux.ts
+```
+
+Both modes invoke `playwright.native-policy-linux.config.ts` with one worker
+and no retries. Directly invoking that configuration is unsupported: the test
+requires the launcher's namespace identity information and isolated resolver.
+No Docker daemon, provider credentials, environment-secret files, external
+target probes, host interfaces, routes, or firewall changes are needed.
+Dependency/browser provisioning uses package mirrors; the acceptance run has
+only namespace-local loopback and no external interface.
+
+### Startup, isolation, and bounded cleanup
+
+Before executing any network setup, the launcher verifies that both its
+network and mount namespace identities differ from the parent's recorded
+identities and that loopback is the namespace's only interface. It makes
+mount propagation private, brings up loopback, and assigns exactly
+`10.77.0.1/32`, `169.254.77.1/32`, and `fd00::1/128` there. IPv6 loopback `::1`
+must also be usable. There is no attempt to repair or reconfigure host
+networking if any prerequisite fails.
+
+A mode-0700 scratch directory in the checkout contains the resolver file,
+private browser profiles, and browser temporary files. `/etc/resolv.conf` is
+bind-mounted in the private mount namespace to use only `127.0.0.1`; its
+host contents are never edited. The network-namespaced
+`net.ipv4.ip_unprivileged_port_start=0` setting permits the unprivileged test
+process to bind its local UDP DNS listener on port 53. The test independently
+rechecks namespace identities and the resolver contents before binding.
+
+Each namespace setup command has a 10-second timeout. Browser launch is
+bounded at 15 seconds, initial extension-worker discovery at 10 seconds, and
+navigation at 5 seconds. The test has a 120-second timeout and the Playwright
+run a 150-second global timeout; the inner runner and outer launcher add
+180- and 210-second hard-stop bounds. The PID namespace and
+`unshare --kill-child=SIGKILL` contain surviving descendants when the namespace
+runner exits. Normal `finally` cleanup closes browser contexts, removes
+profiles, destroys tracked accepted sockets, closes HTTP/DNS servers, and
+removes the scratch directory. Namespace teardown removes its addresses,
+mounts, and namespaced sysctl changes. Abrupt termination of the outer launcher
+can still leave checkout scratch files; an ephemeral CI runner is the final
+cleanup boundary, not proof that JavaScript `finally` ran after a job kill.
+
+### Listener, policy, and DNS guarantees
+
+The fixture binds HTTP servers specifically to `10.77.0.1`, `169.254.77.1`,
+`::1`, and `fd00::1`, using one shared dynamically allocated destination port.
+Each address must pass a real Chromium positive control: after clearing only
+the proxy setting through the extension's trusted service worker, navigation
+must return HTTP 200, the correct address-specific body, and an increased TCP
+connection count. The cleared proxy readback must no longer be extension
+controlled and must be in direct or system mode.
+
+The deny proxy is **not** one of those destination listeners. Before every
+browser launch and after every blocked lane, an independent check verifies
+that the HTTP, HTTPS, and SOCKS5 fallback configurations all reference
+`127.0.0.1:65534`, successfully binds and closes that exact TCP endpoint, and
+requires a subsequent native TCP connection attempt to fail with
+`ECONNREFUSED` within two seconds. A functioning endpoint, bind conflict, or
+timeout fails the test. This check never records proxy-port activity as
+destination-listener traffic.
+
+Every browser starts with a fresh persistent profile and waits for the
+extension's `ready: true`, `fault: null` state plus proxy/privacy readback:
+the fixed proxy, `disable_non_proxied_udp`, and disabled network prediction
+must all be controlled by the extension. Each enabled-policy lane performs
+two rounds of navigations to all four literal addresses and the controlled
+DNS name. Each must fail with `ERR_PROXY_CONNECTION_FAILED`. The test then
+rechecks policy and the closed proxy, requiring **zero additional accepted TCP
+connections and zero HTTP requests** at every destination sentinel. It uses
+no CDP interception, request routing, `route.abort`, or simulated responses.
+
+The local UDP DNS responder returns TTL-zero A records for exactly
+`owned-rebind.test`, first pointing to `10.77.0.1`, then to `169.254.77.1`.
+It returns no AAAA data for that name and NXDOMAIN for other names. In each
+phase, a positive-control browser must generate an observed DNS A response
+and reach the corresponding sentinel using the **same hostname and port**.
+That browser is fully closed before a fresh policy-enabled browser exercises
+the blocked lane. A fresh profile and browser process for the next phase
+also eliminate the preceding browser's DNS cache and connection pools.
+
+This proves **answer changes across fresh browser processes**, with reachable
+owned destinations and denial in each fresh policy lane. It does **not**
+prove same-process DNS rebinding, active-document origin changes, DNS cache
+expiry behavior, or connection-pool invalidation within a running browser.
+The blocked proxy can reject before resolving the destination, so blocked
+lanes are deliberately not required to query DNS or consume its current
+answer. Do not describe them as observing a rebinding response under policy.
+
+This focused lane covers HTTP navigation, repeated proxy failure, those four
+owned addresses, and process-boundary DNS answer changes only. It does not
+establish HTTPS/TLS or QUIC coverage, WebRTC/STUN/TURN transport behavior,
+workers/subresource behavior, IPv6 link-local scope-ID handling, every address
+representation, UDP/TCP DNS fallback, provider execution, or deployment
+isolation. Privacy readback is configuration evidence, not a substitute for
+transport-specific tests. The separate native-policy suite owns additional
+browser-surface tests; neither suite alone proves a complete production
+network sandbox or safe provider rollout.
+
 ## Pinned Actions runtime
 
 Both official actions run on **Node 24**, independently of the application's

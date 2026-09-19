@@ -141,7 +141,7 @@ Regular CI never needs a live Browserbase key. Real-browser paid checks are expl
 | Contexts, takeover, reproduction/reduction | Layer07 remote/local evidence retained; final offline suites remain green | Historical proof plus current regressions, no new layer08 context/reduction allocations |
 | Private backup, cleanup and accounting | Ten inspected PNGs and 218.88-second played/inspected local video; 1,200 lifetime reserved / 253.520 actual seconds, all four new sessions independently COMPLETED | Verified; backup includes honest idle/resize gaps, not continuous remote footage |
 | Browser completeness | Tabs/subframes/uploads/throttling and general accessibility evaluation remain unsupported | Explicit limitation, not silently counted as implemented |
-| Arbitrary authorized public website | Current environment lacks documented enforceable all-channel no-bypass destination control | **Blocked by #8; overall #1/#16 release acceptance remains incomplete** |
+| Arbitrary authorized public website | Native Chrome proxy/privacy candidate now has maintained offline sentinel probes; actual remote enforcement, broker and public objective remain unproved | **Blocked by #8; overall #1/#16 release acceptance remains incomplete** |
 
 ## 7. Accountability ledger
 
@@ -159,3 +159,15 @@ Regular CI never needs a live Browserbase key. Real-browser paid checks are expl
 | 08 | Implemented; PR review; release blocked | Issue #16 / PR #21, refs #1/#8 | Clean Node and actual hosted nonroot/read-only container/private-volume/CDP-scratch/backup-quarantine validation; 2,044 unit/API + 103 Chromium tests, lint/types/build, HTTP/SSE and HTTPS preflights. Dedicated security and independent/coordinator corrections cleared. Reviewed runtime `a5de2ba` passed real two-persona second-coupon failure, active cancellation, selected fixed comparison and genuine-owner decoded HLS (135 frames). Ten private PNGs and 218.88-second backup WebM inspected; exact four new sessions independently COMPLETED, peak2, TTL300. Layer08: 253.520 actual / 1,200 lifetime reserved seconds of 3,600 cap; 125,058 prompt / 7,102 completion tokens available. Initial CLI entry failure allocated nothing and was corrected with an actual-command network-disabled regression. Project actual 1,345.293s; next baseline1,346. No further provider/model calls. Overall #16 release acceptance and #1/#8 remain open for the external no-bypass public-target decision; coordinator alone merges after final exact-head checks. |
 
 The coordinator keeps session todos and child-session notifications in addition to this versioned ledger. Child sessions report changed files, checks, live-call usage, PR URL, unresolved issues and the exact next dependency. Long-running work is not considered complete when a child merely becomes idle.
+
+### #8 follow-up: native-policy feasibility
+
+The maintained MV3 policy and independent full-Chromium tests investigate an
+alternative to externally hosted mandatory proxy infrastructure. Native Chrome
+settings supply the proposed fail-closed connection boundary; a future worker
+HTTP broker would supply functionality, not enforcement. Actual local Chromium
+145.0.7632.6 positive/negative TCP/UDP controls are recorded in
+[EXECUTION.md](EXECUTION.md#native-browser-policy-candidate-offline-phase-a).
+No provider resources, model calls, public execution capability or renewed
+spending allocation are implied. Full remote enforcement and a genuine scoped
+public objective remain required; this follow-up references, not closes, #8.

@@ -1,0 +1,7 @@
+{
+  "manifest_version": 3,
+  "name": "Flash Flood native egress policy probe",
+  "version": "0.1.0",
+  "permissions": ["proxy", "privacy"],
+  "background": { "service_worker": "background.js", "type": "module" }
+}
