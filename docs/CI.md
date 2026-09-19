@@ -223,11 +223,14 @@ This snapshot requires **no dependency edits**.
 
 ## Failure matrix: existing evidence and limits
 
-These are regression locations and representative existing test names, not a
-claim that any particular release invocation has already passed all gates.
-Rows marked **new release regression** describe tests present in this change,
-not completed validation. They require the final consolidated run after all
-contributors finish. No in-flight test count is used as release acceptance.
+These are regression locations and representative test names. Rows marked
+**new release regression** were introduced in this change. On the reviewed
+runtime `a5de2ba`, the consolidated local gates passed 2,044 tests and 103
+Chromium tests, actual HTTP/SSE, HTTPS preflights and clean-package restart;
+both exact-head hosted push/PR `check` and `container` jobs and GitGuardian
+passed. Final PR-head checks must pass again after documentation finalization.
+The separately authorized paid proof is recorded in WORKER.md, not attributed
+to credential-free CI.
 
 | Failure / invariant | Existing regression evidence | Boundary / gap |
 | --- | --- | --- |
@@ -252,11 +255,11 @@ contributors finish. No in-flight test count is used as release acceptance.
 | Build provenance / harness interruption | `src/server/worker/advanced-build.test.ts`: stale source/modified artifact rejection; `tests/e2e/advanced-harness.spec.ts`: SIGTERM stops servers/releases lock | A verified receipt binds files, not a signed supply-chain attestation. |
 | Real HTTPS / genuine-owner report resume | `scripts/report-integration.ts --offline-preflight` | Restart/authenticated readback and unchanged zero-launch ledger; cancelled/not-observed report, no paid replay. |
 | Advanced HTTPS / restart / actual UI marker | `scripts/advanced-integration.ts --offline-preflight` | Zero provider calls and `paidProofPassed: false`; no approval, remote takeover or paid context evidence. |
-| Deployment fail-closed config, durable migration, shutdown (**new release regression**) | `src/server/deployment/deployment.test.ts` in the normal suite: unsafe release input rejection, future-schema rollback refusal, graceful SIGTERM and forced-shutdown failure | Final consolidated validation pending. Local Node/SQLite and packaging assertions; not a built-image Docker runtime proof. |
+| Deployment fail-closed config, durable migration, shutdown (**new release regression**) | `src/server/deployment/deployment.test.ts` in the normal suite: unsafe release input rejection, future-schema rollback refusal, graceful SIGTERM and forced-shutdown failure | 45 focused deployment regressions passed. Separate hosted container gate additionally exercised the real image/runtime, not merely these assertions. |
 | Release reservation plan and queue/cancel preflight (**new release regression**) | `src/server/worker/release-proof.test.ts`, `scripts/release-integration.ts --offline-preflight` | Actual SQLite policy/queued cancellation and source-bound receipt only; not HTTPS, model or provider acceptance. |
 | Clean packaged supervisor and HTTPS owner restart (**new release regression**) | `npm run release:package`, `npm run release:package-check`; `src/server/worker/release-runtime.test.ts` | Fresh install/build and actual web-only supervisor, same-owner HTTPS restart, graceful process shutdown, no provider key/calls; does not itself prove paid worker cleanup. |
 | Restored-snapshot budget loss (**new release regression**) | `src/server/deployment/deployment.test.ts`: actual 3,480-second snapshot followed by 120 more seconds exhausts the 3,600-second live ledger; restored snapshot cannot pass the deployed paid guard | Remote closure cannot restore missing historical reservations. Backups are quarantined for web-only recovery; paid restart requires separately reviewed compatible preservation of all history and unresolved identities. |
-| Honest health endpoint (**new release regression**) | `src/app/api/health/route.test.ts`: “reports uncached process liveness without claiming worker or provider readiness” | Final consolidated validation pending. Process liveness only, not database, worker or provider readiness. |
+| Honest health endpoint (**new release regression**) | `src/app/api/health/route.test.ts`: “reports uncached process liveness without claiming worker or provider readiness” | Passed. Process liveness only, not database, worker or provider readiness. |
 
 Outstanding release evidence must be stated separately: configured environment
 review/branch protection, actual hosted CI execution, external HTTPS deployment,

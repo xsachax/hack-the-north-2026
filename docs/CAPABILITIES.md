@@ -33,7 +33,7 @@ run of every feature on the release head.
 | Evidence reports and grouping | `src/server/reports/service.ts`, `aggregate.ts`, `exports.ts` | Report API/aggregation/artifact tests and `reports.spec.ts`; persisted citations and explicit tested/not-tested cohorts; no conversion predictions |
 | Bug discovery | Trusted store second-coupon verifier | Real planted second-coupon failure in EXECUTION.md/WORKER.md. All six fixture defects have deterministic tests, but **only second-coupon has verified autonomous discovery**; the others are not claimed found |
 | Protected screenshots and exports | Artifact writer/reader and report exporters | Artifact/API negative tests; owner-only MIME/path/symlink/size bounds, text redaction and escaped downloads; screenshot pixels are sensitive, not redacted |
-| HLS recording playback | `src/server/reports/replay.ts`; `src/components/recording-evidence.tsx` | Replay/API tests and `reports.spec.ts`; exact operator CDN origins, public DNS pin, TLS/no redirects, per-owner/attempt consent; actual 119-frame decoded layer06 proof in REPLAY.md predates later identity correction |
+| HLS recording playback | `src/server/reports/replay.ts`; `src/components/recording-evidence.tsx` | Replay/API tests and `reports.spec.ts`; exact operator CDN origins, public DNS pin, TLS/no redirects, per-owner/attempt consent; layer08 genuine-owner 135-frame decoded proof on the reviewed packaged path. Historical 119-frame layer06 proof predates later identity correction |
 | Returning contexts | `src/server/workflows/contexts.ts`, `context-provider.ts` | Context/API tests and `contexts.spec.ts`; layer07 real localStorage contrast, owner/exact-scope durable holds, three creations/deletions; ten-second eligibility is not provider save acknowledgment; no sessionStorage restoration claim |
 | Human takeover | `src/server/workflows/takeover.ts`; loop and wall | Takeover tests and `takeover.spec.ts`; real layer07 UI control/drain/no-overlap/handback in ADVANCED_WORKFLOWS.md; bounded app-managed grants, not provider-wide link revocation or human keystroke recording |
 | Immutable rerun and comparison | `src/server/workflows/rerun.ts`, `comparison.ts` | Workflow/API tests, `reruns.spec.ts`, `advanced-worker.spec.ts`; report-v1/finding-v2/criterion-v1, exact definitions/scope and confirming positive coverage; absence alone is not fixed |
@@ -58,6 +58,15 @@ test-only report clock synchronization; layer06 playback predates finding-v2.
 Do not rewrite source attribution or recreate deleted owner credentials.
 The layer08 rehearsal records its own source/build, actual owner/media proof and
 non-replenishing ledger separately.
+Its reviewed runtime revision is `a5de2ba`: two personas independently reached
+the planted second-coupon failure, a third session was actively cancelled, and a
+selected immutable fixed rerun confirmed improvement. The cited criterion states
+were the supported **legacy coupon milestone** (`not_met`, `not_observed`,
+`met`), not a fresh demonstration of arbitrary semantic evaluation. General
+semantic provider evidence remains the explicitly attributed layer04b board
+proof. Ten private screenshots and the playable local backup video were
+inspected; no new context/takeover/reduction proof or all-six-defect discovery is
+claimed. See [layer08 accounting](WORKER.md#layer08-release-rehearsal).
 
 The refreshed [#8 provider/operator checklist](EXECUTION.md#layer08-prerequisite-refresh-2026-09-19)
 is a required external decision. Neither this audit, a secure container nor

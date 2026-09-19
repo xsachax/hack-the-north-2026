@@ -324,32 +324,36 @@ application files for a random private-output/secret sentinel. It verifies the
 nonroot UID/GID, read-only image, directory/database/sidecar modes, release receipt,
 migrations, all probes and Docker's own healthy state. It requires paid flags
 false, an empty provider-key file, no provider project and no paid worker process.
-Finally it sends graceful stop, requires exit zero, makes a quiescent local backup,
-checks persisted data, boots that snapshot, and gracefully stops it again.
+It exercises the actual Playwright CDP temporary-directory path against a
+loopback rejection stub. Finally it sends graceful stop, requires exit zero,
+makes a quiescent local backup, checks persisted data and paid quarantine, boots
+that snapshot web-only, and gracefully stops it again.
 Cleanup removes only its own named containers/project volume and generated image
 tags; it never prunes resources or restarts/repairs the Docker daemon.
 
 No Browserbase credential, model call, paid browser or external TLS proxy is used.
 Success ends with `offline_docker_validation_pass_product_release_blocked_issue8`;
 it proves offline packaging, not product release or the provider egress boundary.
-The CI coordinator must attach the actual exact-revision hosted result before
-claiming Docker runtime validation. A script existing in the tree is not evidence
-that it passed.
+Both push and pull-request container jobs passed at the paid proof's reviewed
+source revision `a5de2ba6fb4e1fd10f7ba229bdb73b86ea17db5c` (Actions runs
+35448737860 and 35448740431), including actual CDP scratch and web-only snapshot
+quarantine. Final PR checks must still pass on its exact final head.
 
 The authoring host has Docker CLI 28.4.0 and Compose 2.39.2, but Docker daemon
 `/version` and `/info` return HTTP 500. Therefore image build, container UID/volume,
-read-only filesystem and Docker signal/health behavior are **not verified here**.
-The exact missing validation is: run the provision/build/probe/stop/backup/restore
-commands above on a functioning Docker Engine, first with paid flags false.
-Do not claim production readiness from YAML parsing alone.
+read-only filesystem and Docker signal/health behavior were not verified on that
+local daemon; it was not repaired or restarted. The independent hosted execution
+above supplies actual container evidence, not an inference from Compose parsing.
+An operator's real HTTPS proxy, storage mount and provider configuration still
+need environment-specific acceptance; no external deployment was provisioned.
 
 Authoring evidence: Compose configuration parsed successfully; the actual
 `docker build --pull -t flash-flood:validation .` attempt failed at daemon
-`/_ping` with HTTP 500. All 42 packaging regressions and focused ESLint passed.
+`/_ping` with HTTP 500. All 45 packaging regressions and focused ESLint passed.
 A separate allowlisted directory completed `npm ci` and the release build on
 Node 22.19.0, then passed startup/readiness/liveness, fixture HTTP, SIGTERM exit
 0, persistent-database reopening, a quiescent local backup and backup schema
-validation. No cloud calls or paid execution were performed.
+validation. Those packaging checks made no cloud calls.
 The refreshed clean-Node run also booted the restored snapshot and confirmed
 future-schema startup refusal without changing the stored schema version.
 The version-2 receipt was additionally checked against an actual clean production
@@ -357,6 +361,20 @@ build: modifying compiled Next JavaScript or installed Zod package bytes was
 rejected with the same `BUILD_ID`; restoring those bytes recovered the approved
 fingerprint. Normal startup, all probes and graceful shutdown left that
 fingerprint unchanged, with the 1092/3600 deployment policy persisted.
+
+The separately authorized layer08 rehearsal then exercised the real clean
+packaged supervisor, worker and original-owner HTTPS flow with four actual cloud
+sessions. Broken multi-persona evidence, active cancellation, selected fixed
+comparison and current-owner decoded HLS passed. All four sessions were
+independently `COMPLETED`; private recording inspection and file-only finalization
+passed. [WORKER.md](WORKER.md#layer08-release-rehearsal) records exact charges and
+limits. This is clean Node paid-runtime evidence, not a claim that a paid worker
+was run inside the hosted offline container.
+
+The proof preserves its approved 1,092-second baseline. Fresh later work against
+this same provider project must explicitly account for the now-known
+1,345.293 actual seconds (rounded-up baseline **1,346**) before initializing a
+new policy. Never modify/reset an existing ledger to regain its lifetime cap.
 
 A clean, isolated, credential-free Node 22 lockfile installation and Next build
 can validate application packaging without Docker. A clean build must contain

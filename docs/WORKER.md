@@ -629,3 +629,82 @@ snapshot compatibility, conservative cache removal, independent acceptance
 oracles and exact-session cleanup proof. Additional regressions exclude
 hidden/clipped text from semantic evidence and distinguish verifier infrastructure
 errors from persona abandonment. Public-target gate #8 remains open.
+
+## Layer08 release rehearsal
+
+Issue #16 / PR #21 adds clean single-host deployment and the separately gated
+[release harness](REHEARSAL.md). The real rehearsal used reviewed runtime
+`a5de2ba6fb4e1fd10f7ba229bdb73b86ea17db5c` and an independently verified clean
+Node package, not the developer checkout's build or a substitute worker.
+Before approval, 2,044 unit/API/repository/worker tests, 103 Chromium tests,
+lint/types/build, HTTP/SSE and offline HTTPS preflights passed. Both exact-head
+push/PR CI jobs included actual offline Docker build/context scanning, private
+volume, CDP scratch, probes, shutdown and web-only backup restore/quarantine;
+GitGuardian and dedicated security/correctness/coordinator reviews passed.
+
+The first approved command failed at configuration loading, **before any
+invocation, worker, launch intent or reservation**. Its dynamic `@next/env`
+default import did not match the actual tsx CommonJS loader. The correction uses
+the established static import. A regression runs the maintained npm command
+with fake configuration, network disabled and a missing package, proving that
+the real command reaches the preallocation package boundary. Private failure
+diagnostics contain fixed stage/kind fields, not error text or credentials.
+After full gates and renewed exact source/package/empty-ledger approval, the
+four-session plan ran once. No paid retry or replacement browser was used.
+
+| Phase | Durable outcome and criterion evidence | Actual browser seconds | Lifetime reservation |
+| --- | --- | --- | --- |
+| Broken, careful first timer | `target_failed`, seven real decisions/actions; second-coupon exception, cited milestone `not_met` | 85.036 | 300 |
+| Broken, bargain hunter | `target_failed`, seven real decisions/actions; same verified defect, cited milestone `not_met` | 85.024 | 300 |
+| Active cancellation | `cancelled` after active provider reference; zero decisions/actions; milestone `not_observed` | 1.152 | 300 |
+| Selected fixed rerun | `succeeded`, seven real decisions/actions; cited milestone `met`, exact immutable comparison `confirmed_fixed` | 82.308 | 300 |
+| Total | Four independently matched `COMPLETED` sessions | **253.520** | **1,200 of 3,600** |
+
+The actual paid worker uses Gateway `google/gemini-2.5-flash`. Three available
+model metric records total **125,058 prompt / 7,102 completion tokens**; the
+cancelled-before-decision session has no model metric record. Available counters
+are not an invoice. This release checks the legacy coupon milestone, not fresh
+general semantic evaluation; that provider evidence remains layer04b's board
+proof. Only the planted second-coupon defect is verified as autonomously found.
+Deterministic tests for the other five do not imply autonomous discovery.
+
+The durable ledger charged **257 whole seconds** and released **943**; its
+non-replenishing lifetime reservation remains **1,200**, not 257. Peak observed
+concurrency was two, within the maximum three; each TTL was 300 seconds. The
+approved external baseline stayed 1,092 throughout. Prior tracked actual
+1,091.773 plus 253.520 gives **1,345.293 project seconds**; fresh later work must
+use at least **1,346** as its rounded-up baseline without resetting this ledger.
+The remaining 2,400 reservation seconds are unspent reserve, not permission for
+additional calls. No new contexts or reduction candidates were created.
+
+Actual owner API, persisted wall events/action commentary, two simultaneously
+active rendered provider viewports, private registered observation screenshots,
+report evidence and immutable fixed comparison passed. The original owner then
+consented to protected HLS playback: one metadata read returned ready, playback
+advanced from zero to 4.441 seconds and decoded **135 frames at 1280x900**.
+One protected playlist and three protected media responses stayed same-origin;
+the captured frame showed the controlled store. No signed provider URL was
+published and no allocation occurred during readback.
+
+Ten original private PNGs were opened and inspected. The 8,596,071-byte local
+WebM backup played to completion: **218.88 seconds, 5,472 decoded frames,
+1440x1000**. Sampled frames were inspected as well. This is an unedited local
+observer recording with intentional blank idle periods after viewers are
+closed and brief viewport-resize transitions; it is not a polished demo or
+continuous remote browser recording. Real remote replay is the separate HLS
+proof above. Exact image/video hashes were manually attested, then the file-only
+finalizer validated unchanged source, inventory, ledger and cleanup. All media
+remain ignored and private (files0600/directories0700), with no upload.
+
+The complete cumulative set of four new correlated sessions was independently
+listed/retrieved and matched to persisted references, each exactly `COMPLETED`.
+No queued/leased jobs or unsettled launches remain. The supervisor, worker,
+app, HTTPS proxy and observer browser stopped; TLS files and invocation lock
+were removed. No owner credential was persisted or recreated. Prior layer07
+context/takeover/reduction evidence retains its original attribution. No further
+provider or model calls were made after this proof.
+
+This accepts the controlled-site hardening/rehearsal scope, **not the original
+arbitrary authorized-website release**. Issue #8 still requires the explicit
+external provider/deployment enforcement decision; #1/#8 and overall #16
+acceptance must not be closed or relabelled complete.
