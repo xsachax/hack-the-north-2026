@@ -3,7 +3,9 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { test, expect, type Page } from "@playwright/test";
 import type { ArtifactSinks } from "../../src/server/execution/artifacts";
-import { FixtureDriver, COUPON_CRITERION, demoVerifier } from "../../src/server/execution/driver";
+import { FixtureDriver, COUPON_CRITERION, COMPLETE_CRITERION, demoVerifier } from "../../src/server/execution/driver";
+import { executePersona } from "../../src/server/execution/loop";
+import { personas } from "../../src/lib/personas";
 import { FIXTURE_ORIGIN, installFixtureNetwork, localFixtureSource } from "../../src/server/execution/fixture-network";
 import type { BrowserAction, Observation } from "../../src/server/execution/types";
 import { DEMO_STORAGE_KEY, fixedFixtures, freshDemo } from "../../src/lib/demo";
@@ -18,15 +20,16 @@ const sinks: ArtifactSinks = {
   json: async (value) => artifact(Buffer.from(JSON.stringify(value)), "json"),
   telemetry: async (value) => artifact(Buffer.from(JSON.stringify(value)), "json"),
 };
-async function setup(page: Page, broken = false) {
+async function setup(page: Page, broken = false, criteria = [COUPON_CRITERION]) {
   const network = await installFixtureNetwork(page.context(), page, localFixtureSource(4317), () => {});
   await page.goto(`${FIXTURE_ORIGIN}/demo/category/home`);
   await page.evaluate(({ key, state }) => sessionStorage.setItem(key, state), {
     key: DEMO_STORAGE_KEY, state: JSON.stringify(freshDemo({ ...fixedFixtures, secondCoupon: broken })),
   });
   await page.reload();
+  await page.getByRole("link", { name: "Maple ceramic mug", exact: true }).waitFor();
   const driver = new FixtureDriver({
-    page, artifacts: sinks, verify: demoVerifier([COUPON_CRITERION]), networkErrors: network.errors,
+    page, artifacts: sinks, verify: demoVerifier(criteria), networkErrors: network.errors,
     close: async () => { await page.close(); return { status: "closed", errors: [] }; },
   });
   return driver;
@@ -38,6 +41,44 @@ async function act(driver: FixtureDriver, action: BrowserAction["action"], label
   await driver.act({ action, candidateId: candidate?.id ?? null, value, commentary: "", actor: "agent" }, signal());
   return driver.observe(signal());
 }
+
+test("actual verifier and loop retain observed coupon milestones through demo completion", async ({ page }) => {
+  const criteria = [COUPON_CRITERION, COMPLETE_CRITERION];
+  const driver = await setup(page, false, criteria);
+  const actions: [BrowserAction["action"], string, string | null][] = [
+    ["click", "Maple ceramic mug", null], ["click", "Add to cart", null], ["click", "View cart", null],
+    ["type", "Coupon code", "SAVE10"], ["click", "Apply coupon", null],
+    ["type", "Coupon code", "COZY5"], ["click", "Apply coupon", null],
+    ["click", "Continue to delivery", null], ["type", "Canadian postal code", "N2L 3G1"],
+    ["click", "Review order", null], ["click", "Place demo order", null],
+  ];
+  const observations: Observation[] = [];
+  const result = await executePersona({
+    persona: personas.find((persona) => persona.id === "bargain-hunter")!,
+    goal: "Apply both advertised coupons, then complete a synthetic demo order.",
+    criteria, limits: { maxSteps: 12, maxModelCalls: 12, maxDurationMs: 20000, carefulDelayMs: 0 },
+  }, {
+    driver,
+    brain: {
+      decide: async ({ observation }) => {
+        const [action, label, value] = actions.shift()!;
+        const candidate = observation.candidates.find((item) => item.label === label);
+        expect(candidate, label).toBeDefined();
+        return { action, candidateId: candidate!.id, value, commentary: "" };
+      },
+    },
+    onEvent: async (event) => { if (event.kind === "observation") observations.push(event.observation); },
+  });
+  expect(result.status).toBe("succeeded");
+  expect(result.steps).toBe(11);
+  expect(result.checks).toEqual(criteria.map((criterion) => ({
+    criterion, passed: true, evidence: expect.stringMatching(/^observation:/),
+  })));
+  const cartChecks = observations.filter((observation) => observation.url.endsWith("/demo/cart")).map((observation) => observation.checks);
+  expect(cartChecks.some((checks) => checks.some((check) => check.criterion === COUPON_CRITERION && !check.passed))).toBe(true);
+  expect(cartChecks.at(-1)).toEqual([{ criterion: COUPON_CRITERION, passed: true, evidence: expect.any(String) }]);
+  expect(observations.at(-1)?.checks).toEqual([{ criterion: COMPLETE_CRITERION, passed: true, evidence: expect.any(String) }]);
+});
 
 for (const [broken, reverse] of [[false, false], [true, false], [false, true]]) {
   test(`driver grounds coupons: broken=${broken} reverse=${reverse}`, async ({ page }) => {
@@ -85,6 +126,7 @@ test("tsx CLI loader runs self-contained browser callbacks", async () => {
       page.on("pageerror", error => errors.push(error.message));
       const network = await installFixtureNetwork(context,page,localFixtureSource(4317),()=>{});
       await page.goto(FIXTURE_ORIGIN+"/demo/category/home");
+      await page.getByRole("link",{name:"Maple ceramic mug",exact:true}).waitFor();
       const ref = {key:"a".repeat(64),sha256:"a".repeat(64),bytes:1,kind:"screenshot"};
       const driver = new FixtureDriver({page,artifacts:{screenshot:async()=>ref,json:async()=>ref,telemetry:async()=>ref},
         verify:async()=>[],networkErrors:network.errors,close:async()=>({status:"closed",errors:[]})});

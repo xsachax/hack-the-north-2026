@@ -272,13 +272,13 @@ export function demoVerifier(criteria: readonly string[]): CriterionVerifier {
     for (const criterion of criteria) {
       let passed = false;
       if (criterion === COUPON_CRITERION) {
-        passed = page.url() === `${FIXTURE_ORIGIN}/demo/cart`
-          && observation.text.includes("Maple ceramic mug")
+        if (page.url() !== `${FIXTURE_ORIGIN}/demo/cart`) continue;
+        passed = observation.text.includes("Maple ceramic mug")
           && /Applied coupons: (?:SAVE10, COZY5|COZY5, SAVE10)/.test(observation.text)
           && await page.getByRole("heading", { name: "Order total: CA$21.60", exact: true }).isVisible();
       } else if (criterion === COMPLETE_CRITERION) {
-        passed = page.url() === `${FIXTURE_ORIGIN}/demo/complete`
-          && await page.getByRole("heading", { name: "Thank you! Your demo order is complete.", exact: true }).isVisible();
+        if (page.url() !== `${FIXTURE_ORIGIN}/demo/complete`) continue;
+        passed = await page.getByRole("heading", { name: "Thank you! Your demo order is complete.", exact: true }).isVisible();
       }
       checks.push({ criterion, passed, evidence: passed ? `observation:${observation.id}` : "" });
     }

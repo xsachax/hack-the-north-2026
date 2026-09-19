@@ -91,6 +91,13 @@ evidence can. HTTP 4xx and generic page errors are signals, not automatically
 confirmed bugs. The demo verifier checks visible applied coupons and the
 displayed total; only the exact planted coupon exception becomes a confirmed
 functional-failure signal. Unsupported criteria cannot become successful.
+Milestone checks are omitted on unrelated routes, preserving earlier observed
+achievement; a negative check on its relevant route still invalidates that
+milestone. This permits a coupon objective followed by demo-order completion.
+The **returned result is authoritative**: if the `finished` hook itself rejects
+or times out, that result becomes an infrastructure failure even if a previously
+emitted event contained success. Layer04 must finalize durable state from the
+returned result, not from the `finished` event alone.
 
 `ArtifactWriter.createSinks(runId, attemptId)` writes immutable generated keys
 under the private data directory. The current CLI persists events/evidence and
@@ -273,6 +280,12 @@ future dispatch immediately, checks abort after asynchronous eligibility work,
 and awaits both SDK/session cleanup before returning.
 
 Final offline gates: **773 unit/API tests**, lint/types, production build,
-built-app HTTP smoke and **37 Chromium E2E tests**, including the actual `tsx`
+built-app HTTP smoke and **38 Chromium E2E tests**, including the actual `tsx`
 CLI loader and real network-listener negative tests. No paid credentials are
 required for these checks.
+Vitest files run sequentially so real SQLite and artifact `fsync` stress tests
+do not compete for disk throughput on small CI runners; explicit within-test
+concurrency remains covered. The CLI-loader browser regression waits for the
+actual hydrated fixture control, rather than treating document load as React
+readiness. A real driver/verifier/loop E2E proves coupon milestones survive the
+subsequent checkout and completion routes.
