@@ -111,6 +111,14 @@ invocation UUID directory (mode 700). No owner/provider IDs, URLs, credentials,
 or raw exceptions are printed by the CLI. Owner cookies exist only in memory and
 the browser; there is deliberately **no owner-resume mode**, credential file,
 new-owner readback fallback, or renewing resume clock.
+CLI failures also create a private root `failure-UUID.json` recording only the
+fixed execution stage, error kind and missing-path flag, never raw error text,
+stack traces, credentials or provider URLs. This covers entry failures before an
+invocation exists. The maintained paid command has an offline subprocess
+regression with network disabled and a deliberately missing package; reaching
+that package boundary proves the actual tsx configuration-loading path, not a
+different diagnostic loader. A failed preflight is not permission to retry paid
+work or renew approval.
 
 The actual HTTPS owner cookie, owner API, normal worker/Gateway counters, wall
 events, criterion citations, private evidence endpoints, reports and rerun

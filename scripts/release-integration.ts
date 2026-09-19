@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import type { Browser, BrowserContext, Page } from "playwright-core";
 import { z } from "zod";
+import nextEnv from "@next/env";
 import { demoCriteria } from "../src/lib/demo-run";
 import { eventSchema } from "../src/lib/contracts";
 import { runReportSchema, type RunReport } from "../src/lib/report-contracts";
@@ -23,6 +24,7 @@ import {
 } from "./release-proof";
 
 export const releaseRoot = resolve("data/release-rehearsal");
+let failureStage = "arguments";
 
 /** The packaged runner owns only its children/proxy/browser; it may not allocate directly. */
 export type ReleaseRuntime = {
@@ -298,6 +300,7 @@ export async function withReleaseLock<T>(root: string, work: () => Promise<T>): 
           return report;
         };
         await runtime.startWorker();
+        failureStage = "broken-multi-persona";
         const brokenId = await admit("second-coupon", 2);
         await page.goto(`${runtime.origin}/runs/${brokenId}`, { waitUntil: "domcontentloaded" });
         await captureReleaseLiveViewers({
@@ -316,6 +319,7 @@ export async function withReleaseLock<T>(root: string, work: () => Promise<T>): 
         await capture(page, directory, "broken-report-mobile");
         await page.setViewportSize({ width: 1440, height: 1000 });
 
+        failureStage = "active-cancellation";
         await runtime.startWorker();
         const cancelId = await admit("fixed", 1);
         await waitFor(() => {
@@ -329,6 +333,7 @@ export async function withReleaseLock<T>(root: string, work: () => Promise<T>): 
           cancelled.agents[0].status !== "cancelled") throw new Error("release_active_cancellation_not_proved");
         await capture(page, directory, "cancelled-wall-desktop");
 
+        failureStage = "selected-fixed-rerun";
         if (!canReserveRelease(readReleaseLedger(db).reservedSeconds)) throw new Error("release_lifetime_cap");
         await runtime.startWorker();
         const rerun = rerunResponseSchema.parse(await request(`runs/${brokenId}/reruns`, {
@@ -347,6 +352,7 @@ export async function withReleaseLock<T>(root: string, work: () => Promise<T>): 
         await page.goto(`${runtime.origin}/runs/${rerun.run.id}/reports`, { waitUntil: "domcontentloaded" });
         await page.getByRole("heading", { name: "Agent reports", exact: true }).waitFor();
         await capture(page, directory, "fixed-report-desktop");
+        failureStage = "current-owner-media";
         await readReleaseCurrentOwnerMedia({
           page, context, origin: runtime.origin, directory, ownerId: session.ownerId,
           runId: fixed.runId, attemptId: fixed.agents[0].attemptId, repository, db, signal,
@@ -457,7 +463,7 @@ export async function withReleaseLock<T>(root: string, work: () => Promise<T>): 
     const mode = parseReleaseArgs(args);
     if (mode === "paid") {
       if (!process.env.RELEASE_PACKAGE_DIR) throw new Error("release_packaged_runner_directory_required");
-      const nextEnv = (await import("@next/env")).default;
+      failureStage = "configuration";
       nextEnv.loadEnvConfig(process.cwd(), false, { info() {}, error() {} });
       if (process.env.DEBUG === "true") throw new Error("release_provider_debug_forbidden");
       const provider = z.object({
@@ -467,12 +473,16 @@ export async function withReleaseLock<T>(root: string, work: () => Promise<T>): 
         replayOrigins: process.env.BROWSERBASE_REPLAY_ORIGINS,
       });
       const { packagedReleaseDeployment, assertPackagePath } = await import("./release-runtime");
+      failureStage = "package-validation";
       const packageDirectory = await assertPackagePath(process.env.RELEASE_PACKAGE_DIR);
       const controller = new AbortController();
       const abort = () => controller.abort();
       process.once("SIGINT", abort);
       process.once("SIGTERM", abort);
-      try { await runReleaseRehearsal(packagedReleaseDeployment(packageDirectory, provider), provider, controller.signal); }
+      try {
+        failureStage = "approval-and-runtime";
+        await runReleaseRehearsal(packagedReleaseDeployment(packageDirectory, provider), provider, controller.signal);
+      }
       finally {
         process.off("SIGINT", abort);
         process.off("SIGTERM", abort);
@@ -484,5 +494,20 @@ export async function withReleaseLock<T>(root: string, work: () => Promise<T>): 
     console.log("Release offline preflight passed; zero provider/model calls. Live acceptance remains gated.");
   }
   if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-    void main().catch(() => { console.error("Release rehearsal failed closed; inspect private evidence locally."); process.exitCode = 1; });
+    void main().catch(async (error: unknown) => {
+      process.exitCode = 1;
+      try {
+        await privateRoot();
+        const kind = (value: unknown) => value instanceof TypeError ? "TypeError"
+          : value instanceof AggregateError ? "AggregateError" : value instanceof Error ? "Error" : "non_error";
+        await writePrivateJson(join(releaseRoot, `failure-${randomUUID()}.json`), {
+          failedAt: Date.now(), stage: failureStage, kind: kind(error),
+          missingPath: error instanceof Error && "code" in error && error.code === "ENOENT",
+          causes: error instanceof AggregateError ? error.errors.slice(0, 12).map(kind) : [],
+        });
+      } catch {
+        console.error("Release private failure diagnostic could not be written.");
+      }
+      console.error("Release rehearsal failed closed; inspect private evidence locally.");
+    });
   }

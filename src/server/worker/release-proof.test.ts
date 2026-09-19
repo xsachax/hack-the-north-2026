@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { chmod, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,7 +9,7 @@ import { DurableWorker } from "./runtime";
 import type { ExecutionResult } from "../execution/types";
 import { runReportSchema } from "../../lib/report-contracts";
 import { runComparisonSchema } from "../../lib/rerun-contracts";
-import { releaseAssignments, releaseCleanup, withReleaseLock, main } from "../../../scripts/release-integration";
+import { releaseAssignments, releaseCleanup, withReleaseLock, main, releaseRoot } from "../../../scripts/release-integration";
 import {
   approvedRelease, assertReleasePolicy, canReserveRelease, exactReleaseClosure, exactReleaseInspection,
   inventoryReleaseAsset, parseReleaseArgs, readReleaseLedger, releaseLedgerDigest, releaseLedgerSchema,
@@ -41,6 +42,51 @@ const failed: ExecutionResult = {
 };
 
 describe("release allocation boundaries (offline, never live acceptance)", () => {
+  it("loads configuration through the maintained release CLI with network disabled before rejecting a missing package", async () => {
+    await mkdir(releaseRoot, { recursive: true, mode: 0o700 });
+    const before = new Set(await readdir(releaseRoot));
+    const guard = join(directory, "no-network.cjs");
+    await writeFile(guard, `
+      const deny = () => { throw Error('offline_network_forbidden'); };
+      globalThis.fetch = deny;
+      require('node:http').request = deny;
+      require('node:https').request = deny;
+      const net = require('node:net'), connect = net.Socket.prototype.connect;
+      net.Socket.prototype.connect = function(...args) {
+        const options = Array.isArray(args[0]) ? args[0][0] : args[0];
+        if (options && typeof options === 'object' && typeof options.path === 'string') return connect.apply(this,args);
+        throw Error('offline_network_forbidden');
+      };
+    `, { mode: 0o600 });
+    const result = spawnSync("npm", ["run", "release:integration", "--", "--confirm-paid"], {
+      env: {
+        NODE_ENV: "test", PATH: process.env.PATH, TSX_DISABLE_CACHE: "1",
+        NODE_OPTIONS: `--require ${JSON.stringify(guard)}`, NPM_CONFIG_UPDATE_NOTIFIER: "false",
+        RELEASE_PACKAGE_DIR: join(directory, "missing-package"),
+        BROWSERBASE_API_KEY: "offline-never-used", BROWSERBASE_PROJECT_ID: randomUUID(),
+        BROWSERBASE_REPLAY_ORIGINS: "https://offline.invalid",
+      }, encoding: "utf8", timeout: 15000,
+    });
+    const added = (await readdir(releaseRoot)).filter((name) => !before.has(name));
+    try {
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Release rehearsal failed closed");
+      expect(added).toHaveLength(1);
+      expect(added[0]).toMatch(/^failure-[a-f0-9-]+\.json$/);
+      const receipt = join(releaseRoot, added[0]);
+      expect(JSON.parse(await readFile(receipt, "utf8"))).toMatchObject({
+        stage: "package-validation", kind: "Error", missingPath: true, causes: [],
+      });
+      expect((await stat(receipt)).mode & 0o777).toBe(0o600);
+      expect(`${result.stdout}${result.stderr}`).not.toContain("offline-never-used");
+      expect(readReleaseLedger(db).reservedSeconds).toBe(0);
+    } finally {
+      for (const file of added.filter((name) => /^failure-[a-f0-9-]+\.json$/.test(name))) {
+        await rm(join(releaseRoot, file));
+      }
+    }
+  });
+
   it("requires explicit modes and package selection before loading credentials; never supports resume", async () => {
     vi.stubEnv("RELEASE_PACKAGE_DIR", undefined);
     expect(parseReleaseArgs(["--offline-preflight"])).toBe("offline");
