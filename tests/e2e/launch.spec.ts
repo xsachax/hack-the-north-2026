@@ -77,6 +77,7 @@ test("bootstrap rejects bad codes and preserves no access code in storage; publi
     await expect(page.locator(".error[role=alert]")).toContainText("not accepted");
     await page.getByLabel("Workspace access code").fill(accessCode);
     await page.getByRole("button", { name: "Unlock workspace" }).click();
+    await expect(page.getByText("Alex", { exact: true })).toBeVisible();
     await expect(page.getByText("Website execution is not enabled.", { exact: false })).toBeVisible();
     await expect(page.getByRole("button", { name: "Save website request (execution blocked)" })).toBeVisible();
     await page.getByText("Supported testing and known limits", { exact: true }).click();
@@ -87,6 +88,7 @@ test("bootstrap rejects bad codes and preserves no access code in storage; publi
     const owner = fixture.owner;
     await page.reload();
     await expect(page.getByLabel("Target mode")).toBeVisible();
+    await expect(page.getByText("Alex", { exact: true })).toBeVisible();
     expect(fixture.owner).toBe(owner);
   } finally { await fixture.close(); }
 });
