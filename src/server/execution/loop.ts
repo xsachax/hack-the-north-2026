@@ -4,7 +4,7 @@ import { criterionKey } from "../../lib/criteria";
 import { ModelBudget } from "./budget";
 import { deterministicCheck, inconclusive, mergeCriterionCheck, unsupported, validateSemanticChecks } from "./evaluator";
 import {
-  decisionSchema, ExecutionError,
+  decisionSchema, ExecutionError, TakeoverInterrupted,
   type BrowserAction, type CleanupOutcome, type CriterionCheck, type Decision,
   type ExecutePersonaInput, type ExecutionDependencies, type ExecutionEvent,
   type ExecutionResult, type HistoryEntry, type Observation, type TerminalOutcome,
@@ -146,8 +146,14 @@ export async function executePersona(
   async function emit(event: ExecutionEvent): Promise<void> {
     if (!deps.onEvent) return;
     await operation(async () => {
-      try { await deps.onEvent!(freeze(event), controller.signal); }
-      catch { throw new InternalFailure("event"); }
+      try {
+        if (event.kind === "observation" || event.kind === "decision") deps.control?.assertDispatch();
+        await deps.onEvent!(freeze(event), controller.signal);
+      }
+      catch (error) {
+        if (error instanceof TakeoverInterrupted) throw error;
+        throw new InternalFailure("event");
+      }
     });
   }
 
@@ -162,6 +168,47 @@ export async function executePersona(
       const timer = setTimeout(finish, ms);
       controller.signal.addEventListener("abort", finish, { once: true });
     }));
+  }
+
+  async function agentOperation<T>(run: () => Promise<T>, discardStaleFailure = true): Promise<T> {
+    const before = deps.control?.read();
+    if (before && before.phase !== "agent") throw new TakeoverInterrupted();
+    let result: T;
+    try {
+      result = await operation(() => {
+        deps.control?.assertDispatch();
+        return run();
+      });
+    } catch (error) {
+      if (discardStaleFailure && !controller.signal.aborted && before && deps.control!.read().version !== before.version) {
+        throw new TakeoverInterrupted();
+      }
+      throw error;
+    }
+    if (before && deps.control!.read().version !== before.version) throw new TakeoverInterrupted();
+    return result;
+  }
+
+  async function awaitAgent(): Promise<void> {
+    if (!deps.control) return;
+    while (true) {
+      const state = deps.control.read();
+      if (state.phase === "agent") return;
+      if (state.phase === "closed") throw new ExecutionError("infra", "Human control closed");
+      if (state.phase === "requested") deps.control.quiesce();
+      if (deps.control.read().phase === "quiescing") {
+        // No operation is launched concurrently by this loop. Adapter drain also
+        // covers transport RPCs that outlive their application-facing promise.
+        const adapters = new Set([deps.brain, deps.evaluator].filter((adapter) => adapter));
+        if ([...adapters].some((adapter) => adapter?.drain && !adapter.quiesce)) {
+          throw new ExecutionError("infra", "Adapter does not support resumable quiescence");
+        }
+        await operation(async () => { await Promise.all([...adapters].map((adapter) => adapter!.quiesce?.())); });
+        deps.control.acknowledge();
+      }
+      if (["handback", "resuming"].includes(deps.control.read().phase)) deps.control.resume();
+      await delay(50);
+    }
   }
 
   try {
@@ -184,8 +231,13 @@ export async function executePersona(
     const repeats = new Map<string, number>();
 
     await emit({ kind: "started", actor: "agent", personaId: persona.id });
-    let observation = freeze(structuredClone(await operation(() => deps.driver.observe(controller.signal))));
+    let observation: Observation | undefined;
     while (true) {
+      const previousChecks = new Map(checks);
+      try {
+      await awaitAgent();
+      observation ??= freeze(structuredClone(await agentOperation(() => deps.driver.observe(controller.signal), false)));
+      deps.control?.assertDispatch();
       const semantic = [];
       const observedChecks: CriterionCheck[] = [];
       let verificationFailure: ExecutionError | InternalFailure | undefined;
@@ -210,11 +262,12 @@ export async function executePersona(
         let evaluated = semantic.map(unsupported);
         if (evaluator?.evaluate) {
           try {
-            evaluated = validateSemanticChecks(await operation(async () => {
+            evaluated = validateSemanticChecks(await agentOperation(async () => {
               if (!evaluator.managesModelBudget) budget!.charge("evaluation", controller.signal);
               return evaluator.evaluate!(evaluationInput, controller.signal, budget);
             }), evaluationInput);
           } catch (error) {
+            if (error instanceof TakeoverInterrupted) throw error;
             evaluated = semantic.map((criterion) => inconclusive(criterion,
               error instanceof ExecutionError && error.code === "limit" ? "Model-call budget exhausted" : "Semantic evaluation failed"));
             for (let index = 0; index < semantic.length; index++) {
@@ -233,6 +286,7 @@ export async function executePersona(
       }
       observation = freeze({ ...observation, checks: observedChecks });
       await emit({ kind: "observation", actor: "agent", observation });
+      deps.control?.assertDispatch();
       if (verificationFailure) throw verificationFailure;
       if ([...checks.values()].every((check) => check.passed)) {
         outcome = { status: "succeeded", reason: "All criteria have trusted evidence" };
@@ -246,18 +300,20 @@ export async function executePersona(
         outcome = { status: "gave_up", reason: "Persona patience exhausted" };
         break;
       }
-      const decision = validateDecision(await operation(async () => {
+      const currentObservation = observation;
+      const decision = validateDecision(await agentOperation(async () => {
         try {
           if (!deps.brain.managesModelBudget) budget!.charge("decision", controller.signal);
           return await deps.brain.decide(freeze({
-            persona, goal, criteria, observation, history: [...history],
+            persona, goal, criteria, observation: currentObservation, history: [...history],
           }), controller.signal, budget);
         } catch (error) {
-          if (error instanceof ExecutionError && error.code === "limit") throw error;
+          if (error instanceof TakeoverInterrupted || (error instanceof ExecutionError && error.code === "limit")) throw error;
           throw new InternalFailure("brain");
         }
       }), observation);
       await emit({ kind: "decision", actor: "agent", decision, modelCalls: budget.total });
+      deps.control?.assertDispatch();
       if (decision.action === "done" || decision.action === "give_up") {
         outcome = {
           status: "gave_up",
@@ -277,15 +333,24 @@ export async function executePersona(
         break;
       }
       await delay(persona.readingStyle === "careful" ? limits.carefulDelayMs : limits.rushDelayMs);
+      deps.control?.assertDispatch();
       const action: BrowserAction = freeze({ ...decision, actor: "agent" });
       steps++;
-      await operation(() => deps.driver.act(action, controller.signal));
+      await agentOperation(() => deps.driver.act(action, controller.signal), false);
       history.push(freeze({ observation, decision }));
       if (history.length > limits.historyLimit) history.shift();
       await emit({ kind: "action", actor: "agent", action, steps });
       // Always observe the final action. Semantic verification still requires
       // inference budget; deterministic verification does not.
-      observation = freeze(structuredClone(await operation(() => deps.driver.observe(controller.signal))));
+      observation = undefined;
+      } catch (error) {
+        if (!(error instanceof TakeoverInterrupted)) throw error;
+        checks.clear();
+        for (const [key, check] of previousChecks) checks.set(key, check);
+        observation = undefined;
+        history.length = 0;
+        repeats.clear();
+      }
     }
   } catch (error) {
     outcome = cancelled
@@ -318,6 +383,8 @@ export async function executePersona(
     if (cleanup.status === "failed" || cleanup.errors.length) {
       errors.push(...(cleanup.errors.length ? cleanup.errors : ["Driver cleanup failed"]));
     }
+    try { deps.control?.finish(); }
+    catch { modelCleanupFailed = true; errors.push("Control cleanup failed"); }
   }
   const originalTerminal = freeze({ ...outcome });
   if (cleanup.status === "failed" || cleanup.errors.length) {

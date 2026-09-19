@@ -1,0 +1,15 @@
+.reproduction-panel {
+  margin-block: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--line, #b8b8b8);
+  border-radius: 0.75rem;
+}
+.reproduction-panel h3 { margin-top: 0; }
+.reproduction-panel dl { display: grid; gap: 0.5rem; }
+.reproduction-panel dl > div { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: space-between; }
+.reproduction-panel dd { margin: 0; font-variant-numeric: tabular-nums; }
+.reproduction-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+.reproduction-consent { display: flex; align-items: flex-start; gap: 0.5rem; margin-block: 0.75rem; }
+.reproduction-consent input { flex: 0 0 auto; margin-top: 0.25rem; }
+.reproduction-panel [role="alert"] { color: #a11c25; }
+.reproduction-panel a { display: inline-block; padding-block: 0.5rem; }

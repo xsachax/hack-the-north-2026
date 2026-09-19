@@ -3,6 +3,7 @@ import type { TerminalStatus } from "../../lib/contracts";
 import type { Persona } from "../../lib/personas";
 import type { Criterion, CriterionCheck } from "../../lib/criteria";
 import type { ModelBudget, ModelOperations } from "./budget";
+import type { TakeoverPhase } from "../../lib/takeover-contracts";
 
 export type { TerminalStatus, Persona };
 export type { Criterion, CriterionCheck };
@@ -93,6 +94,8 @@ export interface Brain {
   /** Set only when every initiated inference/retry charges the supplied budget. */
   readonly managesModelBudget?: boolean;
   evaluate?(input: EvaluationInput, signal: AbortSignal, budget?: ModelBudget): Promise<readonly CriterionCheck[]>;
+  /** Non-closing transport fence used before acknowledging human control. */
+  quiesce?(): Promise<void>;
   drain?(): Promise<void>;
 }
 
@@ -106,6 +109,7 @@ export interface Evaluator {
   evaluate(input: EvaluationInput, signal: AbortSignal, budget?: ModelBudget): Promise<readonly CriterionCheck[]>;
   /** Unmarked adapters are charged once per invocation by executePersona. */
   readonly managesModelBudget?: boolean;
+  quiesce?(): Promise<void>;
   drain?(): Promise<void>;
 }
 
@@ -156,5 +160,19 @@ export interface ExecutionDependencies {
   readonly driver: BrowserDriver;
   readonly brain: Brain;
   readonly evaluator?: Evaluator;
+  readonly control?: ExecutionControl;
   readonly onEvent?: (event: ExecutionEvent, signal: AbortSignal) => Promise<void>;
+}
+
+/** An internal restart signal; never a target failure or a refunded inference. */
+export class TakeoverInterrupted extends Error {}
+
+export interface ExecutionControl {
+  read(): { phase: TakeoverPhase; version: number };
+  assertDispatch(): void;
+  quiesce(): void;
+  /** Called only once all in-flight browser/model operations have settled. */
+  acknowledge(): void;
+  resume(): void;
+  finish(): void;
 }

@@ -100,6 +100,7 @@ describe("durable worker with injected execution adapters", () => {
     const options = vi.mocked(deps.launch).mock.calls[0][0];
     expect(options.correlationToken).toBe(claim.correlationToken);
     expect(options.criteria).toEqual(claim.attempt.criteria);
+    expect(options).not.toHaveProperty("contextReference");
   });
 
   it("passes clamped assignment limits to execution and persists sanitized page context", async () => {
@@ -413,6 +414,99 @@ describe("durable worker with injected execution adapters", () => {
     expect(repository.attemptSummaries(owner, run.id)[0].launchState).toBe("settled");
   });
 
+  it("passes only a resolved private context reference after preparation under the current claim", async () => {
+    const run = repository.createControlledRun(owner, randomUUID(), {
+      authorizationAcknowledged: true, controlledSiteId: "project-board",
+      scope: { targetPath: "/project-board/projects", pathPrefixes: ["/project-board/projects"] },
+      assignments: [{
+        personaId: personas[0].id, goal: "Read project status",
+        criteria: [{ id: "status", kind: "semantic", description: "Status is visible", semantics: "current" }],
+        browserState: { mode: "save", acknowledgeSensitiveStorage: true },
+      }],
+    }).run;
+    const remoteId = randomUUID();
+    const order: string[] = [];
+    deps.contextProvider = {
+      create: vi.fn(async () => { order.push("create"); return remoteId; }),
+      inspect: vi.fn(async (id) => { expect(id).toBe(remoteId); order.push("inspect"); }),
+      delete: vi.fn(async () => {}),
+    };
+    const launch = deps.launch;
+    deps.launch = vi.fn(async (options) => {
+      order.push("launch");
+      expect(options.contextReference).toEqual({ id: remoteId, persist: true });
+      options.assertActive!();
+      return launch(options);
+    });
+    const worker = new DurableWorker(repository, deps, 4321);
+    await worker.executeClaim(repository.claim(worker.id)!, new AbortController().signal);
+    expect(order).toEqual(["create", "inspect", "launch"]);
+    expect(deps.contextProvider.delete).not.toHaveBeenCalled();
+    expect(JSON.stringify(repository.events(owner, run.id, { after: 0, limit: 100 }))).not.toContain(remoteId);
+  });
+
+  it("fails explicit context saving before allocation when no context provider is configured", async () => {
+    const run = repository.createControlledRun(owner, randomUUID(), {
+      authorizationAcknowledged: true, controlledSiteId: "project-board",
+      scope: { targetPath: "/project-board/projects", pathPrefixes: ["/project-board/projects"] },
+      assignments: [{
+        personaId: personas[0].id, goal: "Read project status",
+        criteria: [{ id: "status", kind: "semantic", description: "Status is visible", semantics: "current" }],
+        browserState: { mode: "save", acknowledgeSensitiveStorage: true },
+      }],
+    }).run;
+    const worker = new DurableWorker(repository, deps, 4321);
+    await worker.executeClaim(repository.claim(worker.id)!, new AbortController().signal);
+    expect(deps.launch).not.toHaveBeenCalled();
+    expect(repository.getRun(owner, run.id).status).toBe("infrastructure_failed");
+    expect(repository.accounting()).toMatchObject({ consumedSeconds: 0, releasedSeconds: 240, committedSeconds: 0 });
+  });
+
+  it("does not launch if cancellation arrives while private context preparation is awaiting", async () => {
+    const run = create();
+    vi.spyOn(repository, "prepareContext").mockImplementationOnce(async () => {
+      repository.cancelRun(owner, run.id);
+      return { id: randomUUID(), persist: true };
+    });
+    const worker = new DurableWorker(repository, deps, 4321);
+    await worker.executeClaim(repository.claim(worker.id)!, new AbortController().signal);
+    expect(deps.launch).not.toHaveBeenCalled();
+    expect(repository.getRun(owner, run.id).status).toBe("cancelled");
+    expect(repository.accounting()).toMatchObject({ consumedSeconds: 0, releasedSeconds: 240, committedSeconds: 0 });
+  });
+
+  it("retires at most one context per outer iteration before claiming any work", async () => {
+    const shutdown = new AbortController();
+    deps.contextProvider = {
+      create: vi.fn(async () => randomUUID()), inspect: vi.fn(async () => {}), delete: vi.fn(async () => {}),
+    };
+    const retire = vi.spyOn(repository, "retireContext").mockImplementationOnce(async (provider) => {
+      expect(provider).toBe(deps.contextProvider);
+      shutdown.abort();
+    });
+    const claim = vi.spyOn(repository, "claim");
+    await new DurableWorker(repository, deps, 4321).run(shutdown.signal);
+    expect(retire).toHaveBeenCalledOnce();
+    expect(claim).not.toHaveBeenCalled();
+    expect(deps.launch).not.toHaveBeenCalled();
+  });
+
+  it("fences a context preparation result returned to a stale lease generation", async () => {
+    const run = create();
+    const db = new DatabaseSync(join(dir, "flash-flood.sqlite"));
+    try {
+      vi.spyOn(repository, "prepareContext").mockImplementationOnce(async () => {
+        db.exec("UPDATE jobs SET lease_generation=lease_generation+1");
+        return { id: randomUUID(), persist: false };
+      });
+      const worker = new DurableWorker(repository, deps, 4321);
+      await worker.executeClaim(repository.claim(worker.id)!, new AbortController().signal);
+      expect(deps.launch).not.toHaveBeenCalled();
+      expect(repository.getRun(owner, run.id).status).toBe("running");
+      expect(repository.accounting()).toMatchObject({ consumedSeconds: 0, releasedSeconds: 0, committedSeconds: 240 });
+    } finally { db.close(); }
+  });
+
   it("cleans up on an unexpectedly rejecting execution adapter", async () => {
     const run = create();
     deps.execute = async () => { throw new Error("raw private error"); };
@@ -569,5 +663,125 @@ describe("durable worker with injected execution adapters", () => {
     await worker.executeClaim(claim, new AbortController().signal);
     expect(repository.events(owner, claim.runId, { after: 0, limit: 100 }).items.map((event) => event.kind))
       .toEqual(["run.created", "attempt.started"]);
+  });
+
+  it.each(
+    (["run", "context"] as const).flatMap((source) =>
+      (["requested", "quiescing", "human", "handback", "resuming"] as const).map((phase) => ({ source, phase }))),
+  )("persists $source cancellation in $phase before the next heartbeat as cancellation, not infrastructure failure", async ({ source, phase }) => {
+    vi.useFakeTimers();
+    const started = Date.now();
+    const run = repository.createDemoRun(owner, randomUUID(), {
+      authorizationAcknowledged: true, scenario: "fixed",
+      assignments: [{
+        personaId: personas[0].id, goal: "Read the cart", criteria: [demoCriteria[0]],
+        ...(source === "context" ? { browserState: { mode: "save" as const, acknowledgeSensitiveStorage: true as const } } : {}),
+      }],
+    }).run;
+    deps.contextProvider = { create: async () => randomUUID(), inspect: async () => {}, delete: async () => {} };
+    const cancel = () => {
+      if (source === "run") repository.cancelRun(owner, run.id);
+      else repository.contexts.revoke(owner, repository.contexts.list(owner)[0].id);
+    };
+    const worker = new DurableWorker(repository, deps, 4321);
+    const claim = repository.claim(worker.id)!;
+    const controllerId = randomUUID();
+    const launch = deps.launch;
+    let adapter!: Awaited<ReturnType<WorkerDependencies["launch"]>>;
+    deps.launch = async (options) => {
+      adapter = await launch(options);
+      repository.takeovers.command(owner, claim.attempt.id, randomUUID(), {
+        action: "request", expectedVersion: 0, controllerId,
+      });
+      // A request during cloud initialization cannot interrupt startup before acknowledgment.
+      options.assertActive!();
+      if (phase === "requested") cancel();
+      return adapter;
+    };
+    if (phase === "quiescing") {
+      deps.execute = (input, adapters) => executePersona(input, {
+        ...adapters,
+        control: {
+          ...adapters.control!,
+          quiesce: () => { adapters.control!.quiesce(); cancel(); },
+        },
+      });
+    }
+    const running = worker.executeClaim(claim, new AbortController().signal);
+    await vi.advanceTimersByTimeAsync(0);
+    if (phase === "human" || phase === "handback" || phase === "resuming") {
+      const human = repository.takeovers.status(owner, claim.attempt.id, controllerId);
+      expect(human.phase).toBe("human");
+      if (phase !== "human") {
+        repository.takeovers.command(owner, claim.attempt.id, randomUUID(), {
+          action: "handback", expectedVersion: human.version, controllerId,
+        });
+        if (phase === "resuming") await vi.advanceTimersByTimeAsync(50);
+        expect(repository.takeovers.status(owner, claim.attempt.id).phase).toBe(phase);
+      }
+      cancel();
+    }
+    await vi.advanceTimersByTimeAsync(100);
+    await running;
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(repository.attempts(owner, run.id)[0].status).toBe("cancelled");
+    expect(repository.attemptSummaries(owner, run.id)[0].summary?.cleanup.status).toBe("closed");
+    expect(repository.takeovers.status(owner, claim.attempt.id).phase).toBe("closed");
+    expect(adapter.driver.act).not.toHaveBeenCalled();
+    expect(adapter.brain.decide).not.toHaveBeenCalled();
+    expect(adapter.driver.close).toHaveBeenCalledOnce();
+    expect(repository.attemptSummaries(owner, run.id)[0].launchState).toBe("settled");
+  });
+
+  it("wires durable takeover into the real loop and the cloud dispatch fence without new paid allocation", async () => {
+    vi.useFakeTimers();
+    const run = create();
+    const service = repository.takeovers;
+    let release!: () => void;
+    const pendingDecision = new Promise<void>((resolve) => { release = resolve; });
+    const decided = vi.fn(async () => {
+      await pendingDecision;
+      return { action: "give_up" as const, candidateId: null, value: null, commentary: "" };
+    });
+    let options!: FixtureExecutionOptions;
+    let adapter!: Awaited<ReturnType<WorkerDependencies["launch"]>>;
+    observed = { ...observed, checks: [] };
+    const originalLaunch = deps.launch;
+    deps.launch = async (input) => {
+      options = input;
+      adapter = await originalLaunch(input);
+      adapter.brain.decide = decided;
+      return adapter;
+    };
+    const worker = new DurableWorker(repository, deps, 4321);
+    const claim = repository.claim(worker.id)!;
+    const abort = new AbortController();
+    const running = worker.executeClaim(claim, abort.signal);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(decided).toHaveBeenCalledOnce();
+      const controllerId = randomUUID();
+      service.command(owner, claim.attempt.id, randomUUID(), { action: "request", expectedVersion: 0, controllerId });
+      expect(() => options.assertActive!()).toThrow();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(service.status(owner, claim.attempt.id, controllerId).phase).toBe("requested");
+      release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(service.status(owner, claim.attempt.id, controllerId).phase).toBe("human");
+      const reads = vi.mocked(adapter.driver.observe).mock.calls.length;
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(vi.mocked(adapter.driver.observe).mock.calls.length).toBe(reads);
+      expect(adapter.driver.act).not.toHaveBeenCalled();
+      const human = service.status(owner, claim.attempt.id, controllerId);
+      service.command(owner, claim.attempt.id, randomUUID(), { action: "handback", expectedVersion: human.version, controllerId });
+      observed = { ...observed, checks: [{ criterion: demoCriteria[0], passed: true, evidence: "fresh" }] };
+      await vi.advanceTimersByTimeAsync(1700);
+      await running;
+      expect(repository.getRun(owner, run.id).status).toBe("succeeded");
+      expect(repository.attemptSummaries(owner, run.id)[0].summary?.modelCalls).toBe(1);
+      expect(adapter.driver.act).not.toHaveBeenCalled();
+      expect(repository.accounting(owner).reservedSeconds).toBe(240);
+      expect(service.intervals(owner, claim.attempt.id)).toHaveLength(1);
+    } finally { release(); abort.abort(); await running; }
   });
 });

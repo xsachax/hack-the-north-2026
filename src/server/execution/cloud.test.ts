@@ -181,6 +181,23 @@ afterEach(() => {
 });
 
 describe("fixture-only cloud admission", () => {
+  it.each([false, true])("passes only the worker-resolved context and explicit persist=%s", async (persist) => {
+    const contextReference = { id: "00000000-0000-4000-8000-000000000055", persist };
+    const execution = await createFixtureExecution(config, options({ contextReference }));
+    expect(mocks.sessions.create).toHaveBeenCalledWith(expect.objectContaining({
+      browserSettings: expect.objectContaining({ context: contextReference }),
+    }));
+    await execution.driver.close();
+  });
+
+  it("omits provider context settings entirely for default fresh sessions", async () => {
+    const execution = await createFixtureExecution(config, options());
+    const input = mocks.sessions.create.mock.calls[0][0];
+    expect(input).toHaveProperty("browserSettings");
+    expect(input).not.toHaveProperty("browserSettings.context");
+    await execution.driver.close();
+  });
+
   it.each([COUPON_CRITERION, COMPLETE_CRITERION])("rejects store-only legacy criterion on the board before allocation: %s", async (criterion) => {
     const site = controlledSite("project-board");
     await expect(createFixtureExecution(config, options({

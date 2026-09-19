@@ -23,6 +23,11 @@ import { workerExecutionLimits, workerPolicySchema } from "./worker/config";
 import { runReportSchema, type RunReport } from "../lib/report-contracts";
 import { sanitizeEvidence } from "./execution/artifacts";
 import { publicPageUrl } from "./public-page-url";
+import type { RerunRequest } from "../lib/rerun-contracts";
+import { insertRerun, readRerunLineage } from "./workflows/rerun";
+import { ContextStore } from "./workflows/contexts";
+import { TakeoverService } from "./workflows/takeover";
+import { reproductionService as createReproductionService } from "./worker/advanced-workflows";
 
 type Row = Record<string, SQLOutputValue>;
 const parseJson = (value: unknown): unknown => JSON.parse(z.string().parse(value));
@@ -41,6 +46,7 @@ export type ReportSource = {
   evidence: StoredEvidence[];
   results: { attemptId: string; result: z.infer<typeof resultSchema> }[];
   sequence: number;
+  humanAssistedAttemptIds?: string[];
 };
 
 function readRun(row: Row): Run {
@@ -55,6 +61,8 @@ function readRun(row: Row): Run {
 
 export class Repository {
   protected readonly db: DatabaseSync;
+  readonly contexts: ContextStore;
+  readonly takeovers: TakeoverService;
   constructor(readonly dataDir: string, protected readonly clock = () => Date.now()) {
     const dir = resolve(dataDir);
     if (dir === resolve("/")) throw new Error("A dedicated private data directory is required");
@@ -76,6 +84,17 @@ export class Repository {
     }
     chmodSync(path, 0o600);
     this.db = new DatabaseSync(path);
+    this.contexts = new ContextStore(this.db, this.clock);
+    this.takeovers = new TakeoverService(this.db, (work) => this.transaction(work), this.clock,
+      (attemptId, phase, version) => {
+        const row = this.db.prepare("SELECT run_id FROM attempts WHERE id=?").get(attemptId);
+        if (!row) throw new Error("control_attempt_missing");
+        this.append(z.string().parse(row.run_id), attemptId, "attempt.control", {
+          actor: ["requested", "human", "handback"].includes(phase) ? "human" : "system",
+          controlPhase: phase, controlVersion: version,
+          commentary: `Managed control: ${phase}. Interval markers only; human inputs are not recorded.`,
+        });
+      });
     try {
       this.db.exec("PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;");
       this.transaction(() => {
@@ -93,6 +112,7 @@ export class Repository {
   }
 
   close(): void { this.db.close(); }
+  reproductionService() { return createReproductionService(this.db, this, this.clock); }
   persistedExecutionLimits() {
     const row = this.db.prepare("SELECT configuration FROM worker_policy WHERE singleton=1").get();
     return row ? workerExecutionLimits(workerPolicySchema.parse(parseJson(row.configuration))) : null;
@@ -178,6 +198,18 @@ export class Repository {
     return this.insertRun(owner, key, input);
   }
 
+  createRerun(owner: string, key: string, parentRunId: string, input: RerunRequest): { run: Run; created: boolean } {
+    return this.transaction(() => {
+      const result = insertRerun(this.db, this, owner, key, parentRunId, input, this.now());
+      if (result.created) this.append(result.run.id, null, "run.created", { status: "queued" });
+      return result;
+    });
+  }
+
+  rerunLineage(owner: string, parentRunId: string, childRunId: string) {
+    return readRerunLineage(this.db, this, owner, parentRunId, childRunId);
+  }
+
   createDemoRun(owner: string, key: string, input: DemoRun): { run: Run; created: boolean } {
     const request = demoRunSchema.parse(input);
     if (!request.assignments.every((a) => supportedDemoCriteria(a.criteria))) {
@@ -215,6 +247,10 @@ export class Repository {
         if (existing.request_hash !== hash) throw conflict();
         return { run: readRun(existing), created: false };
       }
+      if (!controlled && request.assignments.some((assignment) =>
+        assignment.browserState && assignment.browserState.mode !== "fresh")) {
+        throw new ServiceError("invalid_request", 400);
+      }
       const active = z.number().parse(this.db.prepare("SELECT count(*) AS n FROM runs WHERE owner_id=? AND status IN ('queued','running')").get(owner)?.n);
       const daily = z.number().parse(this.db.prepare("SELECT count(*) AS n FROM runs WHERE owner_id=? AND created_at>=?")
         .get(owner, new Date(this.clock() - 86_400_000).toISOString())?.n);
@@ -234,12 +270,14 @@ export class Repository {
         const attempt = attemptSchema.parse({
           id: randomUUID(), runId: id, persona, goal: assignment.goal, criteria: assignment.criteria,
           ...(assignment.limits ? { limits: assignment.limits } : {}),
+          ...(assignment.browserState ? { browserState: assignment.browserState } : {}),
           status: "queued", createdAt: time, updatedAt: time,
         });
         this.db.prepare("INSERT INTO attempts VALUES(?, ?, ?, ?)").run(attempt.id, id, "queued", JSON.stringify(attempt));
         const jobId = randomUUID();
         this.db.prepare("INSERT INTO jobs(id, run_id, attempt_id, status) VALUES(?, ?, ?, 'queued')").run(jobId, id, attempt.id);
         this.db.prepare("INSERT INTO usage_reservations(job_id) VALUES(?)").run(jobId);
+        if (controlled) this.contexts.assign(owner, request.scope, attempt.id, assignment.browserState ?? { mode: "fresh" });
       }
       this.append(id, null, "run.created", { status: "queued" });
       return { run: this.getRun(owner, id), created: true };
@@ -514,8 +552,13 @@ export class Repository {
         WHERE j.run_id=? AND l.summary IS NOT NULL`).all(runId).map((row) => ({
         attemptId: z.string().parse(row.attempt_id), result: resultSchema.parse(parseJson(row.summary)),
       }));
+      const humanAssistedAttemptIds = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='takeover_intervals'").get()
+        ? this.db.prepare(`SELECT DISTINCT t.attempt_id FROM takeover_intervals t
+          JOIN attempts a ON a.id=t.attempt_id WHERE a.run_id=?`).all(runId)
+          .map((row) => z.string().parse(row.attempt_id))
+        : [];
       return {
-        run, attempts, summaries: this.attemptSummaries(owner, runId), events, evidence, results,
+        run, attempts, summaries: this.attemptSummaries(owner, runId), events, evidence, results, humanAssistedAttemptIds,
         sequence: z.number().parse(this.db.prepare("SELECT next_sequence FROM runs WHERE id=?").get(runId)?.next_sequence),
       };
     });

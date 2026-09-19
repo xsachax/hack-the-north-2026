@@ -10,6 +10,9 @@ import { LeaseLostError, WorkerRepository, type Claim } from "./repository";
 import { createCloudRecovery } from "./cloud-recovery";
 import { workerExecutionLimits } from "./config";
 import { publicPageUrl } from "../public-page-url";
+import { createContextProvider, type ContextProvider } from "../workflows/context-provider";
+import { runCouponWithWorkerDriver } from "../workflows/reproduction-runner";
+import { fixtureNavigationMarker } from "../workflows/reproduction-grounding";
 
 export type WorkerDependencies = {
   launch: (options: FixtureExecutionOptions) => Promise<{ driver: BrowserDriver; brain: Brain; usage: CloudUsage }>;
@@ -18,6 +21,7 @@ export type WorkerDependencies = {
   execute?: typeof executePersona;
   diagnostic?: (code: "worker_attempt_failed" | "worker_lease_lost" | "worker_recovery_failed") => void;
   knownSecrets?: readonly string[];
+  contextProvider?: ContextProvider;
 };
 
 function failedResult(cancelled: boolean, cleanup: ExecutionResult["cleanup"]): ExecutionResult {
@@ -45,6 +49,8 @@ export class DurableWorker {
     const combined = AbortSignal.any([signal, stop.signal]);
     try {
       while (!combined.aborted) {
+        await this.repository.retireContext(this.dependencies.contextProvider);
+        this.repository.pumpReproductions();
         let claim: Claim | null;
         while (!combined.aborted && this.active.size < this.repository.policy.globalConcurrency &&
           (claim = this.repository.claim(this.id))) {
@@ -73,11 +79,16 @@ export class DurableWorker {
     const abort = () => controller.abort();
     shutdown.addEventListener("abort", abort, { once: true });
     if (shutdown.aborted) abort();
-    const assertActive = () => {
-      controller.signal.throwIfAborted();
-      try { this.repository.assertLease(claim); }
-      catch (error) { controller.abort(); throw error; }
+    const assertLease = (allowCancelled = false) => {
+      try { this.repository.assertLease(claim, allowCancelled); }
+      catch (error) {
+        if (error instanceof LeaseLostError) leaseLost = true;
+        if (!allowCancelled) controller.abort();
+        throw error;
+      }
     };
+    const control = claim.reproductionCandidateId ? undefined : this.repository.takeoverControl(claim, assertLease);
+    const assertActive = () => { controller.signal.throwIfAborted(); assertLease(); };
     const heartbeat = setInterval(() => {
       try { if (this.repository.heartbeat(claim)) controller.abort(); }
       catch {
@@ -92,6 +103,7 @@ export class DurableWorker {
     let result: ExecutionResult;
     try {
       if (claim.recovery) {
+        control?.finish();
         try {
           // Cancellation/shutdown must not prevent reconciliation of a paid orphan.
           const outcome = await this.dependencies.recover({
@@ -120,11 +132,16 @@ export class DurableWorker {
         json: (value) => save(() => raw.json(value), "observation"),
         telemetry: (record) => save(() => raw.telemetry(record), "console"),
       };
+      assertActive();
+      const contextReference = await this.repository.prepareContext(claim, this.dependencies.contextProvider);
+      assertActive();
       launchInvoked = true;
       const execution = await this.dependencies.launch({
         mode: "controlled-fixture", runId: claim.runId, personaId: claim.attempt.persona.id,
-        correlationToken: claim.correlationToken, assertActive, targetUrl: claim.scope.targetUrl,
+        correlationToken: claim.correlationToken,
+        assertActive: () => { assertActive(); if (launched) control?.assertDispatch(); }, targetUrl: claim.scope.targetUrl,
         scope: claim.scope, controlledSiteId: claim.controlledSiteId,
+        ...(contextReference ? { contextReference } : {}),
         criteria: claim.attempt.criteria, fixturePort: this.fixturePort,
         ...(claim.controlledSiteId === "project-board" ? {} : {
           fixtures: { ...fixedFixtures, secondCoupon: claim.scenario === "second-coupon" },
@@ -143,6 +160,8 @@ export class DurableWorker {
       launched = execution;
       usage = execution.usage;
       let pageUrl: string | undefined;
+      let lastChecks: ExecutionResult["checks"] = [];
+      let recordedSteps = 0;
       const onEvent = async (event: ExecutionEvent) => {
         // Lifecycle belongs to the durable transaction, not the loop hook.
         if (event.kind === "started" || event.kind === "finished") {
@@ -151,10 +170,14 @@ export class DurableWorker {
         }
         assertActive();
         if (event.kind === "observation") {
+          lastChecks = event.observation.checks;
           pageUrl = publicPageUrl(event.observation.url, this.dependencies.knownSecrets);
           if (pageUrl && new URL(pageUrl).origin !== new URL(claim.scope.targetUrl).origin) pageUrl = undefined;
         }
-        const stored = await artifacts.json(event);
+        if (event.kind === "action") recordedSteps = event.steps;
+        const navigation = event.kind === "action" && event.action.action === "navigate" &&
+          claim.controlledSiteId !== "project-board" ? fixtureNavigationMarker(event.action.value) : null;
+        const stored = await artifacts.json(navigation ? { ...event, fixtureNavigation: navigation } : event);
         const evidenceId = evidenceIds.get(stored.key)!;
         this.repository.recordStep(claim, event.kind, evidenceId, {
           ...(pageUrl ? { pageUrl } : {}),
@@ -165,32 +188,66 @@ export class DurableWorker {
           } : {}),
         });
       };
+      if (claim.reproductionCandidateId) {
+        const dispatch = this.repository.reproductionDispatch(claim);
+        const reference = this.repository.recordingSession(claim.ownerId, claim.runId, claim.attempt.id);
+        if (!dispatch || !reference) throw new Error("reproduction_binding_unavailable");
+        const started = Date.now();
+        const candidate = await runCouponWithWorkerDriver({
+          ...dispatch, signal: controller.signal,
+          maxSteps: workerExecutionLimits(this.repository.policy, claim.attempt.limits).maxSteps,
+          maxDurationMs: Math.min(dispatch.maxDurationMs, workerExecutionLimits(this.repository.policy, claim.attempt.limits).maxDurationMs),
+        }, { driver: execution.driver, sessionIdentity: reference.sessionId, onEvent });
+        const status = controller.signal.aborted ? "cancelled" :
+          candidate.outcome === "reproduced" ? "target_failed" :
+            candidate.outcome === "not_reproduced" ? "gave_up" : "infrastructure_failed";
+        const reason = candidate.outcome === "reproduced" ? "Exact controlled fixture failure reproduced" :
+          candidate.outcome === "not_reproduced" ? "Recorded failure not reproduced; persona objective success not evaluated" :
+            "Reproduction environment or cleanup is uncertain";
+        result = {
+          status, reason, originalTerminal: { status, reason }, checks: lastChecks,
+          steps: recordedSteps, modelCalls: 0,
+          modelOperations: { decision: 0, evaluation: 0, retry: 0, total: 0 },
+          durationMs: Date.now() - started,
+          cleanup: candidate.cleanup === "confirmed" ? { status: "closed", errors: [] } :
+            { status: "failed", errors: ["Reproduction cleanup unconfirmed"] },
+          errors: candidate.outcome === "unknown" ? [reason] : [],
+        };
+        this.repository.finish(claim, result, usage, candidate);
+        return;
+      }
       result = await (this.dependencies.execute ?? executePersona)({
         persona: claim.attempt.persona, goal: claim.attempt.goal, criteria: claim.attempt.criteria,
         signal: controller.signal,
         limits: workerExecutionLimits(this.repository.policy, claim.attempt.limits),
       }, {
+        control,
         driver: {
-          observe: async (signal) => { assertActive(); return execution.driver.observe(signal); },
-          act: async (action, signal) => { assertActive(); return execution.driver.act(action, signal); },
+          observe: async (signal) => { assertActive(); control?.assertDispatch(); return execution.driver.observe(signal); },
+          act: async (action, signal) => { assertActive(); control?.assertDispatch(); return execution.driver.act(action, signal); },
           close: () => execution.driver.close(),
         },
         brain: {
           managesModelBudget: execution.brain.managesModelBudget,
           decide: async (input, signal, budget) => {
             assertActive();
+            control?.assertDispatch();
             const decision = await execution.brain.decide(input, signal, budget);
             assertActive();
+            control?.assertDispatch();
             return decision;
           },
           ...(execution.brain.evaluate ? {
             evaluate: async (input, signal, budget) => {
               assertActive();
+              control?.assertDispatch();
               const checks = await execution.brain.evaluate!(input, signal, budget);
               assertActive();
+              control?.assertDispatch();
               return checks;
             },
           } satisfies Partial<Brain> : {}),
+          ...(execution.brain.quiesce ? { quiesce: () => execution.brain.quiesce!() } : {}),
           ...(execution.brain.drain ? { drain: () => execution.brain.drain!() } : {}),
         },
         onEvent,
@@ -211,10 +268,13 @@ export class DurableWorker {
         usage = error.usage;
         result = failedResult(controller.signal.aborted, error.cleanup);
       } else {
-        if (!launchInvoked) usage.allocationAttempted = false;
+        if (!launchInvoked) {
+          usage.allocationAttempted = false;
+          unexpectedCleanup = { status: "closed", errors: [] };
+        }
         result = failedResult(controller.signal.aborted, unexpectedCleanup);
       }
-      try { this.repository.finish(claim, result, usage); }
+      try { control?.finish(); this.repository.finish(claim, result, usage); }
       catch (finishError) {
         // No success-shaped fallback: durable intent/reservation survive for recovery.
         diagnostic(finishError instanceof LeaseLostError ? "worker_lease_lost" : "worker_attempt_failed");
@@ -234,5 +294,6 @@ export function productionDependencies(config: AppConfig): WorkerDependencies {
     recover: createCloudRecovery(config).recover,
     artifacts: (runId, attemptId) => writer.createSinks(runId, attemptId),
     knownSecrets: [config.BROWSERBASE_API_KEY],
+    contextProvider: createContextProvider(config.BROWSERBASE_API_KEY, config.BROWSERBASE_PROJECT_ID),
   };
 }

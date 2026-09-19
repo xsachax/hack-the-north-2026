@@ -62,3 +62,13 @@
 @media (max-width: 800px) { .run-report { padding: 0 24px; }.report-intro { display: block; padding-top: 32px; }.report-run-meta { margin-top: 28px; }.report-groups { grid-template-columns: 1fr; } }
 @media (max-width: 480px) { .run-report { padding: 0 16px; }.report-topbar { min-height: 84px; gap: 12px; }.report-topbar nav { gap: 12px; }.report-brand { font-size: 21px; }.report-panel { padding: 18px; }.report-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 12px; }.report-section-heading { display: block; }.report-agent-nav a { flex: 1; min-width: 130px; } }
 @media (prefers-reduced-motion: reduce) { .run-report *, .run-report *::before, .run-report *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+.report-rerun fieldset { border: 1px solid #deded8; border-radius: 12px; padding: 18px; margin: 16px 0; min-width: 0; }
+.report-rerun label { display: grid; gap: 8px; margin: 12px 0; }
+.report-rerun .report-rerun-choice { display: flex; align-items: flex-start; gap: 10px; }
+.report-rerun input[type="checkbox"] { flex: 0 0 auto; width: 18px; height: 18px; accent-color: #365644; }
+.report-rerun select, .report-comparison-form input { width: 100%; padding: 10px; color: inherit; background: #fff; border: 1px solid #9a9e95; border-radius: 8px; font: inherit; }
+.report-rerun button { margin: 6px 8px 6px 0; }
+.report-rerun button:disabled { opacity: .55; cursor: not-allowed; }
+.report-comparison-form { margin-top: 24px; border-top: 1px solid #deded8; padding-top: 12px; }
+.report-comparison-groups { padding: 0; list-style: none; }
+.report-comparison-groups > li { margin: 12px 0; padding: 16px; border: 1px solid #deded8; border-radius: 12px; overflow-wrap: anywhere; }

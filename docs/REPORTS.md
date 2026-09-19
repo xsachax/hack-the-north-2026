@@ -102,9 +102,12 @@ links/exports are not silently treated as v2 matches. The report shape and
 
 Use compatible signature versions plus exact definition/scope, all five
 criterion statuses and tested/not-tested counts for layer07 comparison.
-Absence of a group alone never proves a fix. Replay,
-context reuse, takeover, rerun execution and reproduction generation are
-separate concerns; this layer exports reports, not ready-to-run tests.
+Absence of a group alone never proves a fix. The report UI now provides selected
+immutable reruns, lineage-checked comparison and a separate supported
+reproduction panel. JSON/Markdown report downloads remain reports, not
+ready-to-run tests. [Advanced workflows](ADVANCED_WORKFLOWS.md) documents the
+distinct regression-test export, exact coverage requirements and human-assisted
+comparison limitations.
 
 ## Privacy and supported evidence
 

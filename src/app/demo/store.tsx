@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { money, normalizePostal, products, SECOND_COUPON_SIGNATURE, SHIPPING_CENTS, totalCents, type DemoState } from "@/lib/demo";
 import { BrowserOnly, useDemoState } from "./browser-state";
 import "./store.css";
+import { DemoPreference } from "@/components/demo-preference";
 
 export function DemoStore({ route }: { route: string }) {
   return <div className="demo"><BrowserOnly><Shop route={route} /></BrowserOnly></div>;
@@ -91,6 +92,7 @@ function Shop({ route }: { route: string }) {
         <p>No payment was taken. Nothing will ship.</p><a href="/demo">Browse gifts</a></>}
     </main>
     <footer><span>Little Maple is a synthetic demonstration store. No real purchases.</span><span>Prices in CAD. Demo totals include tax.</span></footer>
+    <DemoPreference />
   </>;
 }
 

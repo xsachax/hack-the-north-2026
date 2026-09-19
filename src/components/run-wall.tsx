@@ -6,6 +6,7 @@ import type { Attempt, Evidence, RunEvent } from "@/lib/contracts";
 import { criterionDescription, criterionKey, criterionStatus } from "@/lib/criteria";
 import { api, ApiError } from "@/lib/client-api";
 import type { AttemptSummary } from "@/lib/ui-contracts";
+import { startTakeoverPolling, takeoverStatusSchema, takeoverViewerUrl, type TakeoverStatus } from "@/lib/takeover-contracts";
 import {
   createWallController, emptyWall, isTerminal, MAX_VIEWERS, needsCleanup, selectViewers, type WallSnapshot,
 } from "@/lib/live-wall";
@@ -20,11 +21,113 @@ function EvidenceLink({ id, onOpen }: { id: string; onOpen: (id: string) => void
   return <button className="wall-evidence-link" onClick={() => onOpen(id)}>Evidence {id.slice(0, 8)}</button>;
 }
 
+function TakeoverViewer({ attempt, viewer, controllerId }: { attempt: Attempt; viewer: string; controllerId: string }) {
+  const { csrfToken, retry } = useOwnerSession();
+  const [status, setStatus] = useState<(TakeoverStatus & { clientExpiresAt: number }) | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [foreground, setForeground] = useState(true);
+  const generation = useRef(0);
+  const pending = useRef(false);
+  const retryOwner = useRef(retry);
+  useEffect(() => { retryOwner.current = retry; }, [retry]);
+  useEffect(() => {
+    const controller = controllerId;
+    let stopped = false;
+    const abort = new AbortController();
+    const refresh = async () => {
+      const version = generation.current;
+      const started = performance.now();
+      try {
+        const result = takeoverStatusSchema.parse(await api(`/attempts/${attempt.id}/takeover?controllerId=${controller}`, { signal: abort.signal }));
+        const clientExpiresAt = started + (result.validForMs ?? 0);
+        if (clientExpiresAt <= performance.now()) result.interactiveUrl = null;
+        if (!stopped && !pending.current && version === generation.current) {
+          setStatus((previous) => previous && previous.version > result.version ? previous : { ...result, clientExpiresAt });
+        }
+        return result;
+      } catch (failure) {
+        if (!stopped) {
+          setStatus(null);
+          if (failure instanceof ApiError && [401, 403].includes(failure.status)) retryOwner.current();
+        }
+      }
+    };
+    const visibility = () => {
+      generation.current++;
+      setStatus(null);
+      setForeground(document.visibilityState === "visible");
+    };
+    document.addEventListener("visibilitychange", visibility);
+    const stopPolling = startTakeoverPolling(refresh, controllerId);
+    return () => {
+      stopped = true;
+      abort.abort();
+      stopPolling();
+      document.removeEventListener("visibilitychange", visibility);
+    };
+  }, [attempt.id, controllerId]);
+  useEffect(() => {
+    if (!status?.validUntil) return;
+    const timer = setTimeout(() => setStatus((current) => current === status ? null : current),
+      Math.max(0, status.clientExpiresAt - performance.now()));
+    return () => clearTimeout(timer);
+  }, [status]);
+  const interactive = !!(foreground && !busy && status?.phase === "human" &&
+    status.controllerId === controllerId && status.interactiveUrl && status.validUntil);
+  async function command(action: "request" | "handback") {
+    if (!status || !controllerId || !csrfToken || pending.current) return;
+    generation.current++;
+    pending.current = true;
+    setBusy(true);
+    setError("");
+    const started = performance.now();
+    try {
+      const result = takeoverStatusSchema.parse(await api(`/attempts/${attempt.id}/takeover`, {
+        method: "POST", csrfToken, idempotencyKey: crypto.randomUUID(),
+        body: { action, expectedVersion: status.version, controllerId },
+      }));
+      const clientExpiresAt = started + (result.validForMs ?? 0);
+      if (clientExpiresAt <= performance.now()) result.interactiveUrl = null;
+      setStatus({ ...result, clientExpiresAt });
+    } catch (failure) {
+      setStatus(null);
+      setError("Control change was not confirmed. Viewer is read-only; refresh control state before retrying.");
+      if (failure instanceof ApiError && [401, 403].includes(failure.status)) retryOwner.current();
+    } finally { pending.current = false; setBusy(false); }
+  }
+  return <section className="wall-takeover" aria-label={`Browser control for ${attempt.persona.name}`}>
+    <p role="status">{interactive ? "Human control acknowledged · agent paused" :
+      status?.phase === "requested" || status?.phase === "quiescing" ? "Takeover pending · draining agent work" :
+      status?.phase === "handback" || status?.phase === "resuming" ? "Returning control · waiting for a fresh observation" :
+      status?.phase === "human" ? status.controllerId === controllerId
+        ? "Human control needs fresh authorization · read-only" : "Human control belongs to another tab · read-only" :
+      status?.phase === "agent" ? "Read-only viewer · agent control" : "Control unavailable · read-only"}</p>
+    <button onClick={() => void command("request")} disabled={busy || !foreground || !csrfToken || status?.phase !== "agent"}>
+      Request human control
+    </button>
+    <button onClick={() => void command("handback")} disabled={!interactive}>Hand back to agent</button>
+    {error && <p role="alert">{error}</p>}
+    <p className="wall-muted">Human time uses the same paid browser TTL and quota. Control expires after at most 60 seconds.
+      Only interval markers are recorded, not a detailed human action trace. Use synthetic data; private pixels may contain secrets.
+      Use a desktop keyboard; the provider does not officially support mobile keyboards.
+      This boundary applies to this app, not a trusted external provider dashboard.</p>
+    <div inert={!interactive} className={interactive ? "wall-viewer-interactive" : "wall-viewer-readonly"}>
+      <iframe key={interactive ? "human" : "readonly"} className={`wall-browser wall-browser-${attempt.persona.device}`}
+        src={interactive ? status!.interactiveUrl! : takeoverViewerUrl(viewer)}
+        title={`Live browser for ${attempt.persona.name}`} loading="lazy" referrerPolicy="no-referrer"
+        tabIndex={interactive ? 0 : -1} sandbox="allow-scripts allow-same-origin allow-forms" />
+    </div>
+  </section>;
+}
+
 function AttemptCard({ attempt, events, summary, viewer, canView, atCapacity, stopping, finalizing, toggle, onEvidence }: {
   attempt: Attempt; events: RunEvent[]; summary?: AttemptSummary;
   viewer: string | null; canView: boolean; atCapacity: boolean; stopping: boolean;
   finalizing: boolean; toggle: () => void; onEvidence: (id: string) => void;
 }) {
+  const { revision } = useOwnerSession();
+  const [controllerId] = useState(() => crypto.randomUUID());
   const latest = events.at(-1);
   const commentary = events.findLast((event) => event.data.commentary)?.data.commentary;
   const action = events.findLast((event) => event.data.action)?.data.action;
@@ -62,9 +165,7 @@ function AttemptCard({ attempt, events, summary, viewer, canView, atCapacity, st
         {viewer ? "Hide viewer" : `Show viewer for ${attempt.persona.name}`}
       </button>
     </div>
-    {viewer && <iframe className={`wall-browser wall-browser-${attempt.persona.device}`} src={viewer}
-      title={`Live browser for ${attempt.persona.name}`} loading="lazy" referrerPolicy="no-referrer"
-      sandbox="allow-scripts allow-same-origin allow-forms" />}
+    {viewer && !quiet && <TakeoverViewer key={revision} attempt={attempt} viewer={viewer} controllerId={controllerId} />}
     <details className="wall-results" open={isTerminal(attempt.status)}>
       <summary>Criteria & evidence · {attempt.criteria.length}</summary>
       <ul>{attempt.criteria.map((criterion) => {
@@ -199,7 +300,9 @@ export function RunWall({ runId }: { runId: string }) {
       <p>Timestamp, page, action and commentary come from persisted events. Latest 200 events shown.</p>
       <ol>{wall.events.filter((event) => event.sequence <= wall.cursor).slice(-200).map((event) => <li key={event.sequence} data-event-sequence={event.sequence}>
         <time dateTime={event.timestamp}>{time(event.timestamp)}</time>
-        <span>#{event.sequence} · {label(event.kind)}{event.data.action ? ` · ${event.data.action}` : ""}{event.data.status ? ` · ${label(event.data.status)}` : ""}</span>
+        <span>#{event.sequence} · {label(event.kind)}{event.data.actor ? ` · ${event.data.actor}` : ""}
+          {"controlPhase" in event.data && typeof event.data.controlPhase === "string" ? ` · ${label(event.data.controlPhase)}` : ""}
+          {event.data.action ? ` · ${event.data.action}` : ""}{event.data.status ? ` · ${label(event.data.status)}` : ""}</span>
         {event.data.pageUrl && <p>Page: {event.data.pageUrl}</p>}
         {event.data.commentary && <p>{event.data.commentary}</p>}
         {event.data.evidenceId && <EvidenceLink id={event.data.evidenceId} onOpen={(id) => void openEvidence(id)} />}

@@ -6,6 +6,13 @@
 > A CDN allowlist constrains destinations; it does not independently prove media
 > ownership or replace authorization.
 
+Layer07 managed takeover does not relax replay or screenshot access. Human
+interval markers record control attribution, not a detailed keystroke history;
+recordings may contain sensitive human-entered pixels. Reruns and generated
+regressions never copy live/replay URLs or replay protected video as actions.
+Context retirement does not erase existing recording evidence. See
+[advanced workflow boundaries](ADVANCED_WORKFLOWS.md).
+
 ## Verified provider interface
 
 Verified against the official documentation and the **pinned SDK 2.20.0 source**

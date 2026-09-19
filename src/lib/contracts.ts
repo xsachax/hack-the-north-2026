@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { targetScopeSchema } from "./target-scope";
 import { citationSchema, criterionCheckSchema, criterionKey, criterionSchema } from "./criteria";
+import { browserStateSchema } from "./context-contracts";
 
 const text = (max: number) => z.string().trim().min(1).max(max).refine(
   (value) => !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value),
@@ -45,6 +46,7 @@ export const assignmentSchema = z.strictObject({
   goal: text(2000),
   criteria: criteriaSchema,
   limits: executionLimitsSchema.optional(),
+  browserState: browserStateSchema.optional(),
 });
 export const createRunSchema = z.strictObject({
   authorizationAcknowledged: z.literal(true),
@@ -74,6 +76,7 @@ export const attemptSchema = z.strictObject({
   // Historical website snapshots may contain duplicates; uniqueness belongs to admission.
   criteria: z.array(criterionSchema).min(1).max(12),
   limits: executionLimitsSchema.optional(),
+  browserState: browserStateSchema.optional(),
   status: statusSchema,
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
@@ -88,12 +91,15 @@ export const eventSchema = z.strictObject({
     "run.created", "run.cancel_requested", "run.finished", "attempt.started",
     "attempt.finished", "evidence.recorded", "finding.recorded",
     "attempt.observation", "attempt.decision", "attempt.action", "attempt.recovering",
+    "attempt.control",
   ]),
   data: z.strictObject({
     status: statusSchema.optional(),
     evidenceId: idSchema.optional(),
     findingId: idSchema.optional(),
-    actor: z.literal("agent").optional(),
+    actor: z.enum(["agent", "human", "system"]).optional(),
+    controlPhase: z.enum(["agent", "requested", "quiescing", "human", "handback", "resuming", "closed"]).optional(),
+    controlVersion: z.int().nonnegative().optional(),
     step: z.int().min(0).max(30).optional(),
     modelCalls: z.int().min(0).max(30).optional(),
     action: z.enum(["click", "type", "select", "navigate", "back", "scroll", "key", "wait", "done", "give_up"]).optional(),
@@ -103,7 +109,7 @@ export const eventSchema = z.strictObject({
       return ["http:", "https:"].includes(url.protocol) &&
         !url.username && !url.password && !url.search && !url.hash;
     }).optional(),
-    reason: z.enum(["blocked_unsupported", "unsupported_criteria", "budget_exhausted", "worker_recovery", "cleanup_unconfirmed", "execution_complete"]).optional(),
+    reason: z.enum(["blocked_unsupported", "unsupported_criteria", "budget_exhausted", "worker_recovery", "cleanup_unconfirmed", "execution_complete", "context_unavailable", "reproduction_candidate", "reproduction_stopped"]).optional(),
   }),
 });
 export type RunEvent = z.infer<typeof eventSchema>;

@@ -116,12 +116,16 @@ export class ScopedBrowserDriver implements BrowserDriver {
   async observe(signal: AbortSignal): Promise<Observation> {
     this.guard(signal);
     const visible = await this.page.evaluate(() => {
-      const geometry = { visible(element: Element) {
+      const geometry = { visible(element: Element, content: Node = element) {
+        if (!element.checkVisibility({ contentVisibilityAuto: true, opacityProperty: true, visibilityProperty: true })) return false;
         const box = element.getBoundingClientRect();
         let left = Math.max(0, box.left), right = Math.min(innerWidth, box.right);
         let top = Math.max(0, box.top), bottom = Math.min(innerHeight, box.bottom);
         for (let ancestor: Element | null = element; ancestor; ancestor = ancestor.parentElement) {
+          if (ancestor instanceof HTMLDetailsElement && !ancestor.open && content !== ancestor &&
+            !ancestor.querySelector(":scope > summary")?.contains(content)) return false;
           const style = getComputedStyle(ancestor);
+          if (content !== ancestor && style.contentVisibility === "hidden") return false;
           if (style.visibility !== "visible" || style.display === "none" || style.opacity === "0") return false;
           const clip = ancestor.getBoundingClientRect();
           if (["hidden", "clip", "scroll", "auto"].includes(style.overflowX)) {
@@ -137,7 +141,7 @@ export class ScopedBrowserDriver implements BrowserDriver {
       } };
       document.querySelectorAll("[data-ff-candidate]").forEach((element) => element.removeAttribute("data-ff-candidate"));
       const candidates: Candidate[] = [];
-      for (const element of document.querySelectorAll("a[href],button,input,textarea,select,[role=button]")) {
+      for (const element of document.querySelectorAll("a[href],button,input,textarea,select,[role=button],details > summary:first-of-type")) {
         if (!geometry.visible(element)) continue;
         if (element instanceof HTMLInputElement && ["hidden", "password", "file"].includes(element.type)) continue;
         const kind = element instanceof HTMLAnchorElement ? "link"
@@ -172,7 +176,7 @@ export class ScopedBrowserDriver implements BrowserDriver {
       const blocks = new Map<Element, TextBlock>();
       let node: Node | null;
       while ((node = walker.nextNode()) && text.join(" ").length < 12000) {
-        if (!node.parentElement || node.parentElement.closest("script,style,noscript") || !geometry.visible(node.parentElement)) continue;
+        if (!node.parentElement || node.parentElement.closest("script,style,noscript") || !geometry.visible(node.parentElement, node)) continue;
         const range = document.createRange();
         range.selectNodeContents(node);
         const box = range.getBoundingClientRect();

@@ -16,8 +16,10 @@ import { useOwnerSession } from "./owner-session";
 import { PersonaAvatar } from "./persona-avatar";
 import { PersonaEditor } from "./persona-editor";
 import { CriterionEditor } from "./criterion-editor";
+import { ContextPicker } from "./context-picker";
+import type { BrowserState } from "@/lib/context-contracts";
 
-type AssignmentDraft = { goal?: string; criteria?: string; maxSteps?: number; maxModelCalls?: number; maxDurationMs?: number };
+type AssignmentDraft = { goal?: string; criteria?: string; maxSteps?: number; maxModelCalls?: number; maxDurationMs?: number; browserState?: BrowserState };
 const initialCriterion: Exclude<Criterion, string> = {
   id: "visible-outcome", kind: "visible_text", description: "The saved project name is visible in the list.",
   semantics: "current", paths: ["/project-board/projects"], text: "Garden planning", match: "contains",
@@ -134,6 +136,7 @@ export function Launch() {
         const draft = drafts[personaId];
         return {
           personaId, goal: draft?.goal || goal,
+          ...(mode === "controlled" && draft?.browserState ? { browserState: draft.browserState } : {}),
           criteria: draft?.criteria ? z.array(criterionSchema).parse(JSON.parse(draft.criteria)) : criteria,
           limits: {
             maxSteps: draft?.maxSteps ?? capabilities.executionLimits.maxSteps,
@@ -238,12 +241,14 @@ export function Launch() {
                 <label>Maximum duration (seconds)<input type="number" required min={1} max={capabilities.executionLimits.maxDurationMs / 1000} value={(draft?.maxDurationMs ?? capabilities.executionLimits.maxDurationMs) / 1000} onChange={(event) => updateDraft(id, "maxDurationMs", event.target.valueAsNumber * 1000)} /></label>
               </div>}
               <p className="muted">Independent of persona patience. Decisions and semantic evaluations share the model-call limit. Operator ceilings may further reduce these values.</p>
+              {mode === "controlled" && <ContextPicker value={draft?.browserState} onChange={(browserState) =>
+                setDrafts((current) => ({ ...current, [id]: { ...current[id], browserState } }))} />}
               <details><summary>Override canonical criteria JSON</summary><label>Criteria for {persona.name}<textarea className="code-input" rows={8} value={draft?.criteria ?? ""} placeholder={JSON.stringify(criteria, null, 2)} onChange={(event) => updateDraft(id, "criteria", event.target.value)} /></label><p className="muted">Leave blank to inherit. Validated with the shared API schema, including control value / selected option assertions.</p></details>
               <div className="button-row"><button type="button" onClick={() => setEditor(persona)}>{isPreset(id) ? "Customize a copy" : "Edit saved persona"}</button>
                 {!isPreset(id) && <button type="button" disabled={!!deleting} onClick={() => void deletePersona(persona)}>{deleting === id ? "Deleting..." : `Delete ${persona.name}`}</button>}</div>
             </details>;
           })}
-          <p className="muted">Fresh sessions only. Phone is a viewport, not device emulation. No context reuse, throttling, uploads, tabs, subframes or human takeover.</p>
+          <p className="muted">Fresh sessions by default; private returning state is explicit per assignment. Phone is a viewport, not device emulation. Throttling, uploads, tabs and subframes remain unsupported.</p>
         </section>
         <label className="acknowledgement"><input type="checkbox" required checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} /><span>I am authorized to test this scope and will use only non-destructive tasks.</span></label>
         <button className="primary launch-button" type="submit" disabled={!capabilities || !selected.length || (mode === "controlled" && !capabilities.controlledRunsEnabled)}>

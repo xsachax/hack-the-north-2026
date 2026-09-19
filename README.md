@@ -16,7 +16,10 @@ citations, not deterministic proof or calibrated confidence statistics.
 The [delivery plan](docs/DELIVERY_PLAN.md) defines the architecture, sequential PR layers, acceptance gates, capability matrix and accountability ledger for the end-to-end build.
 
 Layer04b (issue #11 / PR #17) and layer05 (issue #12 / PR #18) are merged.
-Layer06 (issue #13) adds [owner-only reports and evidence](docs/REPORTS.md);
+Layer06 (issue #13 / PR #19) is merged with [owner-only reports and evidence](docs/REPORTS.md).
+Layer07 adds [advanced controlled workflows](docs/ADVANCED_WORKFLOWS.md):
+explicit private contexts, acknowledged managed takeover, immutable scoped
+reruns/comparison, and supported coupon regression export/bounded reduction;
 none of these changes declares that public-target gate #8 is solved.
 
 ## Launch and watch
@@ -39,7 +42,9 @@ starting another request. Anonymous owner cookies are not recoverable accounts.
 
 `/runs/:id` reloads persisted attempts, events, summaries and authorized session
 metadata. Open up to three live viewers; a queued attempt shows a placeholder,
-not fabricated footage. This is visualization, **not managed human takeover**.
+not fabricated footage. Viewers are read-only until an explicit takeover
+request is drained and acknowledged by the worker. Interactive grants are
+bounded; handback resumes from a fresh observation, not a stale decision.
 The wall follows resumable ordered events and keeps checking unresolved cleanup
 after a terminal outcome. Cancellation intent is not proof of release;
 infrastructure failure, recovery, quarantine and uncertain cleanup remain visible.
@@ -94,6 +99,10 @@ npm run ui:integration -- --offline-preflight
 npm run report:integration -- --offline-preflight
 # Only after offline gates and explicit operator authorization:
 npm run report:integration -- --confirm-paid
+# Advanced HTTPS owner/UI/restart rehearsal, with zero provider operations:
+npm run advanced:integration -- --offline-preflight
+# Requires a fresh source-bound private gate/review approval; see advanced runbook:
+npm run advanced:integration -- --confirm-paid
 ```
 
 The `browserbase:smoke` command creates **one browser**, requests a maximum **120-second session lifetime**, and calls `extract` and `observe` once each through Model Gateway. It reads the heading on `example.com`, replays one observed click with `act`, verifies the IANA destination, and saves a screenshot, token metrics, and session references under `data/smoke/<run-id>/`. Browserbase/provider-internal retries may still occur; these are operational limits, not a dollar-spend guarantee. Each AI operation has a 30-second timeout.
@@ -134,7 +143,10 @@ gh secret set BROWSERBASE_API_KEY --repo xsachax/hack-the-north-2026
 
 See [worker policy](docs/WORKER.md#durable-policy-and-spending) for owner caps,
 90-hour development maximum, protected 10-hour final reserve, the prior 363-second
-rounded-up external baseline, heartbeat and graceful-shutdown settings.
+rounded-up external baseline, heartbeat and graceful-shutdown settings. The
+separate layer07 advanced rehearsal uses the current **985-second external
+baseline** and a non-replenishing **3,600-second new-reservation cap**; never
+reuse the historical 363-second baseline for that rehearsal.
 
 ## Layout
 
@@ -165,6 +177,12 @@ The application and separate orchestrator use Node/TypeScript. Keep long-running
 
 The controlled demo store has six independently switchable planted problems and deterministic browser regressions. The bounded persona loop supports measured actions, short in-character commentary, patience, stalls, private screenshots and observed criterion checks. Autonomous coverage is limited to the explicitly recorded integration scenarios, not all six problems. Layer04b adds reusable controlled-site execution/evaluation (#11), layer05 adds its real launch flow and live wall (#12), and layer06 adds persisted evidence-backed reports (#13). HTTP 4xx responses alone are not confirmed bugs.
 
-The minimum complete demo is the store, crowd wall and grouped evidence report. Human takeover, reproduction minimization/test generation and rerun comparison follow. A reproduction reducer must re-check the same failure signature in fresh sessions; never promise globally shortest steps without proving them.
+The minimum complete demo is the store, crowd wall and grouped evidence report.
+Advanced controls are documented separately with their supported surfaces:
+context persistence is not a readiness guarantee, takeover is managed-app
+exclusivity, comparison needs confirming coverage, and automatic reproduction
+currently supports only the controlled second-coupon failure. The bounded
+reducer re-checks that exact predicate in fresh sessions and reports the
+shortest path found, not a globally shortest reproduction.
 
 Use only targets you own or have permission to test. Keep the security-minded persona non-destructive; no exploit attempts, real purchases or deletions. Use fake credentials/data in the planted-bug store. Do not claim synthetic personas predict conversion rates or replace real user testing.

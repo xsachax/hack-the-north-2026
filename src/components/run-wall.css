@@ -32,6 +32,11 @@
 .wall-muted { font-size: 10px; line-height: 1.5; color: #526258; }
 .wall-viewer-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 20px 0; }.wall-viewer-bar > span { font-size: 11px; color: #526258; }
 .wall-browser { display: block; border: 1px solid #d6dfcf; background: #eef1e9; border-radius: 8px; width: 100%; height: 360px; margin-bottom: 20px; }.wall-browser-phone { max-width: 390px; height: 520px; margin-inline: auto; }
+.wall-viewer-readonly { cursor: not-allowed; }
+.wall-viewer-readonly iframe { pointer-events: none; }
+.wall-takeover { font-size: 12px; line-height: 1.6; }
+.wall-takeover > button { margin: 0 8px 10px 0; }
+.wall-viewer-interactive iframe { outline: 2px solid #416832; }
 .wall-results, .wall-accounting { border-top: 1px solid #e2e6da; padding-top: 14px; margin-top: 14px; font-size: 12px; line-height: 1.6; }.wall-results summary, .wall-accounting summary { cursor: pointer; font-weight: 600; }
 .wall-results ul { list-style: none; padding: 0; margin: 0; }.wall-results li { padding: 14px 0; }.wall-results li > strong { display: block; font-weight: 500; }
 .wall-check { display: inline-block; font-size: 10px; margin-bottom: 5px; padding: 2px 7px; background: #eef1e9; border-radius: 4px; text-transform: capitalize; }.wall-check-met { background: #dfedce; color: #2b572b; }.wall-check-not_met { background: #f4dfd8; color: #773626; }.wall-check-inconclusive { background: #f4e9ce; color: #715523; }

@@ -50,6 +50,7 @@ function reportFixture(): RunReport {
 async function fixture(page: Page) {
   const state = {
     report: reportFixture(), reportReads: 0, evidenceReads: 0, contentReads: 0,
+    reportReplyGate: null as Promise<void> | null,
     reportError: 0, evidenceError: 0, expired: false, locked: false, ownerId: "owner-one",
     replayReads: 0, replayAuthorizations: 0, replayError: 0, replayAuthorizationError: 0,
     replayAuthorizationBody: null as unknown, replayAuthorizationCsrf: "", replayAuthorizationMethod: "",
@@ -81,6 +82,7 @@ async function fixture(page: Page) {
     }
     if (path === `/runs/${runId}/reports`) {
       state.reportReads++;
+      if (state.reportReplyGate) await state.reportReplyGate;
       return state.reportError ? error(state.reportError) : data(state.report);
     }
     if (path === `/evidence/${evidenceId}/detail`) {
@@ -261,9 +263,22 @@ test("nonfinal refresh is bounded and can be restarted manually", async ({ page 
   await page.clock.install();
   await page.goto(reportPath);
   await expect.poll(() => state.reportReads).toBe(1);
+  const renderedTime = page.locator(".report-muted time");
+  await expect(renderedTime).toHaveAttribute("datetime", timestamp);
+  let previousTimestamp = timestamp;
   for (let read = 2; read <= 24; read++) {
+    state.report.updatedAt = new Date(Date.parse(timestamp) + read * 1000).toISOString();
+    let release: (() => void) | undefined;
+    if (read === 13) state.reportReplyGate = new Promise<void>((resolve) => { release = resolve; });
     await page.clock.fastForward(5100);
     await expect.poll(() => state.reportReads).toBe(read);
+    if (release) {
+      try { await expect(renderedTime).toHaveAttribute("datetime", previousTimestamp); }
+      finally { release(); state.reportReplyGate = null; }
+    }
+    // Request arrival precedes response parsing and registration of the next timer.
+    await expect(renderedTime).toHaveAttribute("datetime", state.report.updatedAt);
+    previousTimestamp = state.report.updatedAt;
   }
   await expect(page.getByText("Automatic refresh paused after two minutes. Refresh report to check again.")).toBeVisible();
   await page.clock.fastForward(60_000);
