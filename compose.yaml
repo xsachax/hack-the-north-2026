@@ -1,0 +1,60 @@
+name: flash-flood
+services:
+  init-data:
+    image: flash-flood:${RELEASE_TAG:-local}
+    build: .
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - "test ! -L /data/private; test ! -L /data/backups; mkdir -p /data/private /data/backups; chown 1000:1000 /data/private /data/backups; chmod 0700 /data/private /data/backups"
+    volumes:
+      - state:/data
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    restart: "no"
+  app:
+    image: flash-flood:${RELEASE_TAG:-local}
+    build: .
+    init: true
+    depends_on:
+      init-data:
+        condition: service_completed_successfully
+    user: "1000:1000"
+    env_file: ./deploy/runtime.env
+    environment:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+      DEPLOYMENT_BIND_HOST: "0.0.0.0"
+      NODE_OPTIONS: --max-old-space-size=768
+      DATA_DIR: /data/private
+      FIXTURE_PORT: "4321"
+      FLASH_FLOOD_ACCESS_CODE_FILE: /run/secrets/access_code
+      BROWSERBASE_API_KEY_FILE: /run/secrets/browserbase_api_key
+    secrets: [access_code, browserbase_api_key]
+    ports: ["127.0.0.1:3000:4321"]
+    volumes: ["state:/data"]
+    read_only: true
+    tmpfs:
+      - /app/.next/cache:uid=1000,gid=1000,mode=0700,size=134217728
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 2
+    mem_limit: 2g
+    pids_limit: 256
+    stop_grace_period: 90s
+    restart: unless-stopped
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
+volumes:
+  state:
+secrets:
+  access_code:
+    file: ./deploy/secrets/access-code
+  browserbase_api_key:
+    file: ./deploy/secrets/browserbase-api-key

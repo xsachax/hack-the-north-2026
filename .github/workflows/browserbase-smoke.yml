@@ -12,24 +12,40 @@ permissions:
   contents: read
 
 concurrency:
-  group: browserbase-smoke
+  group: paid-browserbase
   cancel-in-progress: false
 
 jobs:
   smoke:
-    if: inputs.confirm_paid_run
-    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.confirm_paid_run &&
+      github.ref == 'refs/heads/main' && github.repository == 'xsachax/hack-the-north-2026'
+    environment: paid-browserbase
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+      BROWSERBASE_API_KEY: ""
+      BROWSERBASE_PROJECT_ID: ""
+      DEBUG: "false"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1; Node 24
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - name: Require configured paid environment protections
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/environments/paid-browserbase" |
+            jq -e 'any(.protection_rules[]; .type == "required_reviewers" and .prevent_self_review == true and (.reviewers | length) > 0) and .deployment_branch_policy.protected_branches == true' > /dev/null
+          gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq .protected | grep -qx true
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0; Node 24
         with:
           node-version-file: .nvmrc
-          cache: npm
-      - run: npm ci
+          package-manager-cache: false
+      - run: npm ci --no-audit --no-fund
       - name: Run one capped smoke session
+        timeout-minutes: 3
         run: npm run browserbase:smoke
         env:
           BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}

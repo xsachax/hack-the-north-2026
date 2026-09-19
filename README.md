@@ -21,6 +21,14 @@ Layer07 adds [advanced controlled workflows](docs/ADVANCED_WORKFLOWS.md):
 explicit private contexts, acknowledged managed takeover, immutable scoped
 reruns/comparison, and supported coupon regression export/bounded reduction;
 none of these changes declares that public-target gate #8 is solved.
+The [capability audit](docs/CAPABILITIES.md) maps supported behavior to actual
+implementation and regression coverage, and distinguishes cloud evidence from
+offline fixture checks.
+The [deployment runbook](docs/DEPLOYMENT.md) covers the private single-host
+app/worker package, runtime secrets, probes, backups and rollback. The
+[release rehearsal](docs/REHEARSAL.md) has a separate non-replenishing budget and
+private recording/inspection gate. Shipping hardening does not clear #8 or
+complete the original public-website release.
 
 ## Launch and watch
 
@@ -57,7 +65,9 @@ playback limitations are explicit; see [recording integration](docs/REPLAY.md).
 
 ## Local development
 
-Requires Node.js 22.18+ (22.x) and npm.
+Requires Node.js 22.18+ (22.x) and npm. `.nvmrc` pins the rehearsed runtime;
+`.npmrc` rejects unsupported Node engines rather than silently installing on
+an incompatible runtime.
 
 ```sh
 nvm use

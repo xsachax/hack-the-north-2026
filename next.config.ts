@@ -1,6 +1,12 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  turbopack: { root: process.cwd() },
+  // Turbopack's persistent caches can retain local dotenv contents.
+  experimental: {
+    turbopackFileSystemCacheForBuild: false,
+    turbopackFileSystemCacheForDev: false,
+  },
   serverExternalPackages: ["@browserbasehq/stagehand", "@browserbasehq/sdk"],
   poweredByHeader: false,
   outputFileTracingExcludes: { "*": ["./data/**/*", "./artifacts/**/*", "./.stagehand/**/*", "./.env*"] },

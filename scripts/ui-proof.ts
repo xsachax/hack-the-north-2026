@@ -1,5 +1,7 @@
 import type { RunEvent } from "../src/lib/contracts";
-import type { AttemptSummary } from "../src/lib/ui-contracts";
+import type { Frame } from "playwright-core";
+import type { AttemptSummary, SessionView } from "../src/lib/ui-contracts";
+import { takeoverViewerUrl } from "../src/lib/takeover-contracts";
 import type { CloudRecoveryResult } from "../src/server/worker/cloud-recovery";
 
 export const uiPolicy = {
@@ -44,6 +46,62 @@ export type ViewerProof = {
   attemptId: string; authenticatedUrl: string; iframeUrl: string;
   documentReady: boolean; screenshotBytes: number; samples: VisualSample[];
 };
+
+/** The owner endpoint publishes the stored URL; the wall embeds its read-only transform. */
+export function authenticatedReadonlyViewer(
+  attemptId: string, api: SessionView | undefined, stored: SessionView | undefined, iframeUrl: string | null,
+): string | undefined {
+  if (!api || !stored || api.attemptId !== attemptId || stored.attemptId !== attemptId ||
+    !api.available || !stored.available || !api.liveViewUrl || api.liveViewUrl !== stored.liveViewUrl) return;
+  try {
+    const expected = takeoverViewerUrl(stored.liveViewUrl);
+    return iframeUrl === expected ? expected : undefined;
+  } catch { return; }
+}
+
+export async function probeFrame(frame: Frame): Promise<{
+  ready: boolean; text: string; dom: { tag: string; role: string | null; text: string }[]; samples: VisualSample[];
+}> {
+  return frame.evaluate(() => {
+    const samples = [...document.querySelectorAll("canvas,video")].map((element) => {
+      const media = element as HTMLCanvasElement | HTMLVideoElement;
+      const video = media instanceof HTMLVideoElement;
+      const width = video ? media.videoWidth : media.width;
+      const height = video ? media.videoHeight : media.height;
+      const rect = media.getBoundingClientRect();
+      const style = getComputedStyle(media);
+      const sample = {
+        kind: video ? "video" as const : "canvas" as const, width, height,
+        visible: rect.width >= 200 && rect.height >= 120 && style.display !== "none" &&
+          style.visibility === "visible" && Number(style.opacity) > 0,
+        pixelSamples: 0, opaqueSamples: 0, distinctColors: 0,
+        ...(video ? { readyState: media.readyState, currentTime: media.currentTime,
+          decodedFrames: media.getVideoPlaybackQuality().totalVideoFrames } : {}),
+      };
+      if (!width || !height || !sample.visible) return sample;
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = 64; canvas.height = 64;
+        const context = canvas.getContext("2d")!;
+        context.drawImage(media, 0, 0, 64, 64);
+        const pixels = context.getImageData(0, 0, 64, 64).data;
+        const colors = new Set<string>();
+        for (let i = 0; i < pixels.length; i += 4) {
+          if (pixels[i + 3] > 240) sample.opaqueSamples++;
+          colors.add(`${pixels[i] >> 4},${pixels[i + 1] >> 4},${pixels[i + 2] >> 4}`);
+        }
+        sample.pixelSamples = pixels.length / 4;
+        sample.distinctColors = colors.size;
+      } catch { /* Tainted or not-yet-painted surfaces cannot satisfy visual proof. */ }
+      return sample;
+    });
+    const dom = [...document.querySelectorAll("h1,h2,button,[role=status],[role=alert],canvas,video")].slice(0, 50).map((element) => ({
+      tag: element.tagName.toLowerCase(), role: element.getAttribute("role"),
+      text: (element.getAttribute("aria-label") ?? (element as HTMLElement).innerText ?? "").slice(0, 300),
+    }));
+    return { ready: document.readyState === "complete", text: document.body?.innerText.slice(0, 4000) ?? "", dom, samples };
+  });
+}
 
 /** A loaded iframe (or video shell) is not proof that browser pixels arrived. */
 export function renderedViewer(proof: ViewerProof): boolean {

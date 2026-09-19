@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { advancedSourceDigest, assertAdvancedBuild, writeAdvancedBuildReceipt } from "../../../scripts/advanced-build";
+import nextConfig from "../../../next.config";
 
 describe("source and production-build approval binding", () => {
   let directory: string;
@@ -15,8 +16,15 @@ describe("source and production-build approval binding", () => {
   });
   afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
 
+  it("keeps clean package resolution local and disables dotenv-bearing persistent build caches", () => {
+    expect(nextConfig.turbopack?.root).toBe(process.cwd());
+    expect(nextConfig.experimental?.turbopackFileSystemCacheForBuild).toBe(false);
+    expect(nextConfig.experimental?.turbopackFileSystemCacheForDev).toBe(false);
+  });
+
   it.each(["next.config.ts", "playwright.config.ts", "vitest.config.ts", "eslint.config.mjs",
-    "tests/e2e/acceptance.spec.ts", ".github/workflows/ci.yml", "public/example.js"])(
+    "tests/e2e/acceptance.spec.ts", ".github/workflows/ci.yml", "public/example.js",
+    "Dockerfile", ".dockerignore", "compose.yaml", "deploy/runtime.env.example", ".npmrc"])(
     "invalidates approval when %s changes", async (file) => {
       const before = await advancedSourceDigest(directory);
       const parts = file.split("/");
