@@ -1,11 +1,8 @@
-import { z } from "zod";
+export { statusSchema as runStatusSchema } from "./contracts";
+export type { Status as RunStatus } from "./contracts";
+import type { Status as RunStatus } from "./contracts";
 
-export const runStatusSchema = z.enum([
-  "queued", "running", "succeeded", "gave_up", "bug", "failed", "cancelled",
-]);
-
-export type RunStatus = z.infer<typeof runStatusSchema>;
-
+// In-memory preview shapes; persisted entities and opaque evidence IDs live in contracts.ts.
 export type BrowserEvidence = {
   kind: "console" | "page_error" | "request_failed" | "http_error" | "slow_request";
   timestamp: string;

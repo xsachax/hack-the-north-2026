@@ -24,7 +24,7 @@ describe("persona foundation", () => {
   });
 
   it("distinguishes infrastructure failures from bugs and friction", () => {
-    for (const status of ["bug", "failed", "gave_up"]) {
+    for (const status of ["target_failed", "infrastructure_failed", "gave_up", "blocked", "limit_reached"]) {
       expect(runStatusSchema.parse(status)).toBe(status);
     }
   });

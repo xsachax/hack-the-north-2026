@@ -12,6 +12,9 @@ jobs:
     timeout-minutes: 10
     env:
       NEXT_TELEMETRY_DISABLED: "1"
+      # Offline contracts/SQLite/API/target-policy tests must never need cloud secrets.
+      BROWSERBASE_API_KEY: ""
+      BROWSERBASE_PROJECT_ID: ""
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,3 +26,4 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm run build
+      - run: npm run test:http

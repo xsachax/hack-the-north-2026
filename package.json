@@ -14,6 +14,7 @@
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:http": "tsx scripts/api-smoke.ts",
     "check": "npm run lint && npm run typecheck && npm test",
     "browserbase:smoke": "tsx scripts/browserbase-smoke.ts"
   },

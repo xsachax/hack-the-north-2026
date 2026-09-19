@@ -1,0 +1,233 @@
+# Layer 01: offline API and durable contracts
+
+Base path: `/api/v1`. These endpoints **never launch a browser or call a model**.
+The dashboard is still a preview; it is not wired to these endpoints.
+
+## Deployment and identity
+
+Use a persistent, single-host Node.js 22.18+ (22.x) process with `DATA_DIR` on a
+private local persistent volume. Node's `node:sqlite` is available without
+`--experimental-sqlite` on the supported runtime; it is still experimental and
+emits a warning. No native npm driver or new dependency is required. Do not
+deploy the database on ephemeral serverless storage, a network filesystem, or
+independent replicas with separate volumes.
+
+`APP_ORIGIN` is an exact origin, not a URL prefix (no trailing slash). Development
+defaults to `http://127.0.0.1:3000`; `http://localhost:3000` is also allowed when
+explicitly configured. Production requires an HTTPS `APP_ORIGIN` and
+`FLASH_FLOOD_ACCESS_CODE` of at least 32 characters. Generate a high-entropy random
+code and provision it through your deployment's secret mechanism. The API fails
+closed with `503` when its configuration is missing/invalid, even though the
+preview and liveness endpoint can still render. A TLS-terminating proxy must
+preserve the external `Host` authority. The API compares that authority and the
+browser's exact external HTTPS `Origin`, not Next's internally rewritten URL
+origin; forwarded headers are not an authentication source.
+Do not enable wildcard CORS. TLS termination, request/header limits, request
+timeouts and external abuse protection remain deployment responsibilities.
+
+`POST /session` with a JSON object (`{}` locally, `{"accessCode":"..."}` when gated)
+returns `{data:{ownerId,csrfToken,expiresAt}}` and a server-generated opaque
+seven-day cookie. Cookies are `HttpOnly; SameSite=Strict; Path=/`; production adds
+`Secure` and uses the `__Host-ff_owner` name (development: `ff_owner`). Only a
+SHA-256 digest of the session cookie is stored. The CSRF token is stored privately
+and returned only by same-origin bootstrap. All responses disable caching.
+Calling bootstrap with a valid existing cookie recovers its CSRF token without
+issuing a new identity or extending expiry.
+
+**This is a shared admission gate plus anonymous owner isolation, not account
+authentication.** Possession of a cookie grants that owner's access. Losing it
+loses API access to the owner's records; no login, recovery or cross-device
+identity is implemented. Rotating the access code prevents new admissions but
+does not revoke existing sessions. Sessions expire after seven days. Expired
+owners and their data are retained; automatic deletion, operator revocation,
+retention administration and named accounts are future work. Do not treat this
+as a public multi-tenant production service yet.
+
+Every mutation, including bootstrap, requires `Origin: <APP_ORIGIN>`. All other
+mutations additionally require `X-CSRF-Token` from bootstrap and the cookie.
+Supplied origins must also match on reads; cross-site Fetch Metadata is rejected.
+No owner identifier supplied in a body/query selects the authorization principal.
+Runs, attempts, events, custom personas, evidence and findings are owner-scoped;
+an absent or foreign object returns the same `404`.
+
+JSON mutations require `Content-Type: application/json`. Bodies are limited to
+32 KiB of actual bytes (not just Content-Length), valid UTF-8, and five seconds
+of body reading. Unknown fields and malformed schemas fail closed. Do not log
+bodies, submitted access codes, cookies, target query strings or private evidence.
+Internal API diagnostics are fixed codes, not exception messages.
+
+## Endpoints
+
+All successes use `{data: ...}`. Errors use
+`{error:{code,message}}` with generic safe messages. Statuses include `400`
+invalid input/target policy, `401` missing session/wrong access code, `403`
+origin/CSRF, `404` absent/foreign resource, `409` conflicting idempotency/state,
+`413` oversized body, `415` wrong content type, `408` slow body, `429` quota and
+`503` unavailable/configuration/storage failure. `429` includes `Retry-After: 60`;
+longer-lived admission limits may not clear after one minute.
+
+| Method | Path | Input / result |
+| --- | --- | --- |
+| POST | `/session` | Bootstrap described above |
+| GET | `/personas` | `{items:[...]}`: twelve predefined profiles and up to 50 owned custom profiles |
+| POST | `/personas` | Full custom profile; returns new server-generated UUID |
+| PUT | `/personas/:id` | Full replacement of owned custom profile, not a partial patch |
+| DELETE | `/personas/:id` | No body; deletes custom profile; existing attempt snapshots remain intact |
+| POST | `/runs` | Validated scoped request below; required `Idempotency-Key` |
+| GET | `/runs?after=0&limit=50` | `{items,nextCursor}` ordered by durable ascending creation cursor |
+| GET | `/runs/:id` | Run with scope, lifecycle and cancellation-request timestamp |
+| GET | `/runs/:id/attempts` | `{items}` (bounded by twelve assignments), including immutable persona/goal snapshots |
+| GET | `/runs/:id/events?after=0&limit=50` | `{items,nextCursor}` ordered by per-run event sequence |
+| POST | `/runs/:id/cancel` | Empty JSON object; idempotent cancellation request |
+| GET | `/evidence/:id` | Private owner-scoped metadata only, no file path, browser session URL or file download |
+| GET | `/findings/:id` | Finding with references to same-attempt evidence |
+
+Pagination is exclusive `after`, integer `0..Number.MAX_SAFE_INTEGER`, and
+`limit` is `1..100`. Use `nextCursor` for the next available page. For polling
+events, retain the last event's sequence even when `nextCursor` is `null`.
+Unknown/duplicate query parameters are rejected. Persona/attempt collections
+have hard size limits instead of pagination. Predefined personas cannot be
+updated/deleted; create a custom copy to edit one.
+
+Profile fields: `name`, `character`, `device` (`phone|desktop`), `techComfort`
+(`low|medium|high`), `patienceSteps` (`1..30`), `readingStyle` (`skim|careful`),
+`quirks`, `worries`. String/array bounds live in `src/lib/contracts.ts`. Profile
+text is data describing behavior, never executable code or a replacement for
+the worker's safety policy.
+
+Example run body:
+
+```json
+{
+  "authorizationAcknowledged": true,
+  "scope": {
+    "targetUrl": "https://example.com/shop",
+    "allowedSubdomains": ["sale.example.com"],
+    "pathPrefixes": ["/shop", "/checkout"]
+  },
+  "assignments": [{
+    "personaId": "impatient-mobile",
+    "goal": "Find a blue shirt without completing a purchase",
+    "criteria": ["The size and total price are visible before checkout"]
+  }]
+}
+```
+
+An explicit authorization acknowledgement is mandatory; it is not proof of
+ownership. Assign one to twelve unique predefined/owned persona IDs, each with a
+goal and one to twelve evaluation criteria. The idempotency key is 16–128 ASCII
+letters/digits/underscores/hyphens. Same owner/key and validated request returns
+the original run (`200`, versus `201` on creation); a changed request returns
+`409`. Different owners have independent keys. Validation/DNS admission is
+rechecked on every create request, including retries; target unavailability can
+therefore temporarily prevent an otherwise idempotent replay.
+
+## State, storage and internal worker boundary
+
+Canonical browser-safe schemas/types are in `src/lib/contracts.ts` and
+`src/lib/target-scope.ts`. `src/lib/run.ts` retains in-memory preview/evidence
+shapes and re-exports the canonical lifecycle; these are not private artifact
+storage contracts. Statuses are `queued`, `running`, `succeeded`, `gave_up`,
+`cancelled`, `blocked`, `limit_reached`, `infrastructure_failed`, `target_failed`.
+`target_failed` means a target outcome, not an infrastructure problem; actual
+bug findings still require supporting evidence.
+
+Creating a run atomically snapshots profiles/objectives, creates one attempt,
+job and zero-valued usage reservation per assignment, and appends `run.created`.
+Updating/deleting a profile never changes prior attempts. All multi-record
+transitions use SQLite `BEGIN IMMEDIATE`, foreign keys, WAL, `synchronous=FULL`,
+a five-second busy timeout, and transactional `user_version` migrations.
+Repository `close()` is explicit for scripts/tests; process exit releases the
+server connection. SQLite recovers committed WAL state on reopen; do not delete
+sidecars to "fix" a running database. The directory is mode `700`, database `600`,
+and sidecars inherit database permissions. Back up using SQLite-aware tooling or
+after stopping all processes and closing connections; copying only the live
+main database can lose WAL transactions. Treat backups as secrets.
+
+The repository's `startAttempt`, `finishAttempt`, `recordEvidence` and
+`recordFinding` are **internal worker-facing primitives, not HTTP mutation
+endpoints or a paid-launch protocol**. They require an owner/run/attempt match.
+Starting a non-queued or cancelled attempt conflicts. Finishing a running attempt
+with the same terminal result is idempotent; terminal outcomes are otherwise
+immutable. The state API does not prove objective success; layer 03 must do so
+before passing `succeeded`.
+
+Queued cancellation immediately cancels attempts/jobs. Running cancellation
+records intent, cancels queued peers and leaves active attempts/jobs active until
+the worker confirms cleanup. A late success cannot overwrite cancellation.
+Cleanup/infrastructure failure is preserved rather than presented as a clean
+cancellation. Transaction ordering decides finish-versus-cancel races. Fully
+terminal runs are not relabelled by a later cancel request.
+
+Runs become terminal only when every attempt does. For mixed results the
+summary priority is infrastructure failure, limit, blockage, target failure,
+abandonment, cancellation, success; a cancellation request overrides non-infra
+outcomes. Per-attempt results remain the source of detail. Events have monotonic
+per-run integer sequences allocated in the same transaction as state changes.
+
+Jobs include lease owner, expiry, generation and cancellation intent; reservation
+rows include reserved/consumed/released seconds. **No lease claiming, fencing,
+stale-worker recovery, browser-ID reconciliation, quota reservation/settlement,
+or paid runner is implemented.** State primitives intentionally do not acquire
+safe leases. Layer 04 must implement those transactionally before any background
+worker uses them to spend credits. Reopening a running record preserves it as
+running; it does not invent success, retry a browser, or pretend cleanup happened.
+
+Evidence records use server-generated IDs and internal 64-character hex storage
+keys, never caller-supplied file paths. Finding references must exist, belong to
+the same owner/run/attempt, and remain durable. Storage keys are never returned
+over HTTP. This layer stores references/metadata only: artifact writing,
+size/type validation, sanitization/redaction and protected streaming are later
+work. Untrusted summaries must be escaped on display and are not trusted policy.
+
+## Persisted abuse controls
+
+Counters are in SQLite, not process memory: bootstrap (including wrong access
+codes) is globally limited to 30/minute; authenticated mutations are 60/minute
+per owner; reads 300/minute per owner. Fixed-window limits can allow a burst at
+the window boundary. Origin-rejected traffic is rejected before storage; it
+cannot allocate sessions or start DNS resolution.
+
+Admission also caps an owner at five active runs, 100 new runs in a rolling day,
+and 50 custom personas. Idempotent run retries do not consume another run slot.
+There is a lifetime cap of 1,000 owner records per database. These bounds survive
+restarts and multiple connections but are not a distributed DDoS defense.
+Bootstrap uses a conservative global bucket rather than trusting proxy/IP
+headers; one client can exhaust it. Shared-code holders can obtain multiple
+owners. No money is spent by this API; later paid launch requires stronger
+principal quotas plus global durable spending reservations.
+
+## Target trust and next-layer enforcement
+
+Initial admission checks the explicit target and allowed subdomains against
+URL/IP/DNS policy. Exact allowed subdomains do not mean arbitrary sibling hosts
+or wildcards. Paths match segment boundaries, not naive string prefixes.
+`guardTargetUrl` is the reusable async enforcement point for each navigation,
+redirect hop, popup, frame and browser request. Revalidate DNS each time and
+reject out-of-scope destinations before the network operation, not after loading
+the page. External CDNs/APIs are not silently exempt from the explicit scope.
+
+**Admission and DNS rechecks do not solve DNS rebinding.** A browser can resolve
+again after validation, bypass interception, or follow redirects automatically.
+Layer 03 must connect the policy to the browser's actual network boundary,
+prevent unchecked redirects/requests, and verify/enforce the destination at
+connection time (or use a trusted egress proxy/network allowlist). Browserbase's
+top-level domain setting alone is insufficient for subresource traffic.
+Do not claim arbitrary remote targets are safely runnable until that capability
+is demonstrated. Development-only localhost exceptions must be narrowly
+configured and cannot be enabled in production. No environment-driven localhost
+bypass is enabled by the API in this layer; fixture integration belongs to 02/03.
+
+The policy functions accept trusted `PolicyOptions`: injected all-answer DNS
+`lookup(hostname)`, a bounded `dnsTimeoutMs` (default 2,000; maximum 5,000), and one
+exact `developmentLocalhostOrigin` (for example `http://127.0.0.1:4100`). The
+exception requires a development environment, and a real production `NODE_ENV`
+always rejects it, including when the test-only `environment` option says
+development. These options are server configuration, never request-body fields.
+
+Offline validation is `npm run check`, `npm run build`, then `npm run test:http`,
+without `.env.local` or Browserbase credentials. Tests use temp databases,
+multiple connections/processes and injected DNS. The HTTP smoke runs the actual
+built Next server on loopback with a temporary database and verifies proxy Host
+handling, secure sessions, CSRF, persona CRUD and owner isolation; it never
+requests an external target. Ordinary CI does not contact paid providers.

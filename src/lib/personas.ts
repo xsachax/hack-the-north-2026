@@ -1,11 +1,6 @@
-export type Persona = {
-  id: string;
-  name: string;
-  character: string;
-  device: "phone" | "desktop";
-  techComfort: "low" | "medium" | "high";
-  patienceSteps: number;
-  readingStyle: "skim" | "careful";
+import type { Persona as CanonicalPersona } from "./contracts";
+
+export type Persona = Omit<CanonicalPersona, "quirks" | "worries"> & {
   quirks: readonly string[];
   worries: readonly string[];
 };
