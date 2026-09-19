@@ -135,6 +135,47 @@ target probes, host interfaces, routes, or firewall changes are needed.
 Dependency/browser provisioning uses package mirrors; the acceptance run has
 only namespace-local loopback and no external interface.
 
+### Public transport namespace acceptance
+
+The same verified launcher has one additional **fixed**, allowlisted suite:
+
+```sh
+CI=true node node_modules/tsx/dist/cli.mjs scripts/native-policy-linux.ts --ci-sudo --public-transport
+# Local Linux, when unprivileged namespaces are available:
+node node_modules/tsx/dist/cli.mjs scripts/native-policy-linux.ts --public-transport
+```
+
+This selects `vitest.public-transport-linux.config.ts`, not an arbitrary elevated
+command. It adds `93.184.216.34/32`, `2606:4700:4700::1111/128` and the wrong-SAN
+control `2606:4700:4700::1112/128` **only inside
+the already verified private namespace**; the ordinary native suite's aliases and
+command are unchanged. Namespace-local HTTP/80, HTTPS/443 and UDP DNS/53 run after
+the UID/GID drop. The existing namespace-only low-port sysctl permits those owned
+listeners. No interface, firewall, route, resolver or Docker setting on the shared
+host is changed. This suite needs OpenSSL but no browser and uses no provider key.
+
+`tests/network-fixtures.ts` shares the existing isolation assertions and TTL-zero
+owned DNS responder with the native browser suite. The production broker has no
+test DNS/transport hook. A public answer flips immediately after serialization:
+the first actual connection must remain pinned to the public alias, while the
+second request must reject private DNS with unchanged private connection counters.
+Positive controls first connect to every private/link-local/IPv6 sentinel so a
+broken route cannot masquerade as enforcement. Mixed answers, public IPv6 and IP
+literals, private redirect rejection and in-flight read cancellation are covered.
+
+Ephemeral owned TLS material remains in mode-0700 namespace scratch. Fresh
+unprivileged Node children test an untrusted CA failure, explicit local CA trust
+via `NODE_EXTRA_CA_CERTS`, hostname SNI, IPv4/IPv6 SANs, a wrong-hostname failure
+and a reachable IPv6 alias absent from the IP SANs. The independent IP control and broker both require OpenSSL-backed
+X509 IP SAN matching, avoiding the Node 22.23 legacy matcher's IPv6/IDNA regression;
+CA-chain verification remains on. No CA is installed into the host
+trust store, and no TLS bypass or mocked socket is used. The suite fails rather
+than skipping when isolation, IPv6, port binding or DNS is unavailable. The
+credential-free CI `native-policy` job runs both suites sequentially and uploads
+neither keys nor artifacts. Synthetic aliases prove real socket pinning and
+classification, not external network connectivity or combined browser/provider
+execution; public jobs remain blocked.
+
 ### Startup, isolation, and bounded cleanup
 
 Before executing any network setup, the launcher verifies that both its

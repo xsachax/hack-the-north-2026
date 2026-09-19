@@ -8,6 +8,12 @@ exception. Layer 04b (#11) adds custom structural and evidence-grounded semantic
 criteria for the store and project board before the layer 05 wall. Natural-language
 evaluation is a recorded heuristic, not a deterministic outcome oracle.
 
+The unconnected [public HTTP transport library](EXECUTION.md#public-http-transport-library-offline-not-enabled)
+adds a bounded per-job API, not a worker mode. Do not route public jobs through it
+until the native deny boundary and combined real browser/transport proof are
+accepted. Future integration must bind its immutable authorization and abort
+signal to the durable lease and drain/close it during teardown.
+
 The #8 [native-policy probe](EXECUTION.md#native-browser-policy-candidate-offline-phase-a)
 is offline-only. It is not imported by the worker/cloud factory and changes no
 admission, returning-context, recovery or budget behavior. Running it uploads no
