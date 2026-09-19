@@ -10,6 +10,7 @@ export async function handleApi(request: Request): Promise<Response> {
         origin: process.env.APP_ORIGIN ?? "http://127.0.0.1:3000",
         production: process.env.NODE_ENV === "production",
         accessCode: process.env.FLASH_FLOOD_ACCESS_CODE,
+        allowDemoRuns: process.env.ENABLE_DEMO_RUNS === "true",
       };
       validateApiConfiguration(configuration);
       handler = createApi({

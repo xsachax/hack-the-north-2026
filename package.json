@@ -18,7 +18,10 @@
     "test:e2e": "playwright test",
     "check": "npm run lint && npm run typecheck && npm test",
     "browserbase:smoke": "tsx scripts/browserbase-smoke.ts",
-    "persona:integration": "tsx scripts/persona-integration.ts"
+    "persona:integration": "tsx scripts/persona-integration.ts",
+    "worker": "tsx scripts/worker.ts",
+    "worker:reconcile": "tsx scripts/worker-reconcile.ts",
+    "worker:integration": "tsx scripts/worker-integration.ts"
   },
   "dependencies": {
     "@browserbasehq/sdk": "2.20.0",

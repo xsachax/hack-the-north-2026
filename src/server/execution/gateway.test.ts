@@ -121,4 +121,34 @@ describe("Stagehand gateway brain", () => {
     await expect(f.brain.decide(input(), new AbortController().signal)).rejects.toBe(error);
     expect(f.extract).toHaveBeenCalledOnce();
   });
+
+  it("fences new decisions immediately and drains the actual pending RPC after cancellation", async () => {
+    const f = fixture();
+    let resolve!: (value: { data: unknown }) => void;
+    f.extract.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    const controller = new AbortController();
+    const reason = new Error("cancelled");
+    const deciding = expect(f.brain.decide(input(), controller.signal)).rejects.toBe(reason);
+    controller.abort(reason);
+    let drained = false;
+    const draining = f.brain.drain().then(() => { drained = true; });
+    await expect(f.brain.decide(input(), new AbortController().signal)).rejects.toThrow("gateway_closed");
+    expect(drained).toBe(false);
+    resolve({ data: decision });
+    await Promise.all([deciding, draining]);
+    expect(drained).toBe(true);
+    expect(f.extract).toHaveBeenCalledOnce();
+  });
+
+  it("drains rejected RPCs without hiding their original failure from the caller", async () => {
+    const f = fixture();
+    let reject!: (reason: Error) => void;
+    f.extract.mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
+    const error = new Error("failed extraction");
+    const deciding = expect(f.brain.decide(input(), new AbortController().signal)).rejects.toBe(error);
+    const draining = f.brain.drain();
+    reject(error);
+    await Promise.all([deciding, draining]);
+    await expect(f.brain.drain()).resolves.toBeUndefined();
+  });
 });

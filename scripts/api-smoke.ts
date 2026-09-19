@@ -7,6 +7,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { demoCriteria } from "../src/lib/demo-run";
 
 await access(".next/BUILD_ID");
 const listener = createServer();
@@ -27,6 +28,7 @@ const server = spawn(process.execPath, [
     ...process.env, NODE_ENV: "production", APP_ORIGIN: origin, DATA_DIR: dataDir,
     FLASH_FLOOD_ACCESS_CODE: accessCode, BROWSERBASE_API_KEY: "", BROWSERBASE_PROJECT_ID: "",
     NEXT_TELEMETRY_DISABLED: "1",
+    ENABLE_DEMO_RUNS: "true",
   },
   stdio: "ignore",
 });
@@ -113,7 +115,35 @@ try {
   assert.equal((await request(`/personas/${persona.id}`, { method: "DELETE", headers: owner })).status, 200);
   assert.equal((await request("/runs", { headers: owner })).status, 200);
   assert.equal((await request("/personas", { headers: { ...owner, origin: "https://foreign.invalid" } })).status, 403);
-  console.log("Offline production HTTP smoke passed: TLS-proxy Host, secure sessions, CSRF, CRUD and owner isolation. Zero cloud calls.");
+  const demo = await request("/demo-runs", {
+    method: "POST", headers: { ...owner, ...jsonHeaders, "idempotency-key": "offline-demo-run-0001" },
+    body: JSON.stringify({
+      authorizationAcknowledged: true, scenario: "fixed",
+      assignments: [{ personaId: "bargain-hunter", goal: "Apply the advertised coupons", criteria: [demoCriteria[0]] }],
+    }),
+  });
+  assert.equal(demo.status, 201);
+  const run = (await demo.json()).data;
+  assert.equal(run.executionMode, "controlled-fixture");
+  for (const suffix of ["sessions", "summaries", "events", "events/stream"]) {
+    assert.equal((await request(`/runs/${run.id}/${suffix}`, { headers: other })).status, 404);
+  }
+  assert.equal((await request(`/runs/${run.id}/cancel`, {
+    method: "POST", headers: { ...owner, ...jsonHeaders }, body: "{}",
+  })).status, 200);
+  const events = (await (await request(`/runs/${run.id}/events`, { headers: owner })).json()).data.items;
+  assert.equal(events.at(-1).kind, "run.finished");
+  const stream = await request(`/runs/${run.id}/events/stream?after=0`, { headers: { ...owner, "last-event-id": "1" } });
+  assert.equal(stream.status, 200);
+  assert.match(stream.headers.get("content-type") ?? "", /text\/event-stream/);
+  const streamed = await stream.text();
+  assert(!streamed.includes("id: 1\n"));
+  assert(streamed.includes(`id: ${events.at(-1).sequence}\n`));
+  assert(streamed.includes("event: run.finished"));
+  assert(!streamed.includes("browserbase.com"));
+  const summaries = (await (await request(`/runs/${run.id}/summaries`, { headers: owner })).json()).data.items;
+  assert.equal(summaries[0].reservedSeconds, 0);
+  console.log("Offline production HTTP smoke passed: TLS-proxy Host, sessions, CSRF, CRUD, demo admission/cancel, SSE replay and owner isolation. Zero cloud calls.");
 } finally {
   server.kill("SIGTERM");
   const stopped = await Promise.race([exited.then(() => true), delay(5000).then(() => false)]);

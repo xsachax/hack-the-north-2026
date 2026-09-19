@@ -3,20 +3,24 @@ import { z } from "zod";
 import {
   createRunSchema, idempotencyKeySchema, idSchema, paginationSchema, personaProfileSchema,
 } from "../lib/contracts";
+import { demoRunSchema } from "../lib/demo-run";
 import { Repository, type OwnerSession } from "./repository";
 import { ServiceError } from "./errors";
+import { createEventStreamHandler, type EventStreamOptions } from "./event-stream";
 import { TargetPolicyError, validateTargetScope, type PolicyOptions } from "./target-policy";
 
 export type ApiConfiguration = {
   origin: string;
   production: boolean;
   accessCode?: string;
+  allowDemoRuns?: boolean;
   policy?: PolicyOptions;
 };
 type Dependencies = {
   repository: Repository;
   configuration: ApiConfiguration;
   validateScope?: typeof validateTargetScope;
+  eventStream?: EventStreamOptions;
 };
 const bootstrapSchema = z.strictObject({ accessCode: z.string().min(1).max(512).optional() });
 const cookieName = (production: boolean) => production ? "__Host-ff_owner" : "ff_owner";
@@ -98,7 +102,8 @@ function pagination(url: URL) {
   return parseInput(paginationSchema, Object.fromEntries(entries));
 }
 
-export function createApi({ repository, configuration, validateScope = validateTargetScope }: Dependencies) {
+export function createApi({ repository, configuration, validateScope = validateTargetScope, eventStream }: Dependencies) {
+  const streamEvents = createEventStreamHandler(repository, eventStream);
   return async function handle(request: Request): Promise<Response> {
     const headers = new Headers({
       "Cache-Control": "no-store", "Content-Type": "application/json",
@@ -140,6 +145,15 @@ export function createApi({ repository, configuration, validateScope = validateT
       const owner = session.ownerId;
       if (mutation && url.search) fail("invalid_request", 400);
 
+      if (path.length === 1 && path[0] === "demo-runs" && request.method === "POST") {
+        if (configuration.allowDemoRuns !== true || !configuration.accessCode || configuration.accessCode.length < 32) {
+          fail("demo_disabled", 503);
+        }
+        const key = parseInput(idempotencyKeySchema, request.headers.get("idempotency-key"));
+        const input = parseInput(demoRunSchema, await readJson(request));
+        const result = repository.createDemoRun(owner, key, input);
+        return respond(result.run, result.created ? 201 : 200);
+      }
       if (path[0] === "personas") {
         if (path.length === 1 && request.method === "GET") {
           if (url.search) fail("invalid_request", 400);
@@ -176,8 +190,17 @@ export function createApi({ repository, configuration, validateScope = validateT
             if (url.search) fail("invalid_request", 400);
             return respond({ items: repository.attempts(owner, id) });
           }
+          if (path.length === 3 && request.method === "GET" && ["sessions", "summaries"].includes(path[2])) {
+            if (url.search) fail("invalid_request", 400);
+            return respond({
+              items: path[2] === "sessions" ? repository.sessionViews(owner, id) : repository.attemptSummaries(owner, id),
+            });
+          }
           if (path.length === 3 && request.method === "GET" && path[2] === "events") {
             return respond(repository.events(owner, id, pagination(url)));
+          }
+          if (path.length === 4 && request.method === "GET" && path[2] === "events" && path[3] === "stream") {
+            return streamEvents(request, session, id, headers);
           }
           if (path.length === 3 && request.method === "POST" && path[2] === "cancel") {
             parseInput(z.strictObject({}), await readJson(request));

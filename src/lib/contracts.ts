@@ -50,6 +50,7 @@ export const runSchema = z.strictObject({
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
   cancelRequestedAt: timestampSchema.nullable(),
+  executionMode: z.enum(["website", "controlled-fixture"]).default("website"),
 });
 export type Run = z.infer<typeof runSchema>;
 export const attemptSchema = z.strictObject({
@@ -71,11 +72,18 @@ export const eventSchema = z.strictObject({
   kind: z.enum([
     "run.created", "run.cancel_requested", "run.finished", "attempt.started",
     "attempt.finished", "evidence.recorded", "finding.recorded",
+    "attempt.observation", "attempt.decision", "attempt.action", "attempt.recovering",
   ]),
   data: z.strictObject({
     status: statusSchema.optional(),
     evidenceId: idSchema.optional(),
     findingId: idSchema.optional(),
+    actor: z.literal("agent").optional(),
+    step: z.int().min(0).max(30).optional(),
+    modelCalls: z.int().min(0).max(30).optional(),
+    action: z.enum(["click", "type", "select", "navigate", "back", "scroll", "key", "wait", "done", "give_up"]).optional(),
+    commentary: z.string().max(240).optional(),
+    reason: z.enum(["blocked_unsupported", "unsupported_criteria", "budget_exhausted", "worker_recovery", "cleanup_unconfirmed", "execution_complete"]).optional(),
   }),
 });
 export type RunEvent = z.infer<typeof eventSchema>;

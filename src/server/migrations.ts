@@ -83,4 +83,43 @@ export const migrations = [
     PRIMARY KEY(finding_id, evidence_id)
   );
   `,
+  `
+  ALTER TABLE runs ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'website'
+    CHECK(execution_mode IN ('website','controlled-fixture'));
+  ALTER TABLE runs ADD COLUMN scenario TEXT CHECK(scenario IN ('fixed','second-coupon'));
+  CREATE TABLE worker_policy (
+    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+    configuration TEXT NOT NULL CHECK(json_valid(configuration)),
+    baseline_seconds INTEGER NOT NULL CHECK(baseline_seconds>=363)
+  );
+  CREATE TABLE launches (
+    job_id TEXT PRIMARY KEY REFERENCES jobs(id),
+    correlation_token TEXT NOT NULL UNIQUE,
+    state TEXT NOT NULL CHECK(state IN ('intent','active','recovering','quarantined','settled')),
+    created_at TEXT NOT NULL,
+    session_reference TEXT CHECK(session_reference IS NULL OR json_valid(session_reference)),
+    recovery_count INTEGER NOT NULL DEFAULT 0,
+    recovery_after TEXT,
+    summary TEXT CHECK(summary IS NULL OR json_valid(summary)),
+    usage TEXT CHECK(usage IS NULL OR json_valid(usage))
+  );
+  CREATE INDEX launches_recovery ON launches(state, recovery_after);
+  CREATE TABLE attempt_steps (
+    attempt_id TEXT NOT NULL REFERENCES attempts(id),
+    ordinal INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    evidence_id TEXT NOT NULL REFERENCES evidence(id),
+    PRIMARY KEY(attempt_id, ordinal)
+  );
+  `,
+  `
+  CREATE TABLE remote_usage_observations (
+    job_id TEXT NOT NULL REFERENCES jobs(id),
+    session_id TEXT NOT NULL,
+    charged_seconds REAL NOT NULL CHECK(charged_seconds>=0),
+    actual_seconds REAL CHECK(actual_seconds IS NULL OR actual_seconds>=0),
+    terminal INTEGER NOT NULL CHECK(terminal IN (0,1)),
+    PRIMARY KEY(job_id, session_id)
+  );
+  `,
 ] as const;

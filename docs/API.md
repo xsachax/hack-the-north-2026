@@ -1,6 +1,7 @@
-# Layer 01: offline API and durable contracts
+# Owner API and durable execution contracts
 
-Base path: `/api/v1`. These endpoints **never launch a browser or call a model**.
+Base path: `/api/v1`. These handlers **never launch a browser or call a model**;
+explicit demo admission queues paid work for a separately running worker.
 The dashboard is still a preview; it is not wired to these endpoints.
 
 ## Deployment and identity
@@ -74,10 +75,14 @@ longer-lived admission limits may not clear after one minute.
 | PUT | `/personas/:id` | Full replacement of owned custom profile, not a partial patch |
 | DELETE | `/personas/:id` | No body; deletes custom profile; existing attempt snapshots remain intact |
 | POST | `/runs` | Validated scoped request below; required `Idempotency-Key` |
+| POST | `/demo-runs` | Explicit opt-in trusted fixture request below; required `Idempotency-Key` |
 | GET | `/runs?after=0&limit=50` | `{items,nextCursor}` ordered by durable ascending creation cursor |
 | GET | `/runs/:id` | Run with scope, lifecycle and cancellation-request timestamp |
 | GET | `/runs/:id/attempts` | `{items}` (bounded by twelve assignments), including immutable persona/goal snapshots |
 | GET | `/runs/:id/events?after=0&limit=50` | `{items,nextCursor}` ordered by per-run event sequence |
+| GET | `/runs/:id/events/stream?after=0` | Owner-scoped SSE; exclusive cursor or `Last-Event-ID`, bounded connection lifetime |
+| GET | `/runs/:id/summaries` | `{items}`: attempt/launch states, cleanup/count summary, remote usage and reservation/consumption/refund |
+| GET | `/runs/:id/sessions` | `{items:[{attemptId,available,liveViewUrl}]}`; authorized active live-view metadata only |
 | POST | `/runs/:id/cancel` | Empty JSON object; idempotent cancellation request |
 | GET | `/evidence/:id` | Private owner-scoped metadata only, no file path, browser session URL or file download |
 | GET | `/findings/:id` | Finding with references to same-attempt evidence |
@@ -122,6 +127,69 @@ the original run (`200`, versus `201` on creation); a changed request returns
 rechecked on every create request, including retries; target unavailability can
 therefore temporarily prevent an otherwise idempotent replay.
 
+### Explicit demo admission and UI handoff
+
+`POST /demo-runs` requires `ENABLE_DEMO_RUNS=true` and a configured access code
+of at least 32 characters, including development. All normal owner, Origin,
+CSRF, JSON-size/rate-limit and idempotency guards apply. Disabled admission
+returns `503 demo_disabled`; unsupported criteria return `400 unsupported_criteria`
+**before allocation**. No body-supplied URL, scope, fixture port or arbitrary flags
+are accepted:
+
+```json
+{
+  "authorizationAcknowledged": true,
+  "scenario": "fixed",
+  "assignments": [{
+    "personaId": "bargain-hunter",
+    "goal": "Apply SAVE10 and COZY5 to the Maple ceramic mug without gift wrap or checkout.",
+    "criteria": ["Both advertised coupons apply and the mug total is CA$21.60."]
+  }]
+}
+```
+
+Scenarios are `fixed|second-coupon`. The other supported criterion is exactly
+`The demo order is visibly complete.` Assignments may use owned custom profiles;
+their goals/criteria are immutable snapshots, not replacement policies. Unknown
+or duplicate criteria fail prelaunch. Arbitrary criterion evaluation is #11.
+The server maps this request to the synthetic fixture scope and trusted switches,
+returning a Run with `executionMode:"controlled-fixture"`. Normal `/runs` returns
+`executionMode:"website"` and remains queued until a worker records `blocked`
+with reason `blocked_unsupported`; it never silently executes a demo instead.
+
+The UI should retain the run ID, load attempts/summaries, replay event history
+then stream from the last sequence. `attempt.observation`, `attempt.decision`
+and `attempt.action` include `actor:"agent"` and a public evidence ID, with
+bounded counts/action/commentary as applicable. `attempt.recovering` is not a
+second start. Final statuses come from `attempt.finished`/`run.finished`, not
+model text. Event payloads omit SDK IDs, storage keys, live/replay/CDP links.
+Summaries expose conservative whole-second accounting separately from available
+precise browser duration. Infrastructure failure is not a target bug.
+
+The `/sessions` response is itself private, access-bearing metadata: use only for
+the owning wall, do not log/cache/share it. It does not expose an API key, CDP
+connection or replay URL. References are unavailable once cancellation,
+recovery or completion begins. Protected evidence downloads/replays come later.
+
+### SSE resume and disconnect
+
+SSE uses durable per-run sequence as `id`, event kind as `event`, and the
+canonical event JSON as `data`. `after` and `Last-Event-ID` are exclusive integer
+cursors; a valid `Last-Event-ID` takes precedence over the initial `after` query
+on native EventSource automatic reconnect. Both inputs must be valid if present.
+Default cursor is zero; noncanonical integers and duplicate/unknown queries are rejected. Keep the latest
+received ID and deduplicate by ID when reconnecting. JSON pagination remains
+available for history. Internal pages default to 50 records (maximum 100), polls
+are 500ms only with pending reads, and idle keepalives are 15 seconds subject to
+backpressure. Connections close after 60 seconds or owner expiry sooner. Caps
+are 100 total / 5 per owner **per handler instance**, not a distributed socket
+quota; reverse-proxy connection limits remain a deployment requirement.
+Slow readers do not cause unbounded polling;
+client disconnect clears timers/listeners. Session expiry closes the stream.
+Terminal streams drain their remaining backlog before closing. Fixed safe error
+events after headers close the stream; reconnect/poll rather than inventing
+missing lifecycle transitions. Stream polling never appends repository events.
+
 ## State, storage and internal worker boundary
 
 Canonical browser-safe schemas/types are in `src/lib/contracts.ts` and
@@ -144,13 +212,14 @@ and sidecars inherit database permissions. Back up using SQLite-aware tooling or
 after stopping all processes and closing connections; copying only the live
 main database can lose WAL transactions. Treat backups as secrets.
 
-The repository's `startAttempt`, `finishAttempt`, `recordEvidence` and
+The repository's legacy `startAttempt`, `finishAttempt`, `recordEvidence` and
 `recordFinding` are **internal worker-facing primitives, not HTTP mutation
 endpoints or a paid-launch protocol**. They require an owner/run/attempt match.
 Starting a non-queued or cancelled attempt conflicts. Finishing a running attempt
 with the same terminal result is idempotent; terminal outcomes are otherwise
 immutable. The state API does not prove objective success; layer 03 must do so
-before passing `succeeded`.
+before passing `succeeded`. Legacy start/finish reject attempts with durable
+launch records; the worker exclusively uses fenced transactional methods.
 
 Queued cancellation immediately cancels attempts/jobs. Running cancellation
 records intent, cancels queued peers and leaves active attempts/jobs active until
@@ -166,19 +235,20 @@ outcomes. Per-attempt results remain the source of detail. Events have monotonic
 per-run integer sequences allocated in the same transaction as state changes.
 
 Jobs include lease owner, expiry, generation and cancellation intent; reservation
-rows include reserved/consumed/released seconds. **No lease claiming, fencing,
-stale-worker recovery, browser-ID reconciliation, quota reservation/settlement,
-or paid runner is implemented.** State primitives intentionally do not acquire
-safe leases. Layer 04 must implement those transactionally before any background
-worker uses them to spend credits. Reopening a running record preserves it as
-running; it does not invent success, retry a browser, or pretend cleanup happened.
+rows include reserved/consumed/released seconds. Layer04 adds transactional
+claiming, persistent policy, unique launch intent/correlation, generation/expiry
+fences and conservative settlement. See [WORKER.md](WORKER.md) for exact crash
+windows, shared two-process limits and bounded reconciliation/quarantine.
+Reopening a running record does not invent success or retry a browser:
+recovery verifies/releases the existing correlated session. Unknown outcomes
+retain slots/reservations even after an infrastructure-failed terminal result.
 
 Evidence records use server-generated IDs and internal 64-character hex storage
 keys, never caller-supplied file paths. Finding references must exist, belong to
 the same owner/run/attempt, and remain durable. Storage keys are never returned
 over HTTP. This API stores references/metadata only. Layer03 adds an internal bounded
 private artifact writer and execution engine, described in [EXECUTION.md](EXECUTION.md);
-it is not wired to these queued jobs or exposed by a paid endpoint. Protected
+layer04 maps its immutable artifacts to fenced step/evidence records. Protected
 artifact streaming remains later work. Untrusted summaries must be escaped on
 display and are not trusted policy.
 
@@ -196,8 +266,9 @@ There is a lifetime cap of 1,000 owner records per database. These bounds surviv
 restarts and multiple connections but are not a distributed DDoS defense.
 Bootstrap uses a conservative global bucket rather than trusting proxy/IP
 headers; one client can exhaust it. Shared-code holders can obtain multiple
-owners. No money is spent by this API; later paid launch requires stronger
-principal quotas plus global durable spending reservations.
+owners. Demo requests can now cause paid work through the worker's atomic
+per-owner/global concurrency and spending limits; shared-code ownership still
+does not constitute named-account authentication or public multi-tenant billing.
 
 ## Target trust and next-layer enforcement
 
