@@ -81,6 +81,21 @@ describe("protected durable reports API", () => {
     } finally { reopened.close(); }
   });
 
+  it("invalidates finding-v1 cached projections on upgrade and rebuilds finding-v2 from unchanged sources", async () => {
+    const first = await data<RunReport>(await handler()(request(`runs/${run.id}/reports`)));
+    sql((db) => {
+      db.prepare("UPDATE report_snapshots SET revision='obsolete',report=json_set(report,'$.signatureVersion','finding-v1')").run();
+      db.exec("PRAGMA user_version=5");
+    });
+    repository.close();
+    repository = new WorkerRepository(directory);
+    sql((db) => expect(db.prepare("SELECT count(*) AS n FROM report_snapshots").get()?.n).toBe(0));
+    const rebuilt = await data<RunReport>(await handler()(request(`runs/${run.id}/reports`)));
+    expect(rebuilt).toEqual(first);
+    expect(rebuilt.signatureVersion).toBe("finding-v2");
+    sql((db) => expect(JSON.parse(String(db.prepare("SELECT report FROM report_snapshots WHERE run_id=?").get(run.id)?.report))).toEqual(rebuilt));
+  });
+
   it("exposes per-agent and safe export endpoints with no private keys or active Markdown injection", async () => {
     const api = handler();
     const agent = await data<{ attemptId: string }>(await api(request(`runs/${run.id}/attempts/${attemptId}/report`)));

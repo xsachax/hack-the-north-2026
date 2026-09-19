@@ -2,7 +2,7 @@ import { z } from "zod";
 import { idSchema, statusSchema, timestampSchema } from "./contracts";
 
 export const REPORT_VERSION = "report-v1" as const;
-export const SIGNATURE_VERSION = "finding-v1" as const;
+export const SIGNATURE_VERSION = "finding-v2" as const;
 export const evidenceStateSchema = z.enum(["available", "missing", "unavailable", "unsupported"]);
 export const reportEvidenceSchema = z.strictObject({
   id: idSchema,

@@ -74,6 +74,21 @@ function fixture(statuses: Status[] = ["target_failed", "succeeded", "blocked"])
   return { source, loaded };
 }
 
+function typedAction(f: ReturnType<typeof fixture>, value: string, attemptIndex = 0): LoadedEvidence {
+  const item: LoadedEvidence = {
+    metadata: { id: randomUUID(), runId: f.source.run.id, attemptId: f.source.attempts[attemptIndex].id,
+      kind: "observation", createdAt: timestamp, summary: "Persisted action" },
+    storageKey: randomUUID().replaceAll("-", "").repeat(2), state: "available",
+    data: { kind: "action", actor: "agent", action: { action: "type", value } },
+  };
+  f.loaded.push(item);
+  f.source.evidence.push({ metadata: item.metadata, storageKey: item.storageKey });
+  f.source.events.push({ runId: f.source.run.id, attemptId: item.metadata.attemptId,
+    sequence: ++f.source.sequence, timestamp, kind: "attempt.action",
+    data: { actor: "agent", action: "type", step: 3, evidenceId: item.metadata.id } });
+  return item;
+}
+
 describe("evidence-backed report projection", () => {
   it("separates a verified defect from an unmet criterion, with explicit tested and assigned denominators", () => {
     const { source, loaded } = fixture();
@@ -139,6 +154,83 @@ describe("evidence-backed report projection", () => {
     second.source.run.scope = scope;
     second.source.events[1].data.pageUrl = "https://fixture.flash-flood.invalid/demo/checkout";
     expect(signatures(first)).not.toEqual(signatures(second));
+  });
+
+  it("groups actual cross-attempt control findings identically despite unrelated typed-value redaction", () => {
+    const f = fixture(["gave_up", "gave_up"]);
+    for (const attempt of f.source.attempts) attempt.criteria = [{
+      id: "coupon", kind: "control", description: "Control enabled", semantics: "current",
+      label: "Search", match: "exact", disabled: false,
+    }];
+    const before = aggregateReport(f.source, f.loaded);
+    expect(before.groups).toHaveLength(1);
+    expect(before.groups[0]).toMatchObject({ element: "Search", counts: { affectedAttempts: 2, testedAttempts: 2 } });
+    typedAction(f, "Search", 1);
+    const after = aggregateReport(f.source, f.loaded);
+    expect(after.signatureVersion).toBe("finding-v2");
+    expect(after.groups).toHaveLength(1);
+    expect(after.groups[0]).toMatchObject({
+      signature: before.groups[0].signature, element: "[REDACTED]",
+      counts: { occurrences: 2, affectedAttempts: 2, affectedPersonas: 2, testedAttempts: 2 },
+    });
+    for (const format of ["json", "markdown"] as const) expect(exportReport(after, format).body).not.toContain("Search");
+  });
+
+  it("does not change finding identity when an unrelated action artifact becomes missing", () => {
+    const f = fixture(["gave_up"]);
+    f.source.attempts[0].criteria = [{
+      id: "coupon", kind: "control", description: "Control enabled", semantics: "current",
+      label: "Search", match: "exact", disabled: false,
+    }];
+    const action = typedAction(f, "Search");
+    const before = aggregateReport(f.source, f.loaded);
+    action.state = "missing";
+    delete action.data;
+    const after = aggregateReport(f.source, f.loaded);
+    expect(after.revision).not.toBe(before.revision);
+    expect(after.groups[0].signature).toBe(before.groups[0].signature);
+    expect(after.groups[0].counts).toEqual(before.groups[0].counts);
+    expect(after.agents[0].evidence.find((item) => item.id === action.metadata.id)?.state).toBe("missing");
+  });
+
+  it("keeps page signatures and cohorts distinct when both display paths redact to the same value", () => {
+    const f = fixture(["gave_up", "gave_up"]);
+    f.source.events[3].data.pageUrl = "https://fixture.flash-flood.invalid/demo/checkout";
+    for (const item of f.loaded.filter((entry) => entry.metadata.kind === "observation")) {
+      item.data = { observation: { id: item.metadata.id, checks: [], signals: [{ kind: "http", message: "HTTP_ERROR" }] } };
+    }
+    const before = aggregateReport(f.source, f.loaded);
+    typedAction(f, "cart");
+    typedAction(f, "checkout", 1);
+    const after = aggregateReport(f.source, f.loaded);
+    expect(after.groups).toHaveLength(2);
+    expect(new Set(after.groups.map((group) => group.page)).size).toBe(1);
+    expect(after.groups.map((group) => group.signature)).toEqual(before.groups.map((group) => group.signature));
+    for (const group of after.groups) expect(group.counts).toMatchObject({
+      affectedAttempts: 1, testedAttempts: 1, notTestedAttempts: 1,
+    });
+  });
+
+  it("does not turn a privately known page into unknown-attempt identity when its display is hidden", () => {
+    const f = fixture(["gave_up", "gave_up"]);
+    const before = aggregateReport(f.source, f.loaded);
+    const after = aggregateReport(f.source, f.loaded, ["fixture"]);
+    expect(after.groups).toHaveLength(1);
+    expect(after.groups[0]).toMatchObject({
+      signature: before.groups[0].signature, page: null, counts: { affectedAttempts: 2, testedAttempts: 2 },
+    });
+    expect(JSON.stringify(after)).not.toContain("fixture.flash-flood.invalid");
+  });
+
+  it("keeps genuinely unknown pages attempt-specific in both identity and tested denominators", () => {
+    const f = fixture(["gave_up", "gave_up"]);
+    for (const event of f.source.events) delete event.data.pageUrl;
+    const report = aggregateReport(f.source, f.loaded);
+    expect(report.groups).toHaveLength(2);
+    expect(new Set(report.groups.map((group) => group.signature)).size).toBe(2);
+    for (const group of report.groups) expect(group).toMatchObject({
+      page: null, counts: { affectedAttempts: 1, testedAttempts: 1, notTestedAttempts: 1 },
+    });
   });
 
   it("excludes different criterion definitions from a criterion cohort instead of inventing a shared denominator", () => {
@@ -251,6 +343,10 @@ describe("evidence-backed report projection", () => {
     expect(report.groups).toHaveLength(1);
     expect(report.groups[0]).toMatchObject({ category: "performance_signal",
       counts: { occurrences: 1, affectedAttempts: 1 }, occurrences: [{ evidenceIds: [id] }] });
+    typedAction({ source, loaded }, "cart");
+    const redacted = aggregateReport(source, loaded);
+    expect(redacted.groups[0].signature).toBe(report.groups[0].signature);
+    expect(redacted.groups[0].page).not.toBe(report.groups[0].page);
   });
 
   it("labels a persona's recorded give-up as subjective, not a functional bug", () => {
@@ -262,6 +358,10 @@ describe("evidence-backed report projection", () => {
         commentary: "I am confused", pageUrl: "https://fixture.flash-flood.invalid/demo/cart" } });
     const report = aggregateReport(source, loaded);
     expect(report.groups.map(({ category }) => category).sort()).toEqual(["criterion_unmet", "subjective_friction"]);
+    typedAction({ source, loaded }, "cart");
+    const redacted = aggregateReport(source, loaded);
+    expect(redacted.groups.map((group) => group.signature)).toEqual(report.groups.map((group) => group.signature));
+    expect(redacted.groups.every((group) => group.page !== "https://fixture.flash-flood.invalid/demo/cart")).toBe(true);
   });
 
   it("retains actual loop semantic/structural citations after the writer's URL sanitization", async () => {

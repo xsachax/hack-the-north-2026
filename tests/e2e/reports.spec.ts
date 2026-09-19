@@ -13,7 +13,7 @@ const replayPath = `/runs/${runId}/attempts/${attemptId}/replay`;
 
 function reportFixture(): RunReport {
   return {
-    version: "report-v1", signatureVersion: "finding-v1", runId, revision: "revision-1",
+    version: "report-v1", signatureVersion: "finding-v2", runId, revision: "revision-1",
     status: "target_failed", finality: "final", target: "javascript:alert(1)",
     createdAt: timestamp, updatedAt: timestamp, notices: [],
     agents: [{
@@ -34,7 +34,7 @@ function reportFixture(): RunReport {
       groupSignatures: ["finding-signature"],
     }],
     groups: [{
-      signature: "finding-signature", signatureVersion: "finding-v1", category: "subjective_friction",
+      signature: "finding-signature", signatureVersion: "finding-v2", category: "subjective_friction",
       title: "Navigation felt unclear", explanation: "One recorded observation; not a confirmed functional defect.",
       page: "/projects", element: "navigation", criterionSignature: null,
       occurrences: [{ attemptId, personaId: "reader", evidenceIds: [evidenceId], step: 2 }],

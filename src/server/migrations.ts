@@ -148,4 +148,8 @@ export const migrations = [
     PRIMARY KEY(owner_id,attempt_id)
   );
   `,
+  `
+  -- finding-v2 hashes private canonical identity rather than redacted display.
+  DELETE FROM report_snapshots;
+  `,
 ] as const;

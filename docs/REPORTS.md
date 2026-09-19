@@ -67,14 +67,14 @@ There are no affected-user percentages, conversion estimates, or severity scores
 ## Stable layer07 comparison API
 
 Browser-safe schemas live in `src/lib/report-contracts.ts`.
-`version:"report-v1"` and `signatureVersion:"finding-v1"` are explicit.
+`version:"report-v1"` and `signatureVersion:"finding-v2"` are explicit.
 `criterionSignature()` hashes canonical sorted-key JSON containing
 `version:"criterion-v1"`, the complete immutable criterion definition, and
 navigation scope (including target and allowed paths/subdomains).
 Changing assertion text/value, semantics, observation paths, ID, description
 or scope changes the definition signature rather than silently merging it.
 
-`finding-v1` hashes canonical category, full scope, observed page, relevant
+`finding-v2` hashes canonical category, full scope, observed page, relevant
 element, criterion definition signature where applicable, and failure code.
 Run/attempt/persona IDs and timestamps are not part of known-page signatures,
 so identical evidence signatures can be compared on a scoped rerun. Unknown
@@ -83,8 +83,26 @@ merging: such groups are not evidence of cross-run recurrence.
 Array order is preserved except navigation allowlists, which are sorted.
 This conservative identity is not a semantic equivalence engine.
 
-Use group signatures plus exact definition/scope and tested/not-tested counts
-for layer07 comparison. Absence of a group alone never proves a fix. Replay,
+Identity uses the original immutable persisted page context (normalized HTTP(S)
+origin/path, without URL credentials/query/fragment) and original criterion
+control label, **not** run-dependent redacted display strings. Private context
+also determines tested page cohorts. Unrelated typed values, changing secret
+configuration or a missing unrelated action artifact can change presentation
+but cannot change these identities or merge redacted pages into one cohort.
+Canonical values are held only in server-local maps and hash inputs, never
+added to report/export fields. Known sensitive display values remain redacted.
+Genuinely unknown page context is attempt-specific for both identity and tested
+denominators; a known page whose display is hidden is not an unknown page.
+
+`finding-v1` used redacted presentation in its hash and is incompatible with v2.
+The upgrade invalidates saved report projections and rebuilds them from unchanged
+durable source records; original evidence/results remain intact. Old v1 group
+links/exports are not silently treated as v2 matches. The report shape and
+`criterion-v1` definition hash remain unchanged.
+
+Use compatible signature versions plus exact definition/scope, all five
+criterion statuses and tested/not-tested counts for layer07 comparison.
+Absence of a group alone never proves a fix. Replay,
 context reuse, takeover, rerun execution and reproduction generation are
 separate concerns; this layer exports reports, not ready-to-run tests.
 

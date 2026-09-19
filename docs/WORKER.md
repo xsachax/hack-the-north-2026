@@ -380,7 +380,15 @@ evidence and decoded-recording captures were inspected and remain ignored;
 none were published. The separate earlier seven-read investigation allocated
 zero browsers and is not counted as another mission.
 
-Local acceptance passes **1,630 unit/API tests and 86 Chromium E2E tests**, lint,
+The subsequent coordinator review found run-dependent display redaction in
+finding hashes. `finding-v2` now hashes private immutable context, with separate
+redacted presentation and private page-cohort matching; old cached projections
+are invalidated. This deterministic correction was verified offline, including
+unrelated typing, missing action artifacts and real cross-attempt aggregation.
+The paid report/playback proof above preceded that signature-version change;
+no additional browser allocation or provider read was needed.
+
+Local acceptance passes **1,636 unit/API tests and 86 Chromium E2E tests**, lint,
 types, production build, actual HTTPS/SSE/report/export smoke and the authentic
 zero-allocation restart/resume preflight. Focused independent reviews cleared
 the final report provenance/classification and protected recording boundaries.

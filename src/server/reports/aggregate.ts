@@ -38,6 +38,15 @@ export function reportText(value: string, secrets: readonly string[] = []): stri
 }
 const record = (value: unknown): Record<string, unknown> | null =>
   value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+function identityPage(value?: string | null): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return ["http:", "https:"].includes(url.protocol) ? `${url.origin}${url.pathname}` : null;
+  } catch {
+    return null;
+  }
+}
 const observationSchema = z.object({
   id: z.string(), screenshotKey: z.string().optional(),
   checks: z.array(criterionCheckSchema.safeExtend({
@@ -100,6 +109,14 @@ export function aggregateReport(source: ReportSource, loaded: LoadedEvidence[], 
   const page = (value?: string) => value ? publicPageUrl(value, secrets) ?? null : null;
   const byId = new Map(loaded.map((entry) => [entry.metadata.id, entry]));
   const groups = new Map<string, ReportGroup>();
+  // Identity/cohort context stays private; display redaction must not influence comparison keys.
+  const groupPages = new Map<string, { page: string | null; attemptId: string }>();
+  type Citation = ReportCriterion["citations"][number];
+  const citationPages = new Map<Citation, string | null>();
+  const cite = (citation: Citation, originalPage?: string): Citation => {
+    citationPages.set(citation, identityPage(originalPage));
+    return citation;
+  };
   const observedByAttempt = new Map<string, ObservationRecord[]>();
   const agents: AgentReport[] = source.attempts.map((attempt) => {
     const summary = source.summaries.find((entry) => entry.attemptId === attempt.id);
@@ -128,20 +145,20 @@ export function aggregateReport(source: ReportSource, loaded: LoadedEvidence[], 
         const validScreenshot = screenshot?.metadata.kind === "screenshot" &&
           observation?.observation.screenshotKey === screenshot.storageKey ? screenshot : undefined;
         const refs = [observation?.evidence, validScreenshot].filter((entry): entry is LoadedEvidence => !!entry);
-        return {
+        return cite({
           step: citation.step, observationId: observationId(citation.observationId), page: page(observation?.event.data.pageUrl),
           excerpt: text(citation.excerpt), evidenceIds: refs.map((entry) => entry.metadata.id),
           state: !observation ? "missing" : refs.some((entry) => entry.state !== "available") ||
             (!!citation.screenshotKey && !validScreenshot) ? "partial" : "available",
-        };
+        }, observation?.event.data.pageUrl);
       }) : matching.slice(-1).map((entry) => {
         const screenshot = entry.observation.screenshotKey ? byKey.get(entry.observation.screenshotKey) : undefined;
         const refs = [entry.evidence, ...(screenshot?.metadata.kind === "screenshot" ? [screenshot] : [])];
-        return {
+        return cite({
           step: entry.step, observationId: observationId(entry.observation.id), page: page(entry.event.data.pageUrl),
           excerpt: text(check?.evidence ?? ""), evidenceIds: refs.map((ref) => ref.metadata.id),
           state: entry.observation.screenshotKey && !screenshot || refs.some((ref) => ref.state !== "available") ? "partial" : "available",
-        };
+        }, entry.event.data.pageUrl);
       });
       return {
         key: text(key), definitionSignature: criterionSignature(criterion, source.run.scope),
@@ -174,20 +191,23 @@ export function aggregateReport(source: ReportSource, loaded: LoadedEvidence[], 
     category: ReportGroup["category"]; title: string; explanation: string; page: string | null;
     element?: string; criterionSignature?: string; failure: string; evidenceIds: string[]; step: number | null; occurrenceKey: string;
   }) {
+    const originalPage = identityPage(input.page);
     const sig = signature({ version: SIGNATURE_VERSION, scope: {
       ...source.run.scope, allowedSubdomains: [...source.run.scope.allowedSubdomains].sort(), pathPrefixes: [...source.run.scope.pathPrefixes].sort(),
-    }, category: input.category, page: input.page ?? { unknownAttempt: agent.attemptId },
+    }, category: input.category, page: originalPage ?? { unknownAttempt: agent.attemptId },
     element: input.element ?? null, criterion: input.criterionSignature ?? null, failure: input.failure });
     let group = groups.get(sig);
     if (!group) {
       group = {
         signature: sig, signatureVersion: SIGNATURE_VERSION, category: input.category, title: input.title,
-        explanation: input.explanation, page: input.page, element: input.element ?? null,
+        explanation: input.explanation, page: page(originalPage ?? undefined),
+        element: input.element === undefined ? null : text(input.element),
         criterionSignature: input.criterionSignature ?? null, occurrences: [],
         counts: { occurrences: 0, affectedAttempts: 0, affectedPersonas: 0, assignedAttempts: 0, assignedPersonas: 0,
           eligibleAttempts: 0, eligiblePersonas: 0, testedAttempts: 0, testedPersonas: 0, notTestedAttempts: 0, notTestedPersonas: 0, outOfCohortAttempts: 0 },
       };
       groups.set(sig, group);
+      groupPages.set(sig, { page: originalPage, attemptId: agent.attemptId });
     }
     const identity = `${sig}:${agent.attemptId}:${input.occurrenceKey}`;
     if (occurrenceKeys.has(identity)) return;
@@ -208,7 +228,8 @@ export function aggregateReport(source: ReportSource, loaded: LoadedEvidence[], 
       add(agent, {
         category: "criterion_unmet", title: criterion.description,
         explanation: "The criterion was not met in the cited observation. An incomplete task is not proof of a target defect.",
-        page: cited.at(-1)!.page, element: typeof definition === "object" && definition.kind === "control" ? text(definition.label) : undefined,
+        page: citationPages.get(cited.at(-1)!) ?? null,
+        element: typeof definition === "object" && definition.kind === "control" ? definition.label : undefined,
         criterionSignature: criterion.definitionSignature, failure: "not_met",
         evidenceIds: [...new Set(cited.flatMap((citation) => citation.evidenceIds))], step: cited.at(-1)!.step, occurrenceKey: criterion.definitionSignature,
       });
@@ -225,7 +246,7 @@ export function aggregateReport(source: ReportSource, loaded: LoadedEvidence[], 
           title: confirmed ? "Second coupon application throws the verified fixture exception" : "Browser diagnostic signal",
           explanation: confirmed ? "The trusted fixture verifier recorded its exact functional-failure code; the durable outcome is target_failed." :
             "An HTTP, console or network diagnostic is not independently proof of a functional defect.",
-          page: page(entry.event.data.pageUrl), element: confirmed ? "Apply coupon" : undefined,
+          page: entry.event.data.pageUrl ?? null, element: confirmed ? "Apply coupon" : undefined,
           failure: `${signal.kind}:${signal.message}`, evidenceIds: [entry.evidence.metadata.id], step: entry.step,
           occurrenceKey: `${entry.observation.id}:${signal.evidence ?? signal.message}`,
         });
@@ -242,7 +263,7 @@ export function aggregateReport(source: ReportSource, loaded: LoadedEvidence[], 
         add(agent, {
           category: "performance_signal", title: "Request duration reached the driver's 1,000 ms signal threshold",
           explanation: "A measured request duration is a performance signal, not a user conversion rate or a confirmed functional defect.",
-          page: page(entry.url), failure: "slow_request", evidenceIds: [item.metadata.id], step: null,
+          page: entry.url, failure: "slow_request", evidenceIds: [item.metadata.id], step: null,
           occurrenceKey: `${entry.actionId}:${entry.timestamp}:${entry.url}`,
         });
       }
@@ -252,19 +273,23 @@ export function aggregateReport(source: ReportSource, loaded: LoadedEvidence[], 
       if (decision?.evidenceId) add(agent, {
         category: "subjective_friction", title: "Persona chose to stop",
         explanation: "This is the recorded simulated persona's choice, not a judgment about real users or a confirmed defect.",
-        page: decision.page, failure: "persona_give_up", evidenceIds: [decision.evidenceId], step: decision.step, occurrenceKey: "give_up",
+        page: source.events.find((event) => event.attemptId === agent.attemptId && event.sequence === decision.sequence)?.data.pageUrl ?? null,
+        failure: "persona_give_up", evidenceIds: [decision.evidenceId], step: decision.step, occurrenceKey: "give_up",
       });
     }
   }
   for (const group of groups.values()) {
+    const context = groupPages.get(group.signature)!;
+    const samePage = (agent: AgentReport, originalPage: string | null) =>
+      originalPage === context.page && (context.page !== null || context.attemptId === agent.attemptId);
     const eligible = agents.filter((agent) => !group.criterionSignature ||
       agent.criteria.some((criterion) => criterion.definitionSignature === group.criterionSignature));
     const tested = eligible.filter((agent) => {
       if (["cancelled", "blocked", "infrastructure_failed", "queued", "running"].includes(agent.status) || agent.finality !== "final") return false;
       return group.criterionSignature ? agent.criteria.some((criterion) =>
         criterion.definitionSignature === group.criterionSignature && ["met", "not_met"].includes(criterion.status) &&
-        criterion.citations.some((citation) => citation.state !== "missing" && citation.page === group.page)) :
-        (observedByAttempt.get(agent.attemptId) ?? []).some((entry) => page(entry.event.data.pageUrl) === group.page) ||
+        criterion.citations.some((citation) => citation.state !== "missing" && samePage(agent, citationPages.get(citation) ?? null))) :
+        (observedByAttempt.get(agent.attemptId) ?? []).some((entry) => samePage(agent, identityPage(entry.event.data.pageUrl))) ||
           group.occurrences.some((occurrence) => occurrence.attemptId === agent.attemptId);
     });
     const notTested = eligible.filter((agent) => !tested.includes(agent));

@@ -210,7 +210,7 @@ function fixture() {
       checks: [{ criterion: "projects-open", passed: true }] }],
   };
   const report = runReportSchema.parse({
-    version: "report-v1", signatureVersion: "finding-v1", runId, revision: "revision",
+    version: "report-v1", signatureVersion: "finding-v2", runId, revision: "revision",
     status: "succeeded", finality: "final", target: page, createdAt: timestamp, updatedAt: timestamp, groups: [], notices: [],
     agents: [{
       attemptId, persona: { id: "careful-first-timer", name: "Careful", device: "desktop" },
