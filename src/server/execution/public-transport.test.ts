@@ -3,6 +3,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { createServer as createHttpsServer, type RequestOptions } from "node:https";
 import { createServer as createTcpServer, type Socket } from "node:net";
 import { execFileSync } from "node:child_process";
+import { X509Certificate } from "node:crypto";
+import { TLSSocket, type DetailedPeerCertificate } from "node:tls";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +25,7 @@ const state = vi.hoisted(() => ({
   holdLookup: false,
   lateLookup: undefined as (() => void) | undefined,
   sockets: [] as Socket[],
+  peer: undefined as DetailedPeerCertificate | undefined,
 }));
 vi.mock("node:dns/promises", async (original) => ({
   ...await original<typeof import("node:dns/promises")>(),
@@ -67,7 +70,10 @@ vi.mock("node:https", async (original) => {
   const actual = await original<typeof import("node:https")>();
   return { ...actual, request: (options: RequestOptions) => {
     const req = actual.request(mappedOptions(options));
-    req.once("socket", (socket) => state.sockets.push(socket));
+    req.once("socket", (socket) => {
+      state.sockets.push(socket);
+      if (socket instanceof TLSSocket) socket.once("secureConnect", () => { state.peer = socket.getPeerCertificate(true); });
+    });
     return req;
   } };
 });
@@ -118,6 +124,11 @@ beforeAll(async () => {
     "-keyout", join(directory, "key.pem"), "-out", join(directory, "cert.pem"),
   ], { stdio: "ignore" });
   state.ca = readFileSync(join(directory, "cert.pem"), "utf8");
+  execFileSync("openssl", [
+    "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+    "-subj", "/CN=2606:4700:4700::1111",
+    "-keyout", join(directory, "cn-key.pem"), "-out", join(directory, "cn-cert.pem"),
+  ], { stdio: "ignore" });
   tlsServer = createHttpsServer({ key: readFileSync(join(directory, "key.pem")), cert: state.ca }, (req, res) => handler(req, res));
   await new Promise<void>((resolve) => tlsServer.listen(0, "127.0.0.1", resolve));
   const tlsAddress = tlsServer.address();
@@ -135,6 +146,7 @@ beforeEach(() => {
   state.dispatches.length = 0;
   state.pins.length = 0;
   state.sockets.length = 0;
+  state.peer = undefined;
   state.port = port;
   state.holdLookup = false;
   state.lateLookup = undefined;
@@ -431,11 +443,46 @@ describe("real owned TLS and hostile response framing", () => {
   });
   it("rejects an untrusted certificate issuer, not only a mismatched hostname", async () => {
     state.port = tlsPort;
+    vi.stubEnv("NODE_TLS_REJECT_UNAUTHORIZED", "0");
     const ca = state.ca;
     state.ca = "";
     try {
       await expect(transport().request({ ...input, url: "https://example.com/docs" })).rejects.toMatchObject({ code: "network_failure" });
     } finally { state.ca = ca; }
+  });
+  it("does not let a matching CN rescue a trusted certificate without an IP SAN, even under env 0", async () => {
+    state.port = tlsPort;
+    vi.stubEnv("NODE_TLS_REJECT_UNAUTHORIZED", "0");
+    const ca = state.ca;
+    const cnCertificate = readFileSync(join(directory, "cn-cert.pem"), "utf8");
+    const parsed = new X509Certificate(cnCertificate);
+    expect(parsed.toLegacyObject().subject.CN).toBe("2606:4700:4700::1111");
+    expect(parsed.subjectAltName).toBeUndefined();
+    const served = vi.fn((_req: IncomingMessage, res: ServerResponse) => res.end("unexpected"));
+    handler = served;
+    tlsServer.setSecureContext({ key: readFileSync(join(directory, "cn-key.pem")), cert: cnCertificate });
+    state.ca = cnCertificate;
+    try {
+      await expect(transport().request({ ...input, url: "https://[2606:4700:4700::1111]/docs" }))
+        .rejects.toMatchObject({ code: "network_failure" });
+      expect(served).not.toHaveBeenCalled();
+    } finally {
+      state.ca = ca;
+      tlsServer.setSecureContext({ key: readFileSync(join(directory, "key.pem")), cert: ca });
+    }
+  });
+  it("fails closed on missing or malformed raw peer DER without trusting textual SANs", async () => {
+    state.port = tlsPort;
+    await transport().request({ ...input, url: "https://[2606:4700:4700::1111]/docs" });
+    const check = state.dispatches[0].checkServerIdentity;
+    if (!check) throw new Error("Missing identity verifier");
+    const peer = state.peer;
+    if (!peer) throw new Error("Missing actual peer certificate");
+    const missing = { ...peer };
+    Reflect.deleteProperty(missing, "raw");
+    for (const invalid of [missing, { ...peer, raw: Buffer.alloc(0) }, { ...peer, raw: Buffer.from("invalid DER") }]) {
+      expect(check("unused", invalid)).toMatchObject({ code: "network_failure" });
+    }
   });
   it.each([
     "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 2\r\n\r\nxx",
