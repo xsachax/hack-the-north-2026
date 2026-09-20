@@ -11,7 +11,7 @@ import {
   MANAGED_EXECUTION_POLICY, managedAssignmentSchema, managedCapabilitiesSchema, managedCreateSchema, managedRunSchema,
   type ManagedCapabilities, type ManagedRun,
 } from "@/lib/managed-contracts";
-import { managedDefaultCriteria, managedDefaultGoal, managedSpecialistForAssignment, managedSpecialists } from "@/lib/managed-specialists";
+import { managedDefaultCriteria, managedDefaultGoal, managedIanaDemoAssignments, managedIanaDemoScope, managedSpecialistForAssignment, managedSpecialists } from "@/lib/managed-specialists";
 import { useOwnerSession } from "./owner-session";
 import { PersonaAvatar } from "./persona-avatar";
 import { PersonaEditor } from "./persona-editor";
@@ -298,6 +298,18 @@ export function ManagedLaunch() {
     </section>}
       <fieldset disabled={locked || !loaded || !!editor || !!deleting}>
         <div hidden={step !== 0} data-onboarding-step="Website">
+        {capabilities?.allowedOrigins.includes("https://www.iana.org") && <div className="managed-demo-preset">
+          <button type="button" onClick={() => {
+            setTarget(managedIanaDemoScope.targetUrl);
+            setPrefixes(managedIanaDemoScope.pathPrefixes.join("\n"));
+            setSelected(managedIanaDemoAssignments.map((assignment) => assignment.personaId));
+            setDrafts(Object.fromEntries(managedIanaDemoAssignments.map((assignment) => [
+              assignment.personaId, { goal: assignment.goal, criteria: assignment.criteria.join("\n") },
+            ])));
+            setStep(1);
+          }}>Prepare five-agent IANA demo</button>
+          <p className="muted">Five short, distinct read-only missions on one page. Review next; nothing launches yet.</p>
+        </div>}
         <label>Initial target URL
           <input type="url" maxLength={4096} placeholder="https://approved-site.example/help" value={target} onChange={(event) => setTarget(event.target.value)}
             aria-invalid={!!target && (!scopeReady || !!capabilities?.enabled && !validTarget)} aria-describedby="managed-target-help" />
@@ -326,6 +338,8 @@ export function ManagedLaunch() {
               const checked = selected.includes(specialist.personaId);
               const available = profiles.some((profile) => profile.id === specialist.personaId);
               const customized = !managedSpecialistForAssignment(assignmentFor(specialist.personaId));
+              const shortDemo = !customized && managedIanaDemoAssignments.some((assignment) =>
+                assignment.personaId === specialist.personaId && assignment.goal === assignmentFor(specialist.personaId).goal);
               return <label key={specialist.personaId} className={`managed-specialist${checked ? " selected" : ""}`}>
                 <input type="checkbox" aria-label={`Select ${specialist.label}`} checked={checked}
                   disabled={!available || (selected.length >= 8 && !checked)}
@@ -335,7 +349,7 @@ export function ManagedLaunch() {
                   <span className="managed-specialist-state">{!available ? "Unavailable" : checked ? "Selected" : "Select"}</span></span>
                 <strong>{specialist.label}</strong>
                 <span className="managed-specialist-purpose" id={`specialist-${specialist.personaId}`}>{specialist.purpose}</span>
-                <span className="managed-specialist-checks">{customized
+                <span className="managed-specialist-checks">{shortDemo ? <span>Short one-page IANA mission</span> : customized
                   ? <span>Custom mission: review goals and checks in Advanced.</span>
                   : specialist.checks.map((check) => <span key={check}>{check}</span>)}</span>
               </label>;
@@ -345,7 +359,7 @@ export function ManagedLaunch() {
         </section>
         <details className="managed-advanced">
           <summary>Advanced: missions & personas</summary>
-          <p className="muted">Optional. The four specialists already have goals and checks. Additional personas use the shared mission below. Every launch saves immutable persona, goal and criteria snapshots.</p>
+          <p className="muted">Optional. The five specialists already have goals and checks. Additional personas use the shared mission below. Every launch saves immutable persona, goal and criteria snapshots.</p>
           <label>Shared goal for additional personas
             <textarea className="goal-input" rows={3} maxLength={2000} placeholder="Find delivery information and explain whether the cost is clear." value={goal} onChange={(event) => setGoal(event.target.value)} />
           </label>

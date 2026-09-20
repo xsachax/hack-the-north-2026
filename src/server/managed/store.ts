@@ -120,7 +120,7 @@ export class ManagedStore {
       this.db.prepare(`UPDATE managed_attempts SET cancel_requested_at=COALESCE(cancel_requested_at,?)
         WHERE run_id=? AND state!='settled'`).run(this.clock(), id);
       this.db.prepare(`UPDATE managed_attempts SET state='settled',status='cancelled',cleanup='closed',
-        actual_browser_seconds=0 WHERE run_id=? AND state='queued'`).run(id);
+        actual_browser_seconds=0,finished_at=? WHERE run_id=? AND state='queued'`).run(this.clock(), id);
       return this.get(owner, id);
     });
   }
@@ -159,7 +159,7 @@ export class ManagedStore {
           owned.committed + reserve > policy.ownerBudgetSeconds ||
           global.reserved + reserve > policy.lifetimeReservationLimitSeconds) {
           this.db.prepare(`UPDATE managed_attempts SET state='settled',status='failed',cleanup='closed',
-            actual_browser_seconds=0,error='budget_exhausted' WHERE id=?`).run(row.id);
+            actual_browser_seconds=0,error='budget_exhausted',finished_at=? WHERE id=?`).run(this.clock(), row.id);
           this.touch(z.string().parse(row.run_id));
           continue;
         }
@@ -239,6 +239,9 @@ export class ManagedStore {
       if (count >= 500) throw new Error("managed_progress_limit");
       this.db.prepare("INSERT INTO managed_progress VALUES(?,?,?,?,?,?)")
         .run(claim.id, hash, count + 1, this.now(), event.kind, safeText(event.text, 2000, this.secrets(this.row(claim.id))));
+      if (event.kind === "status" && ["PENDING", "RUNNING", "COMPLETED", "FAILED", "STOPPED", "TIMED_OUT"].includes(event.text)) {
+        this.db.prepare("UPDATE managed_attempts SET provider_status=? WHERE id=?").run(event.text, claim.id);
+      }
       this.touch(claim.runId);
     });
   }
@@ -274,10 +277,11 @@ export class ManagedStore {
       const retryAfter = this.clock() + Math.min(60_000, 2000 * 2 ** z.number().parse(row.recovery_count));
       this.db.prepare(`UPDATE managed_attempts SET state=?,status=?,cleanup=?,provider_status=?,result=?,error=?,
         actual_browser_seconds=?,consumed_seconds=?,released_seconds=?,lease_owner=NULL,lease_expires_at=NULL,
-        recovery_after=? WHERE id=?`).run(closed ? "settled" : "quarantined", status, outcome.cleanup,
+        recovery_after=?,finished_at=COALESCE(finished_at,?) WHERE id=?`).run(closed ? "settled" : "quarantined", status, outcome.cleanup,
           outcome.providerStatus === null ? null : safeText(outcome.providerStatus, 64, secrets),
           result ? JSON.stringify(result) : null, outcome.error === null ? null : safeText(outcome.error, 2000, secrets),
-          actual ?? (closed && !allocated ? 0 : null), consumed, released, closed ? null : retryAfter, claim.id);
+          actual ?? (closed && !allocated ? 0 : null), consumed, released, closed ? null : retryAfter,
+          closed ? this.clock() : null, claim.id);
       this.touch(claim.runId);
     });
   }
@@ -322,6 +326,8 @@ export class ManagedStore {
       result: row.result === null ? null : this.safeResult(managedResultSchema.parse(json(row.result)), secrets),
       error: row.error === null ? null : safeText(z.string().parse(row.error), 2000, secrets),
       reservedSeconds: z.number().parse(row.reserved_seconds),
+      startedAt: row.started_at === null ? null : new Date(z.number().parse(row.started_at)).toISOString(),
+      finishedAt: row.finished_at === null ? null : new Date(z.number().parse(row.finished_at)).toISOString(),
       actualBrowserSeconds: row.actual_browser_seconds === null ? null : z.number().parse(row.actual_browser_seconds),
       modelCalls: null,
     };

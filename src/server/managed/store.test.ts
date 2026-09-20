@@ -107,12 +107,45 @@ describe("managed durable store (offline)", () => {
         status: "queued", reservedSeconds: 0, actualBrowserSeconds: null, modelCalls: null,
         cleanup: "not_started", cancelRequested: false, progress: [],
       });
+
     }
     const db = inspect();
     expect(db.prepare("SELECT count(*) AS n FROM jobs").get()?.n).toBe(0);
     expect(db.prepare("SELECT count(*) AS n FROM launches").get()?.n).toBe(0);
     expect(db.prepare("SELECT sum(reserved_seconds) AS n FROM managed_attempts").get()?.n).toBe(0);
     expect(repository.claim("old-native-worker")).toBeNull();
+  });
+
+  it("distinguishes claim startup from provider running and freezes elapsed time only after closure", () => {
+    const run = create();
+    expect(repository.managed.get(owner, run.id).attempts[0]).toMatchObject({ startedAt: null, finishedAt: null, providerStatus: null });
+    const leased = claim();
+    const startedAt = new Date(time).toISOString();
+    expect(repository.managed.get(owner, run.id).attempts[0]).toMatchObject({ startedAt, finishedAt: null, providerStatus: null });
+    dispatch(leased);
+    repository.managed.progress(leased, { id: "pending", kind: "status", text: "PENDING" });
+    time += 1000;
+    repository.managed.progress(leased, { id: "running", kind: "status", text: "RUNNING" });
+    expect(repository.managed.get(owner, run.id).attempts[0].providerStatus).toBe("RUNNING");
+    time += 2000;
+    repository.managed.finish(leased, outcome());
+    const finishedAt = new Date(time).toISOString();
+    time += 5000;
+    expect(repository.managed.get(owner, run.id).attempts[0]).toMatchObject({ startedAt, finishedAt, actualBrowserSeconds: 10.1 });
+  });
+
+  it("allows exactly five shared claims while unresolved cleanup retains its slot", () => {
+    configure({ globalConcurrency: 5, ownerConcurrency: 5, sessionSeconds: 60 });
+    create(owner, 5);
+    const claims = Array.from({ length: 5 }, () => claim());
+    for (const leased of claims) dispatch(leased);
+    time += 1;
+    create(owner);
+    create(other);
+    expect(repository.managed.claim("additional-worker", repository.policy)).toBeNull();
+    repository.managed.finish(claims[0], outcome({ cleanup: "unconfirmed" }));
+    expect(repository.managed.claim("additional-worker", repository.policy)).toBeNull();
+    expect(inspect().prepare("SELECT sum(reserved_seconds) AS n FROM managed_attempts").get()?.n).toBe(300);
   });
 
   it("rejects nine, duplicate, and unresolved assignments atomically", () => {

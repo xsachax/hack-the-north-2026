@@ -59,7 +59,7 @@ describe("managed owner API with no provider operations", () => {
     expect(run.attempts.map((attempt) => ({
       personaId: attempt.persona.id, goal: attempt.goal, criteria: attempt.criteria,
     }))).toEqual(assignments);
-    expect(run.attempts.map((attempt) => attempt.persona.name)).toEqual(["Alex", "Ash", "Sam", "Lee"]);
+    expect(run.attempts.map((attempt) => attempt.persona.name)).toEqual(["Alex", "Ash", "Sam", "Lee", "Ari"]);
     expect(run.attempts.every((attempt) => attempt.status === "queued" && attempt.cleanup === "not_started")).toBe(true);
   });
   it.each([

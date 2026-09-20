@@ -11,10 +11,10 @@ import { assertReleaseBuild, releaseSourceDigest } from "../src/server/deploymen
 import { assertPrivateDirectory, readPrivateJson, writePrivateJson } from "./advanced-proof";
 import { publicHarnessDigest } from "./public-proof-source";
 import { workerPolicySchema } from "../src/server/worker/config";
-import { MANAGED_AMENDED_LIFETIME_SECONDS, readManagedBudgetAmendment } from "./managed-budget";
+import { MANAGED_AMENDED_LIFETIME_SECONDS, readManagedBudgetPolicy } from "./managed-budget";
 import {
   assertPublicProofSettled, openPublicProofLedger, publicProofHash, publicProofPolicySchema,
-  readPublicProofLedger, PUBLIC_PROOF_LIFETIME_SECONDS,
+  readPublicProofLedger,
 } from "./public-proof";
 
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -71,9 +71,9 @@ const attemptSchema = z.object({
 export function readManagedProofLedger(db: DatabaseSync) {
   db.exec("SAVEPOINT managed_proof_snapshot");
   try {
-    const budgetAmendment = readManagedBudgetAmendment(db);
-    const lifetimeLimit = budgetAmendment ? MANAGED_AMENDED_LIFETIME_SECONDS : PUBLIC_PROOF_LIFETIME_SECONDS;
-    const native = readPublicProofLedger(db, lifetimeLimit);
+    const { budgetAmendment, demoAmendments, policy } = readManagedBudgetPolicy(db);
+    const native = readPublicProofLedger(db, policy);
+    const lifetimeLimit = native.policy.lifetimeReservationLimitSeconds;
     const runs = db.prepare("SELECT * FROM managed_runs ORDER BY id").all();
     const rawAttempts = db.prepare("SELECT * FROM managed_attempts ORDER BY id").all();
     const progress = db.prepare("SELECT * FROM managed_progress ORDER BY attempt_id,sequence,provider_event_hash").all();
@@ -102,6 +102,7 @@ export function readManagedProofLedger(db: DatabaseSync) {
     const unknownActualAttempts = native.launches.filter((row) => row.actualBrowserSeconds === null).length +
       attempts.filter((row) => row.actual_browser_seconds === null).length;
     if (reservedSeconds > lifetimeLimit || budgetAmendment && reservedSeconds < budgetAmendment.reservedAtAmendment ||
+      demoAmendments.some((amendment) => reservedSeconds < amendment.reservedAtAmendment) ||
       attempts.some((row) =>
       row.released_seconds > row.reserved_seconds ||
       row.actual_browser_seconds !== null && row.consumed_seconds < Math.ceil(row.actual_browser_seconds) ||
@@ -112,8 +113,8 @@ export function readManagedProofLedger(db: DatabaseSync) {
     }
     return {
       native, runs, attempts, progress, reservedSeconds, consumedSeconds, committedSeconds,
-      actualBrowserSeconds, unknownActualAttempts, budgetAmendment,
-      fingerprint: publicProofHash({ nativeFingerprint: native.fingerprint, runs, attempts: rawAttempts, progress, budgetAmendment }),
+      actualBrowserSeconds, unknownActualAttempts, budgetAmendment, demoAmendments,
+      fingerprint: publicProofHash({ nativeFingerprint: native.fingerprint, runs, attempts: rawAttempts, progress, budgetAmendment, demoAmendments }),
     };
   } finally { db.exec("RELEASE managed_proof_snapshot"); }
 }

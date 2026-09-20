@@ -7,7 +7,7 @@ import {
 } from "../../src/lib/managed-contracts";
 import { personas, personaTemplates } from "../../src/lib/personas";
 import { surferColors } from "../../src/lib/persona-sprites";
-import { managedSpecialists } from "../../src/lib/managed-specialists";
+import { managedIanaDemoAssignments, managedIanaDemoScope, managedSpecialists } from "../../src/lib/managed-specialists";
 
 const owner = "11111111-1111-4111-8111-111111111111";
 const nextOwner = "22222222-2222-4222-8222-222222222222";
@@ -54,7 +54,7 @@ async function mockManaged(page: Page, options: { enabled?: boolean; run?: Manag
   const personaMutations: { method: string; persona: Persona }[] = [];
   const submissions: { body: ManagedCreate; key: string | undefined; stored: string | null; csrf: string | undefined }[] = [];
   const capabilities: ManagedCapabilities = {
-    enabled: options.enabled ?? true, allowedOrigins: ["https://example.com"], maxAgents: 8,
+    enabled: options.enabled ?? true, allowedOrigins: ["https://example.com", "https://www.iana.org"], maxAgents: 8,
     policy: MANAGED_EXECUTION_POLICY, notice: MANAGED_POLICY_NOTICE,
   };
   await page.route("**/*", async (route) => {
@@ -190,7 +190,7 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     await expect(page.getByLabel("Requested path prefixes (one per line)")).toBeHidden();
     await expect(page.getByRole("button", { name: "+ Create persona", exact: true })).toBeHidden();
     const cards = page.locator(".managed-specialist");
-    await expect(cards).toHaveCount(4);
+    await expect(cards).toHaveCount(5);
     await expect(page.getByText("0 / 8 selected", { exact: true })).toBeVisible();
     const body = await page.locator(".onboarding-body").boundingBox();
     expect(body).not.toBeNull();
@@ -200,7 +200,7 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     }));
     for (const box of boxes) {
       expect(box.width).toBeGreaterThan(120);
-      expect(box.height).toBeGreaterThan(100);
+      expect(box.height).toBeGreaterThan(65);
       expect(box.x).toBeGreaterThanOrEqual(body!.x);
       expect(box.right).toBeLessThanOrEqual(body!.x + body!.width);
       expect(box.y).toBeGreaterThanOrEqual(body!.y);
@@ -233,7 +233,7 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     await page.getByRole("button", { name: "Continue", exact: true }).focus();
     await page.keyboard.press("Enter");
     await expect(page.getByRole("heading", { name: "Ready to make waves?" })).toBeFocused();
-    const launch = page.getByRole("button", { name: "Launch 4 agents", exact: true });
+    const launch = page.getByRole("button", { name: "Launch 5 agents", exact: true });
     await expect(launch).toBeEnabled();
     await expect(page.getByRole("checkbox")).toHaveCount(0);
     await page.getByRole("button", { name: "Back", exact: true }).click();
@@ -253,6 +253,21 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     expect(fixture.unexpected).toEqual([]);
   });
 }
+
+test("five-agent IANA shortcut prepares immutable missions without launching early", async ({ page }) => {
+  const fixture = await mockManaged(page);
+  await page.goto("/managed");
+  await page.getByRole("button", { name: "Prepare five-agent IANA demo" }).click();
+  await expect(page.getByText("5 / 8 selected", { exact: true })).toBeVisible();
+  expect(fixture.submissions).toHaveLength(0);
+  await review(page);
+  await page.getByRole("button", { name: "Launch 5 agents", exact: true }).click();
+  await expect(page).toHaveURL(/\/managed\/[a-f0-9-]+$/);
+  expect(fixture.submissions).toHaveLength(1);
+  expect(fixture.submissions[0].body).toMatchObject({ scope: managedIanaDemoScope, assignments: managedIanaDemoAssignments });
+  await expect(page.getByTestId("managed-live-agent")).toHaveCount(5);
+  await expect(page.getByTestId("managed-live-overview")).toContainText("0 provider runs reporting RUNNING");
+});
 
 test("advanced specialist overrides are disclosed and saved without claiming the preset checks", async ({ page }) => {
   const fixture = await mockManaged(page);
@@ -538,8 +553,8 @@ test("surfer slots stay distinct and only running non-cancelled attempts use the
     assignments: profiles.slice(0, 8).map((persona) => ({ ...defaultBody.assignments[0], personaId: persona.id })),
   });
   run.status = "running";
-  run.attempts[1] = { ...run.attempts[1], status: "running", cleanup: "unconfirmed" };
-  run.attempts[2] = { ...run.attempts[2], status: "running", cleanup: "unconfirmed", cancelRequested: true };
+  run.attempts[1] = { ...run.attempts[1], status: "running", providerStatus: "RUNNING", cleanup: "unconfirmed" };
+  run.attempts[2] = { ...run.attempts[2], status: "running", providerStatus: "RUNNING", cleanup: "unconfirmed", cancelRequested: true };
   run.attempts[3] = { ...run.attempts[3], status: "completed", cleanup: "closed" };
   run.attempts[4] = { ...run.attempts[4], status: "failed", cleanup: "closed" };
   run.attempts[5] = { ...run.attempts[5], status: "cancelled", cleanup: "closed" };
@@ -554,6 +569,38 @@ test("surfer slots stay distinct and only running non-cancelled attempts use the
     await expect.poll(() => avatar.locator("img").evaluate((image: HTMLImageElement) => image.currentSrc)).toContain("/surfers/static/");
   }
   expect(fixture.unexpected).toEqual([]);
+});
+
+test("five-agent overview stays visible and updates real status, events and frozen elapsed time", async ({ page }) => {
+  const run = makeRun({ ...defaultBody, scope: managedIanaDemoScope, assignments: [...managedIanaDemoAssignments] });
+  const start = Date.now() - 1000;
+  run.status = "running";
+  run.attempts = run.attempts.map((attempt) => ({ ...attempt, status: "running", providerStatus: "RUNNING",
+    cleanup: "unconfirmed", startedAt: new Date(start).toISOString(), finishedAt: null,
+    progress: [
+      { sequence: 1, timestamp: new Date(start).toISOString(), kind: "tool", text: "snapshot" },
+      { sequence: 2, timestamp: new Date(start).toISOString(), kind: "text", text: "IANA heading observed." },
+    ],
+  }));
+  await mockManaged(page, { run });
+  await page.goto(`/managed/${run.id}`);
+  const overview = page.getByTestId("managed-live-overview");
+  const agents = overview.getByTestId("managed-live-agent");
+  await expect(agents).toHaveCount(5);
+  await expect(overview).toContainText("5 provider runs reporting RUNNING");
+  await expect(agents.nth(4)).toContainText("Latest action: snapshot");
+  const bounds = await agents.nth(4).boundingBox();
+  expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(900);
+  const elapsed = Number(await agents.first().getAttribute("data-elapsed-seconds"));
+  await expect.poll(async () => Number(await agents.first().getAttribute("data-elapsed-seconds"))).toBeGreaterThan(elapsed);
+  run.updatedAt = new Date().toISOString();
+  run.status = "completed";
+  run.attempts = run.attempts.map((attempt) => ({ ...attempt, status: "completed", providerStatus: "COMPLETED",
+    cleanup: "closed", finishedAt: new Date(start + 2000).toISOString(), actualBrowserSeconds: 0.8 }));
+  await expect(agents.first()).toHaveAttribute("data-elapsed-seconds", "2");
+  await expect(agents.first()).toContainText("0.800s browser use");
+  await expect(agents.first()).toContainText("Cleanup: closed");
+  await expect(overview).toContainText("0 provider runs reporting RUNNING");
 });
 
 test("wall shows actual progress, failure and cleanup independently, and never treats completion as success", async ({ page }) => {

@@ -5,6 +5,7 @@ import { z } from "zod";
 import { api, errorMessage } from "@/lib/client-api";
 import { managedRunSchema, type ManagedAttempt, type ManagedRun } from "@/lib/managed-contracts";
 import { managedSpecialistForAssignment } from "@/lib/managed-specialists";
+import { managedLiveSummary } from "@/lib/managed-live";
 import { useOwnerSession } from "./owner-session";
 import { PersonaAvatar } from "./persona-avatar";
 import { WaveDivider } from "./wave-divider";
@@ -63,26 +64,29 @@ function ManagedViewer({ runId, attemptId, closed }: { runId: string; attemptId:
   </section>;
 }
 
-function AttemptCard({ attempt, runId, slot }: { attempt: ManagedAttempt; runId: string; slot: number }) {
+function AttemptCard({ attempt, runId, slot, now }: { attempt: ManagedAttempt; runId: string; slot: number; now: number }) {
   const specialist = managedSpecialistForAssignment({ personaId: attempt.persona.id, goal: attempt.goal, criteria: attempt.criteria });
   const label = specialist?.label ?? attempt.persona.name;
-  return <article className="managed-attempt" aria-label={`${label}'s managed attempt`}
+  const live = managedLiveSummary(attempt, now);
+  return <article id={`managed-attempt-${attempt.id}`} className="managed-attempt" aria-label={`${label}'s managed attempt`}
     data-testid="managed-attempt" data-run-id={runId} data-attempt-id={attempt.id}
     data-managed-attempt-id={attempt.id}
     data-persona-id={attempt.persona.id} data-status={attempt.status} data-cleanup-status={attempt.cleanup}>
     <header className="managed-attempt-header">
-      <PersonaAvatar id={attempt.persona.id} slot={slot} state={attempt.status === "running" && !attempt.cancelRequested ? "working" : "idle"} />
+      <PersonaAvatar id={attempt.persona.id} slot={slot} state={attempt.providerStatus === "RUNNING" && attempt.status === "running" && !attempt.cancelRequested ? "working" : "idle"} />
       <div><h2>{label}</h2><p>{specialist?.purpose ?? attempt.persona.character}</p></div>
-      <span className="managed-status" data-status={attempt.status}>{attempt.status.replaceAll("_", " ")}</span>
+      <span className="managed-status" data-status={attempt.status}>{live.status}</span>
     </header>
     <div className="managed-attempt-body">
       <p className="managed-goal">{attempt.goal}</p>
       <dl className="managed-metrics">
         <div><dt>Provider status</dt><dd>{attempt.providerStatus ?? "Not reported"}</dd></div>
+        <div><dt>Work elapsed</dt><dd>{live.elapsedSeconds === null ? "Not recorded" : `${live.elapsedSeconds} seconds`}</dd></div>
         <div><dt>Browser duration</dt><dd>{attempt.actualBrowserSeconds === null ? "Unavailable" : `${attempt.actualBrowserSeconds.toLocaleString(undefined, { maximumFractionDigits: 2 })} seconds`}</dd></div>
         <div><dt>Model calls</dt><dd>Unknown — not reported</dd></div>
         <div><dt>Browser cleanup</dt><dd>{cleanupLabels[attempt.cleanup]}</dd></div>
       </dl>
+      <p className="muted">Work elapsed includes startup and cleanup; it is not billed browser time.</p>
       {attempt.cancelRequested && <p className="notice">Cancellation requested. This is not confirmation that the browser has closed.</p>}
       {attempt.error && <p className="error">{attempt.error}</p>}
       <details><summary>Persona snapshot and requested criteria</summary>
@@ -133,6 +137,7 @@ export function ManagedWall({ runId }: { runId: string }) {
   const [cancelling, setCancelling] = useState(false);
   const [reportBusy, setReportBusy] = useState(false);
   const [reportLoaded, setReportLoaded] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   const actions = useRef(new Set<AbortController>());
   const acceptRun = useCallback((next: ManagedRun) => {
     if (next.id !== runId) throw new Error("Unexpected managed run");
@@ -194,6 +199,12 @@ export function ManagedWall({ runId }: { runId: string }) {
   }
   const canCancel = run?.attempts.some((attempt) => !attempt.cancelRequested
     && (["queued", "running", "cleanup_required"].includes(attempt.status) || attempt.cleanup === "unconfirmed"));
+  const clockActive = run?.attempts.some((attempt) => ["running", "cleanup_required"].includes(attempt.status)) ?? false;
+  useEffect(() => {
+    if (!clockActive) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [clockActive]);
   return <section className="managed-wall" aria-label="Managed run wall" data-testid="managed-run-wall"
     data-run-id={runId} data-run-loaded={!!run} data-run-status={run?.status}>
     <div className="managed-wall-heading">
@@ -214,12 +225,43 @@ export function ManagedWall({ runId }: { runId: string }) {
         <button type="button" disabled={reportBusy || cancelling || !authorized} onClick={() => void request("report")}>{reportBusy ? "Loading provider report…" : "Refresh provider-reported report"}</button>
         <p className="muted" role="status">{reportLoaded ? "Provider-reported report loaded; criterion claims are not independently verified." : "Updates from the owner API approximately every 1.5 seconds."}</p>
       </div>
+      <section className="managed-overview" aria-label="All agents live overview" data-testid="managed-live-overview">
+        <div className="section-heading"><h2>All {run.attempts.length} agents</h2>
+          <span className="muted">{run.attempts.filter((attempt) => attempt.providerStatus === "RUNNING"
+            && attempt.status === "running").length} provider runs reporting RUNNING</span></div>
+        <p className="muted">Starting is not browser-allocation proof. Elapsed includes startup; results and cleanup remain separate. No simulated progress.</p>
+        <div className="managed-overview-rows">
+          {run.attempts.map((attempt, slot) => {
+            const specialist = managedSpecialistForAssignment({ personaId: attempt.persona.id, goal: attempt.goal, criteria: attempt.criteria });
+            const live = managedLiveSummary(attempt, now);
+            return <article className="managed-overview-row" key={attempt.id} data-testid="managed-live-agent"
+              data-attempt-id={attempt.id} data-provider-status={attempt.providerStatus ?? ""}
+              data-elapsed-seconds={live.elapsedSeconds ?? ""} data-status={attempt.status}>
+              <a className="managed-overview-person" href={`#managed-attempt-${attempt.id}`}>
+                <PersonaAvatar id={attempt.persona.id} slot={slot} state={attempt.providerStatus === "RUNNING"
+                  && attempt.status === "running" && !attempt.cancelRequested ? "working" : "idle"} />
+                <strong>{specialist?.label ?? attempt.persona.name}</strong>
+              </a>
+              <div><span className="managed-status" data-status={attempt.status}>{live.status}</span>
+                <small>{live.elapsedSeconds === null ? attempt.startedAt ? "Elapsed unavailable" : "Not started" : `${live.elapsedSeconds}s elapsed`}</small></div>
+              <div className="managed-current-event" aria-live="polite">
+                <strong>Latest action: {live.action?.text ?? live.latest?.text ?? "No provider event yet"}</strong>
+                <p title={live.observation?.text}>{live.observation?.text ?? (attempt.status === "queued"
+                  ? "Waiting for worker capacity." : "Waiting for the next provider observation.")}</p>
+                {live.latest && <time dateTime={live.latest.timestamp}>{new Date(live.latest.timestamp).toLocaleTimeString()}</time>}
+              </div>
+              <div><strong>{live.result}</strong><small>Cleanup: {attempt.cleanup.replaceAll("_", " ")}</small>
+                {attempt.actualBrowserSeconds !== null && <small>{attempt.actualBrowserSeconds.toFixed(3)}s browser use</small>}</div>
+            </article>;
+          })}
+        </div>
+      </section>
       <details className="managed-scope"><summary>Saved requested scope</summary>
         <p className="muted">Initial target admission was restricted to the operator&apos;s allowlist. Later browsing is not independently network-enforced.</p>
         <p className="managed-wrap"><strong>Initial URL:</strong> {run.scope.targetUrl}<br /><strong>Path prompts:</strong> {run.scope.pathPrefixes.join(", ")}<br />
           <strong>Additional subdomains:</strong> {run.scope.allowedSubdomains.length ? run.scope.allowedSubdomains.join(", ") : "None"}</p>
       </details>
-      <div className="managed-attempt-grid">{run.attempts.map((attempt, slot) => <AttemptCard key={`${ownerId}:${revision}:${attempt.id}`} attempt={attempt} runId={run.id} slot={slot} />)}</div>
+      <div className="managed-attempt-grid">{run.attempts.map((attempt, slot) => <AttemptCard key={`${ownerId}:${revision}:${attempt.id}`} attempt={attempt} runId={run.id} slot={slot} now={now} />)}</div>
     </>}
   </section>;
 }

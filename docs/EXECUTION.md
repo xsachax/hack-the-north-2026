@@ -29,8 +29,8 @@ the original worker, in separate managed tables.
 The managed launch page lets an authenticated owner prepare objectives and save
 custom personas while execution is disabled. Only launch is operator-gated;
 editing a persona never allocates a browser.
-The four demo specialist cards reuse `careful-first-timer`, `security-minded`,
-`keyboard-only` and `slow-connection` with role-specific read-only goals and
+The five demo specialist cards reuse `careful-first-timer`, `security-minded`,
+`keyboard-only`, `slow-connection` and `non-native-reader` with role-specific read-only goals and
 criteria, not new persona records or tool permissions. Advanced controls retain
 the other profiles and optional overrides. The wall uses a role label only when
 the saved assignment exactly matches its preset; historical or edited missions
@@ -42,6 +42,29 @@ advanced content scrolls inside the panel; Back preserves the draft. Continue
 never submits a run. Final Launch supplies the required authorization and
 managed-policy acceptance fields; separate acknowledgement checkboxes are not
 shown. Owner, CSRF, origin and operator-enable checks are unchanged.
+
+When IANA is operator-approved, **Prepare five-agent IANA demo** fills five
+distinct short missions on `/domains/reserved`; it does not submit a run.
+The owner reviews and launches one immutable five-assignment request. The same
+wall shows every agent's last reported action, observation, status and elapsed
+work time above the detailed logs. A worker claim appears as **Starting**, not
+as evidence of a running browser. Provider status is persisted as received.
+Elapsed time includes allocation and cleanup and freezes at settlement; it is
+separate from independently measured browser usage. Historical missing
+timestamps stay unavailable. Results and cleanup are displayed independently.
+
+The explicitly authorized local five-agent demo uses a 60-second operational
+allowance (not a provider TTL), global and owner concurrency five, and a bounded
+21,600-second lifetime reservation pool within the user's 360,000-second
+ceiling. `applyManagedDemoPolicyAmendment` appends an audited policy receipt
+after the original 1,800-to-3,600 amendment. It requires settled resources and
+unchanged accounting, preserves every prior reservation, and never refunds the
+lifetime pool. The runtime must match the effective persisted policy exactly.
+Native proof defaults and the fixed single-agent proof plan are not expanded
+by this managed-demo authorization. A genuine rehearsal additionally needs
+provider RUNNING readbacks and overlapping session timestamps, independent
+URL/pixels, exact-session closure and combined usage; five queued cards or
+decorative animation are not concurrent execution evidence.
 
 Browserbase controls the managed tool set, which includes non-browser tools.
 Using a browser is instructed, not guaranteed by dispatch alone. A Search/Fetch-only

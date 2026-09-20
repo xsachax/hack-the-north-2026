@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { managedAssignmentSchema } from "./managed-contracts";
-import { managedDefaultCriteria, managedDefaultGoal, managedSpecialistForAssignment, managedSpecialists } from "./managed-specialists";
+import { managedDefaultCriteria, managedDefaultGoal, managedIanaDemoAssignments, managedIanaDemoScope, managedSpecialistForAssignment, managedSpecialists } from "./managed-specialists";
 import { personas } from "./personas";
 
 describe("managed demo specialist presets", () => {
-  it("maps four obvious roles to distinct existing profiles and valid read-only assignments", () => {
+  it("maps five obvious roles to distinct existing profiles and valid read-only assignments", () => {
     expect(managedSpecialists.map((value) => value.label)).toEqual([
-      "UI/UX", "Security & privacy", "Accessibility", "Loading & performance",
+      "UI/UX", "Security & privacy", "Accessibility", "Loading & performance", "Content clarity",
     ]);
-    expect(new Set(managedSpecialists.map((value) => value.personaId)).size).toBe(4);
+    expect(new Set(managedSpecialists.map((value) => value.personaId)).size).toBe(5);
     for (const { personaId, goal, criteria, checks } of managedSpecialists) {
       expect(personas.some((persona) => persona.id === personaId)).toBe(true);
       expect(managedAssignmentSchema.parse({ personaId, goal, criteria })).toEqual({ personaId, goal, criteria });
@@ -19,6 +19,18 @@ describe("managed demo specialist presets", () => {
     expect(managedAssignmentSchema.safeParse({
       personaId: personas[0].id, goal: managedDefaultGoal, criteria: managedDefaultCriteria,
     }).success).toBe(true);
+  });
+
+  it("offers five distinct short single-page missions without changing historical snapshots", () => {
+    expect(managedIanaDemoScope).toEqual({
+      targetUrl: "https://www.iana.org/domains/reserved", pathPrefixes: ["/domains/reserved"], allowedSubdomains: [],
+    });
+    expect(new Set(managedIanaDemoAssignments.map((assignment) => assignment.goal)).size).toBe(5);
+    for (const [index, assignment] of managedIanaDemoAssignments.entries()) {
+      expect(managedAssignmentSchema.parse(assignment)).toEqual(assignment);
+      expect(managedSpecialistForAssignment(assignment)?.label).toBe(managedSpecialists[index].label);
+      expect(managedSpecialistForAssignment({ ...assignment, goal: `${assignment.goal} changed` })).toBeUndefined();
+    }
   });
 
   it("labels only exact preset snapshots, never historical or edited missions just because the ID matches", () => {

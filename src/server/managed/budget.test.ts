@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   applyManagedBudgetAmendment, managedBudgetAmendmentSchema, managedBudgetHistoryDigest, readManagedBudgetAmendment,
+  applyManagedDemoPolicyAmendment, managedDemoPolicyAmendmentSchema, readManagedBudgetPolicy, MANAGED_DEMO_AUTHORIZATION,
 } from "../../../scripts/managed-budget";
 import { workerPolicySchema } from "../worker/config";
 
@@ -10,6 +11,60 @@ const previousPolicy = workerPolicySchema.parse({
   globalConcurrency: 1, ownerConcurrency: 1, sessionSeconds: 300,
   baselineSeconds: 3780, developmentBudgetSeconds: 5580, ownerBudgetSeconds: 1800,
   lifetimeReservationLimitSeconds: 1800, maxSteps: 6, maxModelCalls: 6,
+});
+
+function demoReceipt() {
+  const previous = readManagedBudgetPolicy(db).policy!;
+  return {
+    version: 1, previousPolicy: previous,
+    amendedPolicy: { ...previous, globalConcurrency: 5, ownerConcurrency: 5, sessionSeconds: 60,
+      developmentBudgetSeconds: 25380, ownerBudgetSeconds: 21600, lifetimeReservationLimitSeconds: 21600 },
+    reservedAtAmendment: 1800, ledgerDigestBefore: "b".repeat(64),
+    unchangedHistoryDigest: managedBudgetHistoryDigest(db), receiptIssuedAt: Date.now(),
+    userApproval: MANAGED_DEMO_AUTHORIZATION, userDirectionReceivedAt: "2026-09-20T06:20:35.088Z",
+    provenance: "Explicit user direction relayed by session 3d2c0015-7c44-4ba4-a278-da935ff90a0a; receipt issuance is not a new user message.",
+    authorizedCeilingSeconds: 360000, projectConcurrency: 25, allocationRetries: false,
+  };
+}
+
+describe("audited five-agent demo policy", () => {
+  beforeEach(() => applyManagedBudgetAmendment(db, receipt()));
+  it("appends the new policy while preserving the original receipt and every history row", () => {
+    const original = readManagedBudgetAmendment(db);
+    const before = managedBudgetHistoryDigest(db);
+    const approved = demoReceipt();
+    applyManagedDemoPolicyAmendment(db, approved);
+    expect(readManagedBudgetAmendment(db)).toEqual(original);
+    expect(readManagedBudgetPolicy(db).demoAmendments).toEqual([approved]);
+    expect(readManagedBudgetPolicy(db).policy).toEqual(approved.amendedPolicy);
+    expect(managedBudgetHistoryDigest(db)).toBe(before);
+    expect(() => applyManagedDemoPolicyAmendment(db, approved)).toThrow("managed_demo_policy_chain_rejected");
+  });
+  it.each([
+    { globalConcurrency: 6 }, { ownerConcurrency: 1 }, { sessionSeconds: 30 },
+    { lifetimeReservationLimitSeconds: 360000 }, { baselineSeconds: 0 }, { maxModelCalls: 9 },
+  ])("rejects unapproved or unsupported policy changes: %j", (changes) => {
+    const approved = demoReceipt();
+    expect(managedDemoPolicyAmendmentSchema.safeParse({
+      ...approved, amendedPolicy: { ...approved.amendedPolicy, ...changes },
+    }).success).toBe(false);
+  });
+  it.each([
+    "UPDATE managed_attempts SET consumed_seconds=65",
+    "UPDATE managed_attempts SET state='quarantined',cleanup='unconfirmed'",
+    "INSERT INTO managed_attempts VALUES('queued','not_started',0,0)",
+    "UPDATE jobs SET status='leased'",
+  ])("rejects stale or occupied ledgers: %s", (change) => {
+    const approved = demoReceipt();
+    db.exec(change);
+    expect(() => applyManagedDemoPolicyAmendment(db, approved)).toThrow("managed_budget_amendment_binding_mismatch");
+    expect(readManagedBudgetPolicy(db).demoAmendments).toEqual([]);
+  });
+  it("detects an unjournalled runtime-policy change after amendment", () => {
+    applyManagedDemoPolicyAmendment(db, demoReceipt());
+    db.prepare("UPDATE worker_policy SET configuration=?").run(JSON.stringify(previousPolicy));
+    expect(() => readManagedBudgetPolicy(db)).toThrow("managed_budget_amendment_policy_mismatch");
+  });
 });
 beforeEach(() => {
   db = new DatabaseSync(":memory:");
