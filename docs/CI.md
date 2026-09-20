@@ -105,6 +105,14 @@ silently select the developer checkout's outer lockfile.
 
 ## Native-policy Linux namespace acceptance
 
+Before the namespace lanes, CI runs the maintained
+`public:integration -- --offline-native-probe` five times sequentially. Every
+invocation must pass; a failure stops the job rather than retrying to obtain a
+green result. The probe uses only owned synthetic endpoints and an outbound
+guard, never Browserbase credentials or inference. Failures report a fixed stage
+and allowlisted code, not raw exceptions or connection URLs. Repetition checks
+bootstrap reliability; it is not public-site acceptance.
+
 The dedicated native-policy job is independent of the application and container
 gates. It evaluates the native Chromium extension hypothesis with owned local
 listeners, not Playwright request interception. It requires Linux and fails
