@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
-  assignmentSchema, attemptSchema, createRunSchema, eventSchema, evidenceSchema,
+  assignmentSchema, attemptSchema, createRunSchema, newCreateRunSchema, eventSchema, evidenceSchema,
   findingSchema, idempotencyKeySchema, idSchema, jobSchema, paginationSchema,
   personaIdSchema, personaProfileSchema, personaSchema, runSchema, statusSchema,
   terminalStatusSchema, timestampSchema, usageReservationSchema,
 } from "./contracts";
+import { controlledRunSchema, newControlledRunSchema } from "./controlled-run";
+import { demoRunSchema, newDemoRunSchema } from "./demo-run";
 
 const id = "11111111-1111-4111-8111-111111111111";
 const otherId = "22222222-2222-4222-8222-222222222222";
@@ -89,13 +91,30 @@ describe("strict wire contracts", () => {
     expect(createRunSchema.safeParse({ ...request, authorizationAcknowledged }).success).toBe(false);
   });
 
-  it("requires one to twelve distinct persona assignments", () => {
+  it("retains one to twelve distinct persona assignments for historical hashes and replay", () => {
     const assignments = Array.from({ length: 12 }, (_, index) => ({ ...assignment, personaId: `persona-${index}` }));
     expect(createRunSchema.safeParse({ ...request, assignments }).success).toBe(true);
     for (const invalid of [[], [...assignments, { ...assignment, personaId: "thirteenth" }], [assignment, assignment]]) {
       expect(createRunSchema.safeParse({ ...request, assignments: invalid }).success).toBe(false);
     }
     expect(createRunSchema.safeParse({ ...request, assignments: [{ ...assignment, personaId: id }] }).success).toBe(true);
+  });
+
+  it.each([
+    ["website", createRunSchema, newCreateRunSchema, request],
+    ["demo", demoRunSchema, newDemoRunSchema, { authorizationAcknowledged: true, scenario: "fixed" }],
+    ["controlled", controlledRunSchema, newControlledRunSchema, { authorizationAcknowledged: true, controlledSiteId: "store" }],
+  ])("admits at most eight new %s assignments without rewriting historical payloads", (_mode, historical, admission, body) => {
+    const assignments = Array.from({ length: 12 }, (_, index) => ({ ...assignment, personaId: `persona-${index}` }));
+    const eight = { ...body, assignments: assignments.slice(0, 8) };
+    expect(admission.parse(eight)).toEqual(historical.parse(eight));
+    for (const count of [9, 12]) {
+      const old = { ...body, assignments: assignments.slice(0, count) };
+      expect(historical.parse(old).assignments).toHaveLength(count);
+      expect(admission.safeParse(old).success).toBe(false);
+    }
+    expect(admission.safeParse({ ...body, assignments: [assignment, assignment] }).success).toBe(false);
+    expect(admission.safeParse({ ...body, assignments: [] }).success).toBe(false);
   });
 
   it.each([

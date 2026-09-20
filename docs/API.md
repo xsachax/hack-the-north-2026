@@ -114,7 +114,7 @@ longer-lived admission limits may not clear after one minute.
 | POST | `/controlled-runs` | Explicit operator-gated registered site, custom criteria and optional narrowed navigation scope; required `Idempotency-Key` |
 | GET | `/runs?after=0&limit=50` | `{items,nextCursor}` ordered by durable ascending creation cursor |
 | GET | `/runs/:id` | Run with scope, lifecycle and cancellation-request timestamp |
-| GET | `/runs/:id/attempts` | `{items}` (bounded by twelve assignments), including immutable persona/goal snapshots |
+| GET | `/runs/:id/attempts` | `{items}` (eight for new runs; up to twelve for historical runs), including immutable persona/goal snapshots |
 | GET | `/runs/:id/events?after=0&limit=50` | `{items,nextCursor}` ordered by per-run event sequence |
 | GET | `/runs/:id/events/stream?after=0` | Owner-scoped SSE; exclusive cursor or `Last-Event-ID`, bounded connection lifetime |
 | GET | `/runs/:id/summaries` | `{items}`: attempt/launch states, cleanup/count summary, remote usage and reservation/consumption/refund |
@@ -176,13 +176,31 @@ Example run body:
 ```
 
 An explicit authorization acknowledgement is mandatory; it is not proof of
-ownership. Assign one to twelve unique predefined/owned persona IDs, each with a
+ownership. Assign one to eight unique predefined/owned persona IDs, each with a
 goal and one to twelve evaluation criteria. The idempotency key is 16–128 ASCII
 letters/digits/underscores/hyphens. Same owner/key and validated request returns
 the original run (`200`, versus `201` on creation); a changed request returns
 `409`. Different owners have independent keys. Validation/DNS admission is
 rechecked on every create request, including retries; target unavailability can
 therefore temporarily prevent an otherwise idempotent replay.
+
+The eight-assignment admission ceiling applies to new website, demo,
+controlled-site and rerun submissions (select at most eight parent attempts for
+a new rerun). It does not reduce the twelve-profile preset library, the custom
+profile library, or the twelve-criteria limit. Existing runs, results and saved
+requests containing nine to twelve assignments remain readable and exactly
+replayable. Wire/hash schemas retain their historical bound; the new-assignment
+guard runs **after** the exact owner/key lookup. Reusing an old key with changed
+content still returns `409`; the same oversized payload with a new key returns
+`400` without creating jobs or reservations. Never truncate or rekey an unresolved
+launch to fit the new limit.
+
+Workers share a hard ceiling of eight occupied Browserbase agent slots across
+the persistent database, not eight per process or owner. The conservative
+operator defaults remain three and lower configured limits still apply. This
+product ceiling does not enable public execution, raise hosted-proof spending,
+or replace fresh digest-bound hosted approval. Public profiles remain fresh and
+the remote session TTL remains at most 300 seconds.
 
 ### Assignment execution limits
 

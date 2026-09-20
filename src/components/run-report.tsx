@@ -5,7 +5,8 @@ import { useEffect, useRef, useState } from "react";
 import { api, ApiError, errorMessage } from "@/lib/client-api";
 import { idSchema, idempotencyKeySchema, runSchema } from "@/lib/contracts";
 import { evidenceDetailSchema, runReportSchema, type AgentReport, type EvidenceDetail, type ReportGroup, type RunReport } from "@/lib/report-contracts";
-import { rerunRequestSchema, rerunResponseSchema, runComparisonSchema, type RerunRequest, type RunComparison } from "@/lib/rerun-contracts";
+import { newRerunRequestSchema, rerunRequestSchema, rerunResponseSchema, runComparisonSchema, type RerunRequest, type RunComparison } from "@/lib/rerun-contracts";
+import { MAX_ASSIGNMENTS_PER_RUN, selectRunAssignment } from "@/lib/execution-capacity";
 import { useOwnerSession } from "./owner-session";
 import { PersonaAvatar } from "./persona-avatar";
 import { RecordingEvidence } from "./recording-evidence";
@@ -114,7 +115,7 @@ function RerunControls({ report }: { report: RunReport }) {
     try {
       const next = pending ?? {
         key: crypto.randomUUID(),
-        request: rerunRequestSchema.parse({
+        request: newRerunRequestSchema.parse({
           authorizationAcknowledged: acknowledged, attemptIds: selected, ...(isControlledStore && scenario ? { scenario } : {}),
         }),
       };
@@ -152,12 +153,15 @@ function RerunControls({ report }: { report: RunReport }) {
     <h2 id="rerun-title">Rerun selected attempts</h2>
     <p>Controlled runs only. Copies the original persona snapshots, goals, criteria, limits and navigation scope.
       Starts fresh browser state; no live session, cookies or provider references are copied. The parent stays unchanged.</p>
+    <p id="rerun-selection-limit">Select up to {MAX_ASSIGNMENTS_PER_RUN} original assignments for a new rerun.</p>
     {!rerunSupported && <p>Reruns require verified controlled-run metadata.</p>}
     <fieldset disabled={!rerunSupported || busy || !!pending}>
       <legend>Select original assignments</legend>
       {report.agents.map((agent) => <label key={agent.attemptId} className="report-rerun-choice">
-        <input type="checkbox" checked={selected.includes(agent.attemptId)} onChange={(event) => setSelected((ids) =>
-          event.target.checked ? [...ids, agent.attemptId] : ids.filter((id) => id !== agent.attemptId))} />
+        <input type="checkbox" checked={selected.includes(agent.attemptId)}
+          disabled={!selected.includes(agent.attemptId) && selected.length >= MAX_ASSIGNMENTS_PER_RUN}
+          aria-describedby="rerun-selection-limit"
+          onChange={(event) => setSelected((ids) => selectRunAssignment(ids, agent.attemptId, event.target.checked))} />
         {agent.persona.name} · {agent.goal}
       </label>)}
       {isControlledStore ? <>
@@ -172,7 +176,8 @@ function RerunControls({ report }: { report: RunReport }) {
       <label className="report-rerun-choice"><input type="checkbox" checked={acknowledged}
         onChange={(event) => setAcknowledged(event.target.checked)} />I authorize this fresh scoped rerun.</label>
     </fieldset>
-    <button disabled={!rerunSupported || busy || !!createdId || !selected.length || !acknowledged || !csrfToken} onClick={() => void rerun()}>
+    <button disabled={!rerunSupported || busy || !!createdId || !selected.length ||
+      (!pending && selected.length > MAX_ASSIGNMENTS_PER_RUN) || !acknowledged || !csrfToken} onClick={() => void rerun()}>
       {busy ? "Creating scoped rerun…" : pending ? "Retry same rerun" : "Rerun selected attempts"}
     </button>
     {error && <p role="alert">{error} {pending

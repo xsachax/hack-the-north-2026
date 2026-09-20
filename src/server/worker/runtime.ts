@@ -8,7 +8,7 @@ import { executePersona } from "../execution/loop";
 import type { Brain, BrowserDriver, ExecutionEvent, ExecutionResult } from "../execution/types";
 import { LeaseLostError, WorkerRepository, type Claim } from "./repository";
 import { createCloudRecovery } from "./cloud-recovery";
-import { workerExecutionLimits } from "./config";
+import { workerConcurrencyLimits, workerExecutionLimits } from "./config";
 import { publicPageUrl } from "../public-page-url";
 import { createContextProvider, type ContextProvider } from "../workflows/context-provider";
 import { runCouponWithWorkerDriver } from "../workflows/reproduction-runner";
@@ -73,7 +73,7 @@ export class DurableWorker {
         await this.repository.retireContext(this.dependencies.contextProvider);
         if (this.dependencies.controlledEnabled !== false) this.repository.pumpReproductions();
         let claim: Claim | null;
-        while (!combined.aborted && this.active.size < this.repository.policy.globalConcurrency &&
+        while (!combined.aborted && this.active.size < workerConcurrencyLimits(this.repository.policy).globalConcurrency &&
           (claim = this.repository.claim(this.id, this.publicAdmission()))) {
           const task = this.executeClaim(claim, combined);
           this.active.add(task);

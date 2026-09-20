@@ -10,7 +10,12 @@ describe("maintained public CLI preallocation boundary", () => {
     await expect(publicPreflight(args)).rejects.toThrow("public_checkpoint_disabled");
   });
 
-  it.each(["--offline-preflight", "--confirm-paid", "--paid"])("runs the real CLI loader without outbound connections and rejects %s before allocation", async (mode) => {
+  it.each([
+    ["--offline-preflight"], ["--confirm-paid"], ["--paid"],
+    ["--confirm-paid", "missing-plan.json", "missing-approval.json"],
+    ["--prepare-plan", "missing-input.json", "plan.json"],
+    ["--ledger-preflight", "missing-existing-ledger"],
+  ])("runs the real CLI loader without outbound connections and rejects %j before allocation", async (...args) => {
     const directory = await mkdtemp(join(tmpdir(), "ff-public-cli-"));
     const guard = join(directory, "offline.cjs");
     try {
@@ -31,9 +36,9 @@ describe("maintained public CLI preallocation boundary", () => {
         };
       `, { mode: 0o600 });
       const result = spawnSync(process.execPath, [
-        "--conditions=react-server", "--require", guard,
+        "--conditions=react-server", "--disable-warning=ExperimentalWarning", "--require", guard,
         "--import", resolve("node_modules/tsx/dist/loader.mjs"),
-        resolve("scripts/public-integration.ts"), mode,
+        resolve("scripts/public-integration.ts"), ...args,
       ], {
         cwd: join(directory, "empty-package"), timeout: 15000, encoding: "utf8",
         env: {

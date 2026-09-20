@@ -10,34 +10,43 @@ import { releaseSourceDigest as packageSourceDigest } from "../src/server/deploy
 import { assertPrivateDirectory } from "./advanced-proof";
 import type { ReleaseDeployment } from "./release-integration";
 import { releasePolicy, sha256 } from "./release-proof";
+import type { WorkerPolicy } from "../src/server/worker/config";
 
 const origin = "https://127.0.0.1:4330";
 const packagePort = 4321;
 const healthPort = 4322;
 
+type RuntimePolicy = Pick<WorkerPolicy, keyof typeof releasePolicy> & Partial<Pick<WorkerPolicy, "leaseMs" | "recoveryLimit">>;
+type PackagedDeployment = {
+  verifyPackage: ReleaseDeployment["verifyPackage"];
+  start(input: Omit<Parameters<ReleaseDeployment["start"]>[0], "policy"> & { policy: RuntimePolicy }): ReturnType<ReleaseDeployment["start"]>;
+};
 export function releaseRuntimeEnvironment(input: {
   dataDir: string; accessCode: string; paid: boolean;
   provider: { apiKey: string; projectId: string; replayOrigins: string };
-}): NodeJS.ProcessEnv {
+}, policy: RuntimePolicy = releasePolicy, publicOnly = false): NodeJS.ProcessEnv {
   return {
     NODE_ENV: "production", PATH: process.env.PATH, HOME: process.env.HOME,
     NEXT_TELEMETRY_DISABLED: "1", DEBUG: "false", NODE_OPTIONS: "--max-old-space-size=768",
     APP_ORIGIN: origin, DATA_DIR: resolve(input.dataDir), FIXTURE_PORT: String(packagePort),
     DEPLOYMENT_BIND_HOST: "127.0.0.1",
     FLASH_FLOOD_ACCESS_CODE: input.accessCode,
-    ENABLE_DEMO_RUNS: String(input.paid), DEPLOYMENT_CONFIRM_PAID: String(input.paid),
+    ENABLE_DEMO_RUNS: String(input.paid && !publicOnly),
+    ENABLE_PUBLIC_RUNS: String(input.paid && publicOnly), DEPLOYMENT_CONFIRM_PAID: String(input.paid),
     BROWSERBASE_API_KEY: input.provider.apiKey, BROWSERBASE_PROJECT_ID: input.provider.projectId,
     BROWSERBASE_REPLAY_ORIGINS: input.provider.replayOrigins,
     STAGEHAND_MODEL: "google/gemini-2.5-flash",
-    MAX_CONCURRENT_SESSIONS: String(releasePolicy.globalConcurrency),
-    MAX_OWNER_SESSIONS: String(releasePolicy.ownerConcurrency),
-    SESSION_TIMEOUT_SECONDS: String(releasePolicy.sessionSeconds),
-    MAX_STEPS_PER_PERSONA: String(releasePolicy.maxSteps),
-    MAX_MODEL_CALLS_PER_PERSONA: String(releasePolicy.maxModelCalls),
-    EXTERNAL_BASELINE_SECONDS: String(releasePolicy.baselineSeconds),
-    DEVELOPMENT_BUDGET_SECONDS: String(releasePolicy.developmentBudgetSeconds),
-    OWNER_BUDGET_SECONDS: String(releasePolicy.ownerBudgetSeconds),
-    LIFETIME_RESERVATION_LIMIT_SECONDS: String(releasePolicy.lifetimeReservationLimitSeconds),
+    MAX_CONCURRENT_SESSIONS: String(policy.globalConcurrency),
+    MAX_OWNER_SESSIONS: String(policy.ownerConcurrency),
+    SESSION_TIMEOUT_SECONDS: String(policy.sessionSeconds),
+    MAX_STEPS_PER_PERSONA: String(policy.maxSteps),
+    MAX_MODEL_CALLS_PER_PERSONA: String(policy.maxModelCalls),
+    EXTERNAL_BASELINE_SECONDS: String(policy.baselineSeconds),
+    DEVELOPMENT_BUDGET_SECONDS: String(policy.developmentBudgetSeconds),
+    OWNER_BUDGET_SECONDS: String(policy.ownerBudgetSeconds),
+    LIFETIME_RESERVATION_LIMIT_SECONDS: String(policy.lifetimeReservationLimitSeconds),
+    ...(policy.leaseMs === undefined ? {} : { WORKER_LEASE_MS: String(policy.leaseMs) }),
+    ...(policy.recoveryLimit === undefined ? {} : { WORKER_RECOVERY_LIMIT: String(policy.recoveryLimit) }),
     WORKER_SHUTDOWN_MS: "60000",
   };
 }
@@ -90,6 +99,18 @@ async function waitReady(child: ChildProcess, signal: AbortSignal) {
 export function packagedReleaseDeployment(packageDirectory: string, provider: {
   apiKey: string; projectId: string; replayOrigins: string;
 }): ReleaseDeployment {
+  return packagedDeployment(packageDirectory, provider, releasePolicy, false);
+}
+
+export function packagedPublicDeployment(packageDirectory: string, provider: {
+  apiKey: string; projectId: string;
+}, policy: WorkerPolicy): PackagedDeployment {
+  return packagedDeployment(packageDirectory, { ...provider, replayOrigins: "" }, policy, true);
+}
+
+function packagedDeployment(packageDirectory: string, provider: {
+  apiKey: string; projectId: string; replayOrigins: string;
+}, policy: RuntimePolicy, publicOnly: boolean): PackagedDeployment {
   const root = resolve(packageDirectory);
   return {
     async verifyPackage() {
@@ -103,7 +124,7 @@ export function packagedReleaseDeployment(packageDirectory: string, provider: {
         Buffer.from(`\0${process.versions.node}`)]));
     },
     async start(input) {
-      if (JSON.stringify(input.policy) !== JSON.stringify(releasePolicy)) throw new Error("release_runtime_policy_mismatch");
+      if (JSON.stringify(input.policy) !== JSON.stringify(policy)) throw new Error("release_runtime_policy_mismatch");
       await assertPrivateDirectory(input.directory);
       for (const port of [packagePort, healthPort, 4330]) await freePort(port);
       let child: ChildProcess | undefined, browser: Browser | undefined, proxy: Server | undefined;
@@ -114,7 +135,7 @@ export function packagedReleaseDeployment(packageDirectory: string, provider: {
         signal.throwIfAborted();
         child = spawn(process.execPath, ["--import", "tsx", "scripts/deployment-start.ts"], {
           cwd: root, stdio: "ignore",
-          env: releaseRuntimeEnvironment({ ...input, paid: nextPaid, provider }),
+          env: releaseRuntimeEnvironment({ ...input, paid: nextPaid, provider }, policy, publicOnly),
         });
         const error = new Promise<never>((_, reject) => child!.once("error", () => reject(new Error("release_packaged_spawn_failed"))));
         await Promise.race([waitReady(child, signal), error]);

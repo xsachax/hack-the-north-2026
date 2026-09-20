@@ -50,6 +50,14 @@ spend it and refunds do not renew it. Planning baseline is 1346 external seconds
 Default proof concurrency is one, maximum two, TTL <=300 seconds. Possession of
 credentials, offline conformance or this plan is not provider authorization.
 
+The follow-up product ceiling is eight agents, with conservative concurrency
+defaults retained. This does not raise the separate proof concurrency or lifetime
+spending ceiling. The guarded public integration command now prepares an offline
+plan from the existing authoritative worker ledger, binds both harness and clean
+package inputs, and has an approval-gated Browserbase/API/worker/wall/report
+runner. Its source checkpoint remains off. No hosted goal has been accepted and
+no OpenAI key is needed by the current one-key Gateway path.
+
 ## 2. Architecture and invariants
 
 | Layer | Responsibility | Invariants |

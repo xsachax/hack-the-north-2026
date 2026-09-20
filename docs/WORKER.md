@@ -122,7 +122,8 @@ credits once an explicitly confirmed worker is running.
 
 Bootstrap an owner, then submit `/api/v1/demo-runs` as documented in API.md.
 The twelve predefined personas and owned custom profiles share immutable
-goal/criteria snapshots. The legacy demo route accepts only `fixed` and `second-coupon` scenarios and the
+goal/criteria snapshots; a new run may select at most eight of them.
+The legacy demo route accepts only `fixed` and `second-coupon` scenarios and the
 two listed deterministic criteria. The separate `/api/v1/controlled-runs` route
 accepts registered sites and custom criteria; see the canonical examples in
 [API.md](API.md). Other fixture flags and loopback transport ports are not
@@ -137,10 +138,37 @@ or delete the ledger to reset spending. External/manual harnesses do not share
 this ledger; stop them during worker operation and include their usage in the
 external baseline.
 
+The product dispatch ceiling is **eight occupied Browserbase agents globally**
+across every worker sharing this database, never eight per process. Defaults
+remain three; smaller global/owner limits still win. Count all non-settled launch
+intents, active launches, recovery and quarantine against capacity. Recovery may
+reclaim an occupied slot but must never allocate a replacement browser.
+
+Historical worker policies may record concurrency values from nine through
+twelve. They remain readable and must match verbatim when reopening; do not
+silently rewrite their JSON, reservations, refunds or consumed usage. Dispatch
+clamps those recorded values to eight without changing the stored policy. If an
+older deployment already has more than eight occupied slots, stop new dispatch
+until confirmed retirement drops it below eight; do not mark sessions settled
+merely to fit the new cap. Stop all older worker binaries before upgrading so an
+old dispatcher cannot bypass the new ceiling. New policy configurations use
+one through eight; retaining an old value is compatibility, not permission for
+additional sessions.
+
+The new-run admission ceiling is also eight (website, controlled, demo and
+reruns). Historical runs/results and exact-idempotent requests with up to twelve
+assignments are preserved; only a genuinely new submission is rejected above
+eight, after the old exact-key lookup.
+
+This ceiling does not authorize paid execution. The separately bounded hosted
+proof remains concurrency one, at most two new sessions, with its existing
+1800-second lifetime reservation ceiling. Neither public source readiness nor
+the requirement for fresh explicit digest-bound hosted approval changes.
+
 | Environment variable | Worker default | Bound / meaning |
 | --- | --- | --- |
-| `MAX_CONCURRENT_SESSIONS` | 3 | Shared global occupied slots, 1..12; does not increase provider quota |
-| `MAX_OWNER_SESSIONS` | 3 | Shared per-owner occupied slots, 1..12 |
+| `MAX_CONCURRENT_SESSIONS` | 3 | Shared global occupied slots, 1..8 for new policy; historical 9..12 are dispatch-clamped, never increased provider quota |
+| `MAX_OWNER_SESSIONS` | 3 | Shared per-owner occupied slots, 1..8 for new policy; never above global dispatch capacity |
 | `DEVELOPMENT_BUDGET_SECONDS` | 324000 | At most 90 hours of the project's 100-hour allowance; protects at least 10 hours for final rehearsal |
 | `EXTERNAL_BASELINE_SECONDS` | 363 | At least 363; rounds prior foundation + layer03 actual 362.640 seconds upward |
 | `OWNER_BUDGET_SECONDS` | 3600 | Lifetime owner budget, at most development maximum |

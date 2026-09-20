@@ -12,7 +12,7 @@ import { personas } from "../../lib/personas";
 import type { ArtifactReference } from "../execution/artifacts";
 import type { CloudUsage, PrivateSessionReference } from "../execution/cloud";
 import type { ExecutionResult } from "../execution/types";
-import { readWorkerPolicy, workerPolicySchema, type WorkerPolicy } from "./config";
+import { newWorkerPolicySchema, readWorkerPolicy, workerConcurrencyLimits, workerPolicySchema, type WorkerPolicy } from "./config";
 import { LeaseLostError, WorkerRepository, type Claim } from "./repository";
 import { migrations } from "../migrations";
 
@@ -81,6 +81,23 @@ describe("worker configuration (offline)", () => {
     expect(() => workerPolicySchema.parse({ typo: 1 })).toThrow();
     expect(readWorkerPolicy({ NODE_ENV: "test", PATH: "/offline", BROWSERBASE_API_KEY: "never-used" }))
       .toEqual(readWorkerPolicy({ NODE_ENV: "test" }));
+  });
+
+  it("accepts eight for new policies, rejects nine, and preserves historical policy bytes", () => {
+    expect(newWorkerPolicySchema.parse({ globalConcurrency: 8, ownerConcurrency: 8 }))
+      .toMatchObject({ globalConcurrency: 8, ownerConcurrency: 8 });
+    for (const field of ["globalConcurrency", "ownerConcurrency"]) {
+      expect(newWorkerPolicySchema.safeParse({ [field]: 9 }).success).toBe(false);
+      expect(newWorkerPolicySchema.safeParse({ [field]: 12 }).success).toBe(false);
+    }
+    const historical = readWorkerPolicy({ NODE_ENV: "test", MAX_CONCURRENT_SESSIONS: "12", MAX_OWNER_SESSIONS: "12" });
+    const encoded = JSON.stringify(historical);
+    expect(workerConcurrencyLimits(historical)).toEqual({ globalConcurrency: 8, ownerConcurrency: 8 });
+    expect(JSON.stringify(historical)).toBe(encoded);
+    expect(workerConcurrencyLimits({ globalConcurrency: 3, ownerConcurrency: 12 }))
+      .toEqual({ globalConcurrency: 3, ownerConcurrency: 3 });
+    expect(workerConcurrencyLimits({ globalConcurrency: 8, ownerConcurrency: 1 }))
+      .toEqual({ globalConcurrency: 8, ownerConcurrency: 1 });
   });
 });
 
@@ -305,6 +322,18 @@ describe("durable worker repository (offline)", () => {
     expect(inspect().prepare("SELECT count(*) AS n FROM worker_policy").get()?.n).toBe(1);
   });
 
+  it.each(["globalConcurrency", "ownerConcurrency"] as const)("rejects a new nine-slot %s policy without persisting it", (field) => {
+    close(repository);
+    const database = inspect();
+    database.exec("DELETE FROM worker_policy");
+    let candidate: WorkerRepository | undefined;
+    try {
+      expect(() => { candidate = new WorkerRepository(dir, { [field]: 9 }, () => time); }).toThrow();
+    } finally { candidate?.close(); }
+    expect(database.prepare("SELECT count(*) AS n FROM worker_policy").get()?.n).toBe(0);
+    repository = open();
+  });
+
   it.each(["fixed", "second-coupon"] as const)("reserves before committing one durable %s launch intent", (scenario) => {
     const run = create(owner, 1, scenario);
     const leased = claim();
@@ -384,29 +413,64 @@ describe("durable worker repository (offline)", () => {
     expect(repository.accounting().reservedSeconds).toBe(720);
   });
 
+  it.each([8, 12])("caps shared dispatch at eight with persisted concurrency %i and preserves policy/usage", (concurrency) => {
+    configure({ globalConcurrency: 8, ownerConcurrency: 8 });
+    const database = inspect();
+    if (concurrency === 12) {
+      // Restore an older policy verbatim instead of admitting a new twelve-slot policy.
+      close(repository);
+      policy = { globalConcurrency: 12, ownerConcurrency: 12 };
+      database.prepare("UPDATE worker_policy SET configuration=? WHERE singleton=1")
+        .run(JSON.stringify(workerPolicySchema.parse(policy)));
+      repository = open();
+    }
+    const encoded = database.prepare("SELECT configuration,baseline_seconds FROM worker_policy").get();
+    create(owner, 8);
+    create(other, 8);
+    const second = open();
+    const claims = Array.from({ length: 8 }, (_, index) =>
+      claim(`worker-${index}`, index % 2 ? second : repository));
+    expect(new Set(claims.map((entry) => entry.jobId)).size).toBe(8);
+    expect(repository.claim("ninth-a")).toBeNull();
+    expect(second.claim("ninth-b")).toBeNull();
+    expect(repository.accounting().reservedSeconds).toBe(8 * 240);
+    expect(database.prepare("SELECT count(*) AS n FROM launches WHERE state!='settled'").get()?.n).toBe(8);
+    const first = claims[0];
+    repository.finish(first, result(), usage());
+    expect(claim("replacement", second).ownerId).toBe(other);
+    expect(database.prepare("SELECT count(*) AS n FROM launches WHERE state!='settled'").get()?.n).toBe(8);
+    expect(repository.accounting()).toMatchObject({ reservedSeconds: 9 * 240, consumedSeconds: 1, releasedSeconds: 239 });
+    expect(database.prepare("SELECT configuration,baseline_seconds FROM worker_policy").get()).toEqual(encoded);
+    close(repository);
+    repository = open();
+    expect(repository.policy.globalConcurrency).toBe(concurrency);
+    expect(repository.claim("reopened-full")).toBeNull();
+  });
+
   it("does not let over 100 queued jobs from capped owners starve a later eligible owner", () => {
-    configure({ globalConcurrency: 3, ownerConcurrency: 1, recoveryLimit: 1 });
-    for (const cappedOwner of [owner, other]) {
+    configure({ globalConcurrency: 4, ownerConcurrency: 1, recoveryLimit: 1 });
+    const cappedOwners = [owner, other, repository.createSession().ownerId];
+    for (const cappedOwner of cappedOwners) {
       create(cappedOwner);
       const held = claim(`quarantine-${cappedOwner}`);
       repository.recover(held, { confirmed: false, sessions: [] });
     }
     const blockedRuns: { ownerId: string; runId: string }[] = [];
-    for (const cappedOwner of [owner, other]) {
+    for (const cappedOwner of cappedOwners) {
       for (let i = 0; i < 5; i++) {
-        const run = create(cappedOwner, 12);
-        expect(repository.attempts(cappedOwner, run.id)).toHaveLength(12);
+        const run = create(cappedOwner, 8);
+        expect(repository.attempts(cappedOwner, run.id)).toHaveLength(8);
         blockedRuns.push({ ownerId: cappedOwner, runId: run.id });
       }
     }
     const database = inspect();
     expect(database.prepare("SELECT count(*) AS n FROM jobs WHERE status='queued'").get()?.n).toBe(120);
-    expect(database.prepare("SELECT count(*) AS n FROM launches WHERE state='quarantined'").get()?.n).toBe(2);
-    const thirdOwner = repository.createSession().ownerId;
-    const eligible = create(thirdOwner);
-    const leased = claim("free-third-slot", open());
-    expect(leased).toMatchObject({ ownerId: thirdOwner, runId: eligible.id, recovery: false });
-    expect(repository.accounting().reservedSeconds).toBe(720);
+    expect(database.prepare("SELECT count(*) AS n FROM launches WHERE state='quarantined'").get()?.n).toBe(3);
+    const eligibleOwner = repository.createSession().ownerId;
+    const eligible = create(eligibleOwner);
+    const leased = claim("free-fourth-slot", open());
+    expect(leased).toMatchObject({ ownerId: eligibleOwner, runId: eligible.id, recovery: false });
+    expect(repository.accounting().reservedSeconds).toBe(960);
     expect(database.prepare("SELECT count(*) AS n FROM jobs WHERE status='queued'").get()?.n).toBe(120);
     for (const blocked of blockedRuns) {
       expect(repository.getRun(blocked.ownerId, blocked.runId).status).toBe("queued");
@@ -1058,6 +1122,37 @@ describe("durable worker repository (offline)", () => {
     expect(database.prepare("SELECT count(*) AS n FROM launches").get()?.n).toBe(1);
     expect(database.prepare("SELECT count(*) AS n FROM jobs WHERE status='leased'").get()?.n).toBe(1);
     expect(database.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
+  }, 15000);
+
+  it("admits only the eighth slot when two real workers contend under a historical twelve-slot policy", async () => {
+    configure({ globalConcurrency: 8, ownerConcurrency: 8 });
+    const database = inspect();
+    close(repository);
+    policy = { globalConcurrency: 12, ownerConcurrency: 12 };
+    database.prepare("UPDATE worker_policy SET configuration=? WHERE singleton=1")
+      .run(JSON.stringify(workerPolicySchema.parse(policy)));
+    repository = open();
+    create(owner, 8);
+    create(other, 8);
+    for (let index = 0; index < 7; index++) claim(`prefill-${index}`);
+    const a = startChild(), b = startChild();
+    await Promise.all([a.wait("ready"), b.wait("ready")]);
+    database.exec("BEGIN IMMEDIATE");
+    try {
+      a.child.stdin.write("claim\n");
+      b.child.stdin.write("claim\n");
+      await Promise.all([a.wait("attempting"), b.wait("attempting")]);
+      await delay(100);
+      expect(a.messages.some(({ kind }) => kind === "claimed")).toBe(false);
+      expect(b.messages.some(({ kind }) => kind === "claimed")).toBe(false);
+    } finally { database.exec("COMMIT"); }
+    const responses = await Promise.all([a.wait("claimed"), b.wait("claimed")]);
+    expect(responses.filter(({ claim }) => claim !== null)).toHaveLength(1);
+    expect(responses.filter(({ claim }) => claim === null)).toHaveLength(1);
+    expect(repository.accounting().reservedSeconds).toBe(8 * 240);
+    expect(database.prepare("SELECT count(*) AS n FROM launches WHERE state!='settled'").get()?.n).toBe(8);
+    expect(database.prepare("SELECT configuration FROM worker_policy").get()?.configuration)
+      .toBe(JSON.stringify(workerPolicySchema.parse(policy)));
   }, 15000);
 
   it("recovers a specifically killed process after durable intent, never launching a second session", async () => {

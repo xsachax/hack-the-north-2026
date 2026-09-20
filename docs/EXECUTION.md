@@ -68,6 +68,73 @@ source/package/harness/archive/ledger digests; default concurrency is one,
 maximum two, TTL <=300 seconds and failed attempts count. Operator flags cannot
 replace approval or per-session attestation.
 
+### Guarded public-goal integration command
+
+The maintained `public:integration` command now has an offline planner and a
+source-gated hosted runner. It uses the actual Browserbase API, the clean
+packaged supervisor/worker, owner API, durable artifacts, live-wall events and
+reports. It does not call a second model provider or inherit `OPENAI_API_KEY`;
+the pinned Stagehand Gateway retains Browserbase key/session attribution.
+These commands are **not authorization**, and the hosted mode remains blocked
+by the source readiness constant until the reviewed acceptance plan permits it.
+
+```sh
+npm run deployment:build
+npm run public:integration -- --ledger-preflight /private/existing-public-ledger
+npm run public:integration -- --prepare-plan /private/input.json /private/plan.json
+# Only after separate explicit approval and the reviewed source gate:
+npm run public:integration -- --confirm-paid /private/plan.json /private/approval.json
+```
+
+The private input contains `dataDir` (the **existing authoritative public
+worker SQLite ledger**), `packageDir` (a freshly built clean package), an explicit
+Browserbase `projectId`, and `request` (the canonical authorized `/runs` body).
+The planner opens the ledger read-only; it never creates one, migrates history,
+resets reservations or treats returned funds as renewed lifetime capacity.
+Other historical ledger formats require explicit reconciliation before use;
+renaming or copying unrelated data is not a supported import.
+The ledger-only preflight returns a fingerprint and aggregate reservations,
+including unresolved status, without publishing resource identities or making
+provider reads. A local settled state never claims independent remote closure.
+
+The stored policy must retain the shared 1,800-second lifetime ceiling,
+concurrency one by default and no more than two, and a TTL above the 80-second
+shutdown reserve and no more than 300 seconds. One proof plan has one or two
+personas. This is intentionally narrower than the eight-agent product ceiling.
+Each proof assignment must include a structural URL/text/control criterion;
+model-only semantic verdicts are not an acceptance oracle.
+Unfinished jobs, uncertain resource identities, unreconciled discovery events,
+and restored backups block planning. The request scope is checked without DNS or
+provider traffic. No default example URL is silently used as a real objective.
+
+The plan binds source, complete clean-package bytes, the harness's own runnable
+dependencies/build, harness sources, composed archive, the cumulative ledger,
+project, exact scope/goals/criteria/personas, and planned reservations. Approval
+must confirm target authorization, the authoritative ledger, provider operations
+and private evidence, reference the exact plan digest, and expire within 15
+minutes. The runner consumes each approval before its first provider read.
+It never authors approval, retries an invocation, or retries session allocation.
+
+After approval, exact prior sessions must independently read `COMPLETED`, and
+uploaded extensions must return authenticated exact-ID 404. The normal worker
+alone uploads/allocates/releases new resources. The hosted runner submits the
+canonical request through the actual owner API, verifies idempotent replay,
+observes durable completion through the live wall, and requires a successful
+report with actions, real Gateway counters, screenshot evidence and grounded
+citations. Independent final session/extension readback, actual usage and exact
+cumulative reservation accounting are mandatory. A failed or interrupted goal
+records its final ledger and cleanup uncertainty privately; it is not acceptance.
+Lost submission responses are resolved by the original owner/idempotency key
+after settling the submitting server; the committed run is cancelled without
+resending a creation request. A durably proven pre-start non-allocation may have
+no native-resource row, but its recorded lifetime reservation is never reset.
+Additional recovered session identities block further proof until explicitly
+reconciled; they are included in the approval fingerprint, not silently omitted.
+Unit tests of that sequence use explicitly synthetic adapters, never hosted
+acceptance evidence. Browserbase limits, inaccessible sites and unsupported
+channels may still prevent a goal from completing; “public URL” does not mean
+every website feature is supported.
+
 ## Public HTTP transport library (offline, not enabled)
 
 `src/server/execution/public-transport.ts` is a **server-only** component used by

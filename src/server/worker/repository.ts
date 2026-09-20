@@ -8,7 +8,7 @@ import type { ArtifactReference } from "../execution/artifacts";
 import { sanitizeEvidence } from "../execution/artifacts";
 import type { CloudUsage, PrivateSessionReference } from "../execution/cloud";
 import type { ExecutionResult } from "../execution/types";
-import { workerExecutionLimits, workerPolicySchema, type WorkerPolicy } from "./config";
+import { newWorkerPolicySchema, workerConcurrencyLimits, workerExecutionLimits, workerPolicySchema, type WorkerPolicy } from "./config";
 import { referenceSchema } from "./session-reference";
 import { resultSchema } from "./result";
 import { targetScopeSchema, type TargetScope } from "../../lib/target-scope";
@@ -51,9 +51,12 @@ export class WorkerRepository extends Repository {
       this.policy = workerPolicySchema.parse(input);
       this.transaction(() => {
         const encoded = JSON.stringify(this.policy);
-        this.db.prepare("INSERT OR IGNORE INTO worker_policy VALUES(1, ?, ?)").run(encoded, this.policy.baselineSeconds);
-        if (this.db.prepare("SELECT configuration FROM worker_policy WHERE singleton=1").get()?.configuration !== encoded) {
-          throw new Error("worker_policy_mismatch");
+        const existing = this.db.prepare("SELECT configuration FROM worker_policy WHERE singleton=1").get();
+        if (existing) {
+          if (existing.configuration !== encoded) throw new Error("worker_policy_mismatch");
+        } else {
+          newWorkerPolicySchema.parse(this.policy);
+          this.db.prepare("INSERT INTO worker_policy VALUES(1, ?, ?)").run(encoded, this.policy.baselineSeconds);
         }
       });
     } catch (error) { this.close(); throw error; }
@@ -85,6 +88,7 @@ export class WorkerRepository extends Repository {
           AND NOT EXISTS (SELECT 1 FROM native_resource_events n WHERE n.job_id=j.id)))
         ORDER BY j.rowid LIMIT 1`).get(this.now(), this.now(), PUBLIC_EXECUTION_IMPLEMENTATION_READY ? 1 : 0);
       if (expired) return this.acquire(z.string().parse(expired.id), workerId, true);
+      const concurrency = workerConcurrencyLimits(this.policy);
       const queued = this.db.prepare(`SELECT j.id,r.owner_id,r.execution_mode,r.controlled_site_id,r.scope,a.snapshot,
         r.public_execution_policy,r.public_asset_policy,selection.attempt_id AS context_selection
         FROM jobs j JOIN runs r ON r.id=j.run_id JOIN attempts a ON a.id=j.attempt_id
@@ -100,7 +104,7 @@ export class WorkerRepository extends Repository {
            JOIN runs owned ON owned.id=held.run_id
            WHERE occupied.state!='settled' AND owned.owner_id=r.owner_id) < ?)
         ORDER BY j.rowid LIMIT 100`).all(publicAdmission?.controlledEnabled === false ? 0 : 1,
-          this.clock(), this.clock(), this.policy.ownerConcurrency);
+          this.clock(), this.clock(), concurrency.ownerConcurrency);
       for (const row of queued) {
         const attempt = attemptSchema.parse(json(row.snapshot));
         const jobId = z.string().parse(row.id);
@@ -134,8 +138,8 @@ export class WorkerRepository extends Repository {
         const count = (owner?: string) => z.number().parse(this.db.prepare(`SELECT count(*) AS n FROM launches l
           JOIN jobs j ON j.id=l.job_id JOIN runs r ON r.id=j.run_id WHERE l.state!='settled'
           ${owner ? "AND r.owner_id=?" : ""}`).get(...(owner ? [owner] : []))?.n);
-        if (count() >= this.policy.globalConcurrency) return null;
-        if (count(ownerId) >= this.policy.ownerConcurrency) continue;
+        if (count() >= concurrency.globalConcurrency) return null;
+        if (count(ownerId) >= concurrency.ownerConcurrency) continue;
         const global = this.accounting();
         const owned = this.accounting(ownerId);
         const reserve = this.policy.sessionSeconds;
