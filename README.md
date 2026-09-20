@@ -59,6 +59,16 @@ complete the original public-website release.
 
 ## Launch and watch
 
+For the compact demo, open `/managed`: enter an approved URL, select **UI/UX**,
+**Security & privacy**, **Accessibility**, or **Loading & performance**, confirm
+authorization and the separate managed policy, then use the prominent **Launch**
+button. Each card has concrete checks and a preset read-only mission; no written
+specification is needed. **Advanced** holds custom personas, mission overrides
+and requested path prefixes. The same eight-assignment limit applies across both
+pickers. Cards remain explorable when the default-off service is disabled, but
+launch stays unavailable. A lost reply locks the exact saved body and key until
+explicit reconciliation; refresh never automatically launches again.
+
 Surfer badges use the supplied eight-color idle/working sprites. A working loop
 reflects a persisted running attempt, not proof of goal progress; stopped and
 queued sessions stay idle. Reduced-motion preferences select static artwork.

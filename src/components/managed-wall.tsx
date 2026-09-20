@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { api, errorMessage } from "@/lib/client-api";
 import { managedRunSchema, type ManagedAttempt, type ManagedRun } from "@/lib/managed-contracts";
+import { managedSpecialistForAssignment } from "@/lib/managed-specialists";
 import { useOwnerSession } from "./owner-session";
 import { PersonaAvatar } from "./persona-avatar";
 import { WaveDivider } from "./wave-divider";
@@ -63,13 +64,15 @@ function ManagedViewer({ runId, attemptId, closed }: { runId: string; attemptId:
 }
 
 function AttemptCard({ attempt, runId, slot }: { attempt: ManagedAttempt; runId: string; slot: number }) {
-  return <article className="managed-attempt" aria-label={`${attempt.persona.name}'s managed attempt`}
+  const specialist = managedSpecialistForAssignment({ personaId: attempt.persona.id, goal: attempt.goal, criteria: attempt.criteria });
+  const label = specialist?.label ?? attempt.persona.name;
+  return <article className="managed-attempt" aria-label={`${label}'s managed attempt`}
     data-testid="managed-attempt" data-run-id={runId} data-attempt-id={attempt.id}
     data-managed-attempt-id={attempt.id}
     data-persona-id={attempt.persona.id} data-status={attempt.status} data-cleanup-status={attempt.cleanup}>
     <header className="managed-attempt-header">
       <PersonaAvatar id={attempt.persona.id} slot={slot} state={attempt.status === "running" && !attempt.cancelRequested ? "working" : "idle"} />
-      <div><h2>{attempt.persona.name}</h2><p>{attempt.persona.character}</p></div>
+      <div><h2>{label}</h2><p>{specialist?.purpose ?? attempt.persona.character}</p></div>
       <span className="managed-status" data-status={attempt.status}>{attempt.status.replaceAll("_", " ")}</span>
     </header>
     <div className="managed-attempt-body">
@@ -83,12 +86,13 @@ function AttemptCard({ attempt, runId, slot }: { attempt: ManagedAttempt; runId:
       {attempt.cancelRequested && <p className="notice">Cancellation requested. This is not confirmation that the browser has closed.</p>}
       {attempt.error && <p className="error">{attempt.error}</p>}
       <details><summary>Persona snapshot and requested criteria</summary>
+        <p><strong>{attempt.persona.name}</strong> · {attempt.persona.character}</p>
         <p className="muted">{attempt.persona.device} preference · {attempt.persona.techComfort} tech comfort · {attempt.persona.readingStyle} reading · {attempt.persona.patienceSteps} patience steps</p>
         <p className="muted">Persona instructions, not guarantees of device, behavior, or accessibility coverage.</p>
         <p><strong>Quirks:</strong> {attempt.persona.quirks.join("; ")}<br /><strong>Worries:</strong> {attempt.persona.worries.join("; ")}</p>
         <ul>{attempt.criteria.map((criterion, index) => <li key={index}>{criterion}</li>)}</ul>
       </details>
-      <section className="managed-progress" aria-label={`${attempt.persona.name} provider progress`}
+      <section className="managed-progress" aria-label={`${label} provider progress`}
         data-testid="managed-progress" data-progress-count={attempt.progress.length}>
         <h3>Provider progress</h3>
         <p className="muted">Actual provider text and tool events, not a reconstruction of the agent&apos;s reasoning.</p>
@@ -100,7 +104,7 @@ function AttemptCard({ attempt, runId, slot }: { attempt: ManagedAttempt; runId:
           <p data-testid="managed-progress-text">{event.text}</p>
         </li>)}</ol>
       </section>
-      <section className="managed-result" aria-label={`${attempt.persona.name} agent-reported result`}
+      <section className="managed-result" aria-label={`${label} agent-reported result`}
         data-testid="managed-result" data-has-result={!!attempt.result}>
         <h3>Agent-reported, not independently verified</h3>
         {attempt.result ? <>
