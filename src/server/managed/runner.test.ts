@@ -507,12 +507,30 @@ describe("managed Agents runner", () => {
     { ...modelResult, criteria: [] },
     { ...modelResult, verified: true },
     { ...modelResult, criteria: [{ ...modelResult.criteria[0], criterion: " Find pricing " }] },
+    { output: modelResult },
+    { output: modelResult, taskDuration: 1200, summary: "Done", stepsTaken: 3, verified: true },
+    { output: { ...modelResult, criteria: [{ ...modelResult.criteria[0], criterion: " Find pricing " }] },
+      taskDuration: 1200, summary: "Done", stepsTaken: 3 },
   ])("rejects a nonexact structured result and still verifies cleanup", async (badResult) => {
     const f = fixture();
     f.provider.retrieveRun.mockImplementation(async () => f.run({ result: badResult }));
     const outcome = await executeManagedAgent(f.claim, f.journal, f.options);
     expect(outcome).toMatchObject({ status: "failed", cleanup: "closed", result: null, error: "managed_result_rejected" });
     expect(f.provider.retrieveSession).toHaveBeenCalled();
+  });
+
+  it("accepts the hosted runner output envelope without treating task metadata as browser or model usage", async () => {
+    const f = fixture();
+    f.provider.retrieveRun.mockImplementation(async () => f.run({
+      result: { output: modelResult, taskDuration: 24261, summary: "Provider summary", stepsTaken: 7 },
+    }));
+    const outcome = await executeManagedAgent(f.claim, f.journal, f.options);
+    expect(outcome).toMatchObject({
+      status: "completed", cleanup: "closed", actualBrowserSeconds: 3.5, error: null,
+      result: { ...modelResult, finalUrl: "https://approved.example/pricing" },
+    });
+    expect(outcome).not.toHaveProperty("modelCalls");
+    expect(outcome).not.toHaveProperty("stepsTaken");
   });
 
   it("redacts secrets and raw URLs in model prose and limits finalUrl to the approved origin", async () => {

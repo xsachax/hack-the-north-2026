@@ -75,6 +75,43 @@ bytes from the independently identified Browserbase session. The private
 verified. The local wall screenshot, decorative surfers, model prose and
 recording metadata alone do not establish that criterion.
 
+The first genuine managed run reached the IANA destination and independently
+closed its session, but exposed two hosted API differences: structured results
+arrive inside an `output` envelope with task metadata, and session logs can be
+delayed or omit screenshot commands. The runner validates both the direct result
+and the exact hosted envelope without treating `stepsTaken` as model calls or
+`taskDuration` as browser usage. The proof attaches an independent observer to the
+exact run/session/project already identified by the provider. It reads the
+browser location and captures real CDP screenshot bytes without navigating or
+creating another session. That attachment is retained until worker cleanup;
+the provider's final exact-session read still determines closure and usage.
+Its protocol evidence is private and separately labelled from agent messages.
+Normal remote disconnection can race the worker's terminal-status poll. The
+observer records that lifecycle event without cancelling the worker or
+reconnecting; acceptance still requires the independent terminal run/session
+readbacks, complete report, previously captured pixels and confirmed cleanup.
+The original proof ceiling is 1,800 lifetime reserved seconds. A newer explicit
+owner approval can be recorded through a one-time, audited managed-budget
+amendment to 3,600 seconds. That transaction changes only the lifetime ceiling,
+retains every previous reservation and history row, and refuses unsettled work.
+The amendment is included in the plan's ledger digest; without that journal,
+the original ceiling still applies. Preparing or running a plan never raises
+the budget automatically. Concurrency remains one and reservations remain
+300 seconds, with no automatic allocation retry.
+
+Genuine managed execution was verified on 2026-09-20: the single IANA persona
+followed the requested Further Reading link, the owner report completed with both
+criteria met, and an independent CDP observer recorded the exact destination URL
+and real screenshot bytes. Visual inspection confirmed the
+**IANA-managed Reserved Domains** heading. The exact provider session was
+independently `COMPLETED`; the temporary Agent was deleted and its absence
+confirmed by an exact-ID 404. The successful session used 23.231 browser-seconds.
+The preserved lifetime ledger totals 2,100 reserved seconds, 88 rounded consumed
+seconds and 84.837 measured browser-seconds, including earlier attempts. Model
+calls remain unknown. Private receipts, browser pixels and owner-wall evidence
+are retained in the authoritative ledger directory, not committed or published.
+This verifies the managed goal, **not native confinement or issue #8 acceptance**.
+
 ## Offline integration and deferred public acceptance
 
 The integration starts from checkpoint #24 at

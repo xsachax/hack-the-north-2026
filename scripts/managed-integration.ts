@@ -8,12 +8,17 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
+import type { Browser } from "playwright-core";
 import { managedCapabilitiesSchema, managedResultSchema, managedRunSchema } from "../src/lib/managed-contracts";
+import { sanitizeEvidence } from "../src/server/execution/artifacts";
 import { readPrivateJson, writePrivateJson } from "./advanced-proof";
 import { verifyPublicProofClosure } from "./public-goal";
 import { openPublicProofLedger, publicProofHash } from "./public-proof";
 import { withReleaseLock, type ReleaseRuntime } from "./release-integration";
 import { packagedManagedDeployment } from "./release-runtime";
+import {
+  assertManagedObserverIdentity, connectManagedBrowserObserver, pollManagedBrowser, type ManagedBrowserLog,
+} from "./managed-browser-evidence";
 import {
   assertManagedGoalEvidence, assertManagedProofAllocation, assertManagedProofApproval, assertManagedProofLedgerBinding,
   assertManagedProofSettled,
@@ -163,6 +168,10 @@ export async function runManagedProof(planPath: string, approvalPath: string, si
     let agentDeleted = false, cleanupUncertain = false, identityUncertain = false;
     let finalLedger: ManagedProofLedger | undefined;
     let closure: Awaited<ReturnType<typeof verifyManagedProofClosure>> | undefined;
+    let observer: Browser | undefined, observedSessionId: string | undefined;
+    let observerEnded = false;
+    let lastCapture = 0;
+    const observerLogs: ManagedBrowserLog[] = [];
     const failures: string[] = [];
     try {
       const before = readManagedProofLedger(db);
@@ -257,6 +266,35 @@ export async function runManagedProof(planPath: string, approvalPath: string, si
         signal.throwIfAborted();
         const current = managedRunSchema.parse(await ownerRequest(`managed-runs/${runId}`));
         if (!["queued", "running"].includes(current.status)) { finished = true; break; }
+        if (!observer) {
+          const attempt = readManagedProofLedger(db).attempts.find((row) => row.run_id === runId);
+          if (attempt?.provider_run_id && attempt.provider_session_id && attempt.provider_task) {
+            const independentRun = await provider.agents.runs.retrieve(attempt.provider_run_id);
+            const independentSession = await provider.sessions.retrieve(attempt.provider_session_id);
+            const identity = {
+              runId: attempt.provider_run_id, sessionId: attempt.provider_session_id,
+              agentId, projectId: plan.projectId, task: attempt.provider_task,
+            };
+            assertManagedObserverIdentity(independentRun, independentSession, identity);
+            await writePrivateJson(join(directory, "observer-identity.json"), {
+              identity, independentRun, independentSession, attachmentCreatesNoSession: true,
+            });
+            observedSessionId = identity.sessionId;
+            observer = await connectManagedBrowserObserver(providerConfig.apiKey, identity.sessionId);
+          }
+        }
+        if (!observerEnded && observer?.isConnected() && observedSessionId) {
+          const sample = await pollManagedBrowser(observer, observedSessionId, Date.now() - lastCapture >= 2000, signal);
+          observerLogs.push(...sample.logs);
+          if (sample.logs.some((log) => log.method === "Page.captureScreenshot")) lastCapture = Date.now();
+          if (sample.status === "disconnected") {
+            observerEnded = true;
+            await writePrivateJson(join(directory, "observer-disconnected.json"), {
+              sessionId: observedSessionId, observedAt: Date.now(), independentClosureStillRequired: true,
+              reason: "Remote browser closed during an observation; awaiting worker and exact provider closure reads.",
+            });
+          }
+        }
         await delay(500, undefined, { signal });
       }
       if (!finished) throw new Error("managed_goal_deadline_no_retry");
@@ -277,8 +315,9 @@ export async function runManagedProof(planPath: string, approvalPath: string, si
       await writePrivateJson(join(directory, "session-logs.json"), logs);
       const replay = await provider.sessions.replays.retrieve(allocation.provider_session_id!);
       await writePrivateJson(join(directory, "recording-metadata.json"), replay);
-      const independentBrowser = assertManagedBrowserEvidence({ sessionId: allocation.provider_session_id!, logs, replay });
-      const goalPixels = extractManagedGoalScreenshot(allocation.provider_session_id!, logs);
+      if (observedSessionId !== allocation.provider_session_id) throw new Error("managed_observer_session_mismatch");
+      const independentBrowser = assertManagedBrowserEvidence({ sessionId: allocation.provider_session_id!, logs: observerLogs, replay });
+      const goalPixels = extractManagedGoalScreenshot(allocation.provider_session_id!, observerLogs);
       const goalImageFile = `browser-goal.${goalPixels.format}`;
       const goalImage = await open(join(directory, goalImageFile), "wx", 0o600);
       try { await goalImage.writeFile(goalPixels.bytes); await goalImage.sync(); } finally { await goalImage.close(); }
@@ -331,7 +370,8 @@ export async function runManagedProof(planPath: string, approvalPath: string, si
         independentBrowser, recording: "Browserbase exact-session API metadata; media URLs were not fetched",
         browserScreenshot: { kind: "actual-browserbase-cdp-capture", file: goalImageFile, sha256: goalPixels.sha256,
           bytes: goalPixels.bytes.length, pageId: goalPixels.pageId, logIndex: goalPixels.logIndex,
-          observedBrowserUrl: goalPixels.finalUrl, headingVisualInspectionRequired: true },
+          observedBrowserUrl: goalPixels.finalUrl, protocolSource: "independent-existing-session-observer",
+          headingVisualInspectionRequired: true },
         localUiBrowser: plan.localUiBrowser,
         goalResult: "Model-authored managed goal evidence, not independently verified criterion truth",
         issue8Acceptance: false,
@@ -342,6 +382,12 @@ export async function runManagedProof(planPath: string, approvalPath: string, si
     } catch (error) {
       const failure = safeFailure(error);
       failures.push(failure);
+      if (directory) {
+        await writePrivateJson(join(directory, "failure-diagnostic.json"), {
+          phase, code: failure, name: error instanceof Error ? error.name : "unknown",
+          message: error instanceof Error ? sanitizeEvidence(error.message, [providerConfig.apiKey]) : "Non-error rejection",
+        });
+      }
       if (failure === "managed_prior_invocation_requires_manual_reconciliation") {
         identityUncertain = true;
         cleanupUncertain = true;
@@ -364,6 +410,13 @@ export async function runManagedProof(planPath: string, approvalPath: string, si
       }
       try { await runtime?.close(); }
       catch { failures.push("managed_runtime_cleanup_unconfirmed"); cleanupUncertain = true; }
+      // Disconnecting a keepAlive:false observer can end a session, so retain it through worker cleanup.
+      try { await observer?.close(); }
+      catch { failures.push("managed_observer_cleanup_unconfirmed"); cleanupUncertain = true; }
+      if (directory && observerLogs.length) {
+        try { await writePrivateJson(join(directory, "observer-protocol.json"), observerLogs); }
+        catch { failures.push("managed_observer_evidence_write_failed"); }
+      }
       try {
         finalLedger = readManagedProofLedger(db);
         if (provider) closure = await verifyManagedProofClosure(provider, plan.projectId, finalLedger);

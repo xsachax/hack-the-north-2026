@@ -31,6 +31,12 @@ const terminalStatuses = new Set(["COMPLETED", "FAILED", "STOPPED", "TIMED_OUT"]
 const statuses = new Set(["PENDING", "RUNNING", ...terminalStatuses]);
 const sessionStatuses = new Set(["PENDING", "RUNNING", "COMPLETED", "ERROR", "TIMED_OUT"]);
 const dateTime = z.iso.datetime({ offset: true });
+const resultEnvelopeSchema = z.strictObject({
+  output: managedResultSchema,
+  taskDuration: z.number().finite().nonnegative(),
+  summary: z.string(),
+  stepsTaken: z.int().nonnegative(),
+});
 
 class Failure extends Error {
   constructor(readonly code: string) { super(code); }
@@ -427,8 +433,11 @@ export async function executeManagedAgent(
   function readResult(): void {
     if (run?.status !== "COMPLETED" || !terminalVerified || identityRejected) return;
     if (!sessionId) failure("managed_browser_session_missing");
-    const parsed = managedResultSchema.safeParse(run.result);
-    const rawCriteria = object(run.result)?.criteria;
+    // The hosted runner wraps schema output with task metadata; steps are not model calls.
+    const envelope = resultEnvelopeSchema.safeParse(run.result);
+    const rawResult = envelope.success ? object(run.result)?.output : run.result;
+    const parsed = managedResultSchema.safeParse(rawResult);
+    const rawCriteria = object(rawResult)?.criteria;
     if (!parsed.success || !Array.isArray(rawCriteria) || parsed.data.criteria.length !== claim.criteria.length
       || parsed.data.criteria.some((entry, index) => entry.criterion !== claim.criteria[index]
         || object(rawCriteria[index])?.criterion !== claim.criteria[index])) {
