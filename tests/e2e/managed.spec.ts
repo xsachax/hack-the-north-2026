@@ -45,6 +45,8 @@ async function mockManaged(page: Page, options: {
     liveViewUrl: "",
     replayUrl: "https://www.browserbase.com/sessions/private",
   };
+  let sessions: unknown = { items: [] };
+  let sessionRequests = 0;
   let viewRequests = 0;
   let reports = 0;
   let polls = 0;
@@ -127,6 +129,9 @@ async function mockManaged(page: Page, options: {
     } else if (run && path.match(new RegExp(`^/managed-runs/${run.id}/attempts/[^/]+/view$`))) {
       viewRequests++;
       await send(viewer);
+    } else if (run && path === `/managed-runs/${run.id}/sessions` && currentOwner === runOwner) {
+      sessionRequests++;
+      await send(sessions);
     } else {
       unexpected.push(`${request.method()} ${path}`);
       await route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { code: "not_found" } }) });
@@ -136,6 +141,7 @@ async function mockManaged(page: Page, options: {
     submissions, unexpected, capabilities, personaMutations,
     get run() { return run!; },
     get viewRequests() { return viewRequests; },
+    get sessionRequests() { return sessionRequests; },
     get reports() { return reports; },
     get polls() { return polls; },
     get maximumActivePolls() { return maximumActivePolls; },
@@ -143,6 +149,7 @@ async function mockManaged(page: Page, options: {
     setRun(value: ManagedRun) { run = value; },
     setReport(value: ManagedRun) { report = value; },
     setViewer(value: unknown) { viewer = value; },
+    setSessions(value: unknown) { sessions = value; },
   };
 }
 
@@ -192,7 +199,7 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     await expect(page.locator("form.managed-composer")).toHaveCount(1);
     await expect(page.getByRole("button", { name: /^(Continue|Back(?: to .*)?)$/ })).toHaveCount(0);
     await expect(page.locator(".onboarding-progress, [aria-current=step], [role=progressbar]")).toHaveCount(0);
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Make waves. Find friction.");
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Make waves. Find what breaks.");
     await expect(page.getByRole("heading", { name: "Choose your crew", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Launch agents", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Launch agents", exact: true })).toBeDisabled();
@@ -917,14 +924,15 @@ test("surfer slots stay distinct and only running non-cancelled attempts use the
     const avatar = page.locator(`[data-managed-attempt-id="${attempt.id}"] .persona-avatar`);
     await expect(avatar).toHaveAttribute("data-sprite-color", surferColors[slot]);
     await expect(avatar).toHaveAttribute("data-sprite-state", slot === 1 ? "working" : "idle");
+    // Detail cards sit below the live-window grid, and next/image loads lazily: bring the sprite into view first.
+    await avatar.scrollIntoViewIfNeeded();
     await expect.poll(() => avatar.locator("img").evaluate((image: HTMLImageElement) => image.currentSrc)).toContain("/surfers/static/");
   }
   expect(fixture.unexpected).toEqual([]);
 });
 
-test("five-agent overview stays visible and updates real status, events and frozen elapsed time", async ({ page }) => {
+function runningDemoRun(start = Date.now() - 1000) {
   const run = makeRun({ ...defaultBody, scope: managedIanaDemoScope, assignments: [...managedIanaDemoAssignments] });
-  const start = Date.now() - 1000;
   run.status = "running";
   run.attempts = run.attempts.map((attempt) => ({ ...attempt, status: "running", providerStatus: "RUNNING",
     cleanup: "unconfirmed", startedAt: new Date(start).toISOString(), finishedAt: null,
@@ -933,6 +941,26 @@ test("five-agent overview stays visible and updates real status, events and froz
       { sequence: 2, timestamp: new Date(start).toISOString(), kind: "text", text: "IANA heading observed." },
     ],
   }));
+  return run;
+}
+
+const liveSessions = (run: ManagedRun, url = (index: number) => `https://www.browserbase.com/devtools-fullscreen/test-${index}`) => ({
+  items: run.attempts.map((attempt, index) => ({ attemptId: attempt.id, available: true, liveViewUrl: url(index) })),
+});
+
+async function liveWall(page: Page, run = runningDemoRun()) {
+  const fixture = await mockManaged(page, { run });
+  fixture.setSessions(liveSessions(run));
+  // Registered after the catch-all so the stub wins and fixture.unexpected stays empty.
+  await page.route("https://www.browserbase.com/**", (route) => route.fulfill({ contentType: "text/html", body: "<title>stub</title>" }));
+  await page.goto(`/managed/${run.id}`);
+  const overview = page.getByTestId("managed-live-overview");
+  return { fixture, run, overview, agents: overview.getByTestId("managed-live-agent"), frames: overview.locator("iframe") };
+}
+
+test("five-agent overview stays visible and updates real status, events and frozen elapsed time", async ({ page }) => {
+  const start = Date.now() - 1000;
+  const run = runningDemoRun(start);
   await mockManaged(page, { run });
   await page.goto(`/managed/${run.id}`);
   const overview = page.getByTestId("managed-live-overview");
@@ -940,8 +968,9 @@ test("five-agent overview stays visible and updates real status, events and froz
   await expect(agents).toHaveCount(5);
   await expect(overview).toContainText("5 provider runs reporting RUNNING");
   await expect(agents.nth(4)).toContainText("Latest action: snapshot");
+  for (let index = 0; index < 5; index++) expect((await agents.nth(index).boundingBox())!.width).toBeGreaterThanOrEqual(300);
   const bounds = await agents.nth(4).boundingBox();
-  expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(900);
+  expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(1600);
   const elapsed = Number(await agents.first().getAttribute("data-elapsed-seconds"));
   await expect.poll(async () => Number(await agents.first().getAttribute("data-elapsed-seconds"))).toBeGreaterThan(elapsed);
   run.updatedAt = new Date().toISOString();
@@ -951,7 +980,125 @@ test("five-agent overview stays visible and updates real status, events and froz
   await expect(agents.first()).toHaveAttribute("data-elapsed-seconds", "2");
   await expect(agents.first()).toContainText("0.800s browser use");
   await expect(agents.first()).toContainText("Cleanup: closed");
+  await expect(agents.first()).toHaveAttribute("data-window-state", "finished");
   await expect(overview).toContainText("0 provider runs reporting RUNNING");
+});
+
+test("live windows embed a pointer-blocked view for every running agent", async ({ page }) => {
+  const { fixture, agents, frames } = await liveWall(page);
+  await expect(frames).toHaveCount(5);
+  for (let index = 0; index < 5; index++) {
+    const frame = frames.nth(index);
+    expect(await frame.getAttribute("src")).toContain("readOnly=true");
+    await expect(frame).toHaveAttribute("sandbox", "allow-scripts allow-same-origin");
+    await expect(frame).toHaveAttribute("tabindex", "-1");
+    await expect(frame).toHaveCSS("pointer-events", "none");
+    expect(await frame.evaluate((element) => element.parentElement!.hasAttribute("inert"))).toBe(true);
+    await expect(agents.nth(index)).toHaveAttribute("data-window-state", "live");
+  }
+  await expect(page.locator(".managed-attempt-body").locator("iframe")).toHaveCount(0);
+  expect(fixture.unexpected).toEqual([]);
+});
+
+test("live windows do not cause horizontal scroll at 390px", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const { fixture, frames } = await liveWall(page);
+  await expect(frames).toHaveCount(5);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  expect(fixture.unexpected).toEqual([]);
+});
+
+test("a lookalike live-view host is never framed", async ({ page }) => {
+  const run = runningDemoRun();
+  const fixture = await mockManaged(page, { run });
+  fixture.setSessions(liveSessions(run, () => "https://browserbase.com.attacker.invalid/x"));
+  await page.goto(`/managed/${run.id}`);
+  const agents = page.getByTestId("managed-live-agent");
+  await expect(agents).toHaveCount(5);
+  await expect.poll(() => fixture.sessionRequests).toBeGreaterThanOrEqual(1);
+  await expect(agents.first()).toHaveAttribute("data-window-state", "live-unavailable");
+  await expect(agents.first()).toContainText("Live view unavailable. Progress below is real provider output.");
+  await expect(page.locator("iframe")).toHaveCount(0);
+  await expect(page.locator(".error[role=alert]")).toHaveCount(0);
+  expect(fixture.unexpected).toEqual([]);
+});
+
+test("hiding live views removes every frame and stops the sessions poll", async ({ page }) => {
+  const { fixture, agents, frames } = await liveWall(page);
+  await expect(frames).toHaveCount(5);
+  await page.getByRole("button", { name: "Hide live views", exact: true }).click();
+  await expect(frames).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Show live views", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(agents.first()).toContainText("Live views hidden.");
+  await expect(agents.first()).toHaveAttribute("data-window-state", "hidden");
+  await page.waitForTimeout(300);
+  const stoppedAt = fixture.sessionRequests;
+  await page.waitForTimeout(2500);
+  expect(fixture.sessionRequests).toBe(stoppedAt);
+  await page.getByRole("button", { name: "Show live views", exact: true }).click();
+  await expect(frames).toHaveCount(5);
+  expect(await page.evaluate(() => JSON.stringify([{ ...localStorage }, { ...sessionStorage }]))).not.toContain("browserbase.com");
+  expect(fixture.unexpected).toEqual([]);
+});
+
+test("cancellation hides live windows immediately", async ({ page }) => {
+  const { fixture, agents, frames } = await liveWall(page);
+  await expect(frames).toHaveCount(5);
+  await page.getByRole("button", { name: "Request cancellation", exact: true }).click();
+  await expect(frames).toHaveCount(0);
+  await expect(agents.first()).toContainText("Hidden after cancellation request — not confirmation the browser closed.");
+  await expect(agents.first()).toHaveAttribute("data-window-state", "hidden");
+  const stoppedAt = fixture.sessionRequests;
+  await page.waitForTimeout(2500);
+  expect(fixture.sessionRequests).toBeLessThanOrEqual(stoppedAt + 1);
+  await expect(frames).toHaveCount(0);
+  expect(fixture.unexpected).toEqual([]);
+});
+
+test("finished runs drop their frames", async ({ page }) => {
+  const run = runningDemoRun();
+  run.status = "completed";
+  run.attempts = run.attempts.map((attempt) => ({ ...attempt, status: "completed", providerStatus: "COMPLETED",
+    cleanup: "closed", finishedAt: new Date().toISOString(), actualBrowserSeconds: 0.8 }));
+  const { fixture, agents, frames } = await liveWall(page, run);
+  await expect(agents).toHaveCount(5);
+  for (let index = 0; index < 5; index++) await expect(agents.nth(index)).toHaveAttribute("data-window-state", "finished");
+  await expect(agents.first().getByRole("link", { name: "View details", exact: true })).toHaveAttribute("href", `#managed-attempt-${run.attempts[0].id}`);
+  await expect(frames).toHaveCount(0);
+  expect(fixture.sessionRequests).toBe(0);
+  expect(fixture.unexpected).toEqual([]);
+});
+
+test("findings download is one organised markdown file built from the run on screen", async ({ page }) => {
+  const run = runningDemoRun();
+  run.status = "completed";
+  run.attempts = run.attempts.map((attempt, index) => ({ ...attempt, status: "completed", providerStatus: "COMPLETED",
+    cleanup: "closed", finishedAt: new Date().toISOString(), actualBrowserSeconds: 12.5,
+    result: {
+      summary: `Summary for agent ${index + 1}.`, finalUrl: "https://www.iana.org/domains/reserved",
+      criteria: attempt.criteria.map((criterion, position) => ({
+        criterion, status: index === 0 && position === 0 ? "not_met" as const : "met" as const,
+        observation: `Observation ${index + 1}.${position + 1}`,
+      })),
+      limitations: ["Model-authored report, not independently verified."],
+    } }));
+  const { fixture } = await liveWall(page, run);
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByRole("button", { name: "Download findings (.md)", exact: true }).click(),
+  ]);
+  expect(download.suggestedFilename()).toBe(`flash-flood-findings-${run.id.slice(0, 8)}.md`);
+  const stream = await download.createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(chunk as Buffer);
+  const text = Buffer.concat(chunks).toString("utf8");
+  expect(text).toContain(`# Flash Flood findings: ${run.scope.targetUrl}`);
+  expect(text).toContain("Agent-reported, not independently verified");
+  expect(text).toContain("## Problems reported (criteria marked not met)");
+  expect(text).toContain("Observation 1.1");
+  expect(text.match(/^## /gm)?.length).toBe(2 + run.attempts.length);
+  expect(text).not.toContain("browserbase.com/devtools");
+  expect(fixture.unexpected).toEqual([]);
 });
 
 test("wall shows actual progress, failure and cleanup independently, and never treats completion as success", async ({ page }) => {

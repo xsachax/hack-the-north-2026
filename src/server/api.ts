@@ -279,6 +279,9 @@ export function createApi({
           if (path.length === 5 && path[2] === "attempts" && path[4] === "view" && request.method === "GET") {
             return respond(repository.managed.view(owner, id, parseInput(idSchema, path[3])));
           }
+          if (path.length === 3 && path[2] === "sessions" && request.method === "GET") {
+            return respond({ items: repository.managed.sessions(owner, id) });
+          }
         }
         fail("not_found", 404);
       }

@@ -3,21 +3,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { api, errorMessage } from "@/lib/client-api";
-import { managedRunSchema, type ManagedAttempt, type ManagedRun } from "@/lib/managed-contracts";
+import {
+  browserbaseUrlSchema, managedRunSchema, managedSessionsSchema,
+  type ManagedAttempt, type ManagedRun, type ManagedSessionView,
+} from "@/lib/managed-contracts";
 import { managedSpecialistForAssignment } from "@/lib/managed-specialists";
 import { managedLiveSummary } from "@/lib/managed-live";
 import { useOwnerSession } from "./owner-session";
+import { ManagedWindows } from "./managed-windows";
 import { PersonaAvatar } from "./persona-avatar";
-import { WaveDivider } from "./wave-divider";
 
-const viewerUrlSchema = z.string().max(8192).refine((value) => {
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && !url.username && !url.password && !url.port
-      && (url.hostname === "browserbase.com" || url.hostname.endsWith(".browserbase.com"));
-  } catch { return false; }
-}, "The provider viewer URL is not allowed.");
-const viewerSchema = z.strictObject({ liveViewUrl: z.literal(""), replayUrl: viewerUrlSchema }).nullable();
+const viewerSchema = z.strictObject({ liveViewUrl: z.literal(""), replayUrl: browserbaseUrlSchema }).nullable();
 type Viewer = z.infer<typeof viewerSchema>;
 const cleanupLabels = {
   not_started: "Not started — no browser cleanup recorded.",
@@ -51,7 +47,7 @@ function ManagedViewer({ runId, attemptId, closed }: { runId: string; attemptId:
     } finally { if (!request.signal.aborted) setBusy(false); }
   }
   return <section className="managed-viewer" aria-label="Owner-only browser replay">
-    <p className="muted">Live control links are not exposed. Replay is available only after independently confirmed browser closure; no media is fetched from agent output.</p>
+    <p className="muted">Live views above are owner-only and pointer-blocked; the provider link is access-bearing and is never logged or saved. Replay is available only after independently confirmed browser closure; no media is fetched from agent output.</p>
     <button type="button" disabled={!authorized || busy || !closed} onClick={() => void reveal()}>
       {busy ? "Fetching replay…" : requested ? "Refresh owner-only replay" : "Reveal owner-only replay"}
     </button>
@@ -138,6 +134,8 @@ export function ManagedWall({ runId }: { runId: string }) {
   const [reportBusy, setReportBusy] = useState(false);
   const [reportLoaded, setReportLoaded] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  const [sessions, setSessions] = useState<ManagedSessionView[]>([]);
+  const [hidden, setHidden] = useState(false);
   const actions = useRef(new Set<AbortController>());
   const acceptRun = useCallback((next: ManagedRun) => {
     if (next.id !== runId) throw new Error("Unexpected managed run");
@@ -172,8 +170,35 @@ export function ManagedWall({ runId }: { runId: string }) {
     };
   }, [ownerId, authorized, revision, runId, acceptRun]);
 
+  // Live-view links are access-bearing: polled only while something can be live, held in memory only, dropped on any failure.
+  const sessionsActive = !hidden && !cancelling && !!run
+    && run.attempts.some((attempt) => ["queued", "running"].includes(attempt.status))
+    && !run.attempts.some((attempt) => attempt.cancelRequested);
+  useEffect(() => {
+    if (!authorized || !ownerId || !sessionsActive) return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    async function poll() {
+      try {
+        const next = managedSessionsSchema.parse(await api<unknown>(`/managed-runs/${encodeURIComponent(runId)}/sessions`, { signal: controller.signal }));
+        if (!controller.signal.aborted) setSessions(next.items);
+      } catch {
+        if (!controller.signal.aborted) setSessions([]);
+      } finally {
+        if (!controller.signal.aborted) timer = setTimeout(() => void poll(), 2000);
+      }
+    }
+    void Promise.resolve().then(() => { if (!controller.signal.aborted) void poll(); });
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+      setSessions([]);
+    };
+  }, [ownerId, authorized, revision, runId, sessionsActive]);
+
   async function request(action: "cancel" | "report") {
     if (!authorized || !csrfToken || cancelling || reportBusy) return;
+    if (action === "cancel") setSessions([]);
     const controller = new AbortController();
     actions.current.add(controller);
     if (action === "cancel") setCancelling(true); else setReportBusy(true);
@@ -208,10 +233,9 @@ export function ManagedWall({ runId }: { runId: string }) {
   return <section className="managed-wall" aria-label="Managed run wall" data-testid="managed-run-wall"
     data-run-id={runId} data-run-loaded={!!run} data-run-status={run?.status}>
     <div className="managed-wall-heading">
-      <div><p className="eyebrow">BROWSERBASE-MANAGED · OWNER WORKSPACE</p><h1>Your crowd, in motion.</h1>
+      <div><p className="eyebrow">BROWSERBASE-MANAGED · OWNER WORKSPACE</p><h1>Your crowd, <span>in motion.</span></h1>
         <p className="muted managed-wrap">{run?.scope.targetUrl ?? "Loading saved run…"}</p></div>
       {run && <span className="managed-status" data-status={run.status}>{run.status.replaceAll("_", " ")}</span>}
-      <WaveDivider />
     </div>
     <div className="managed-policy">
       <strong>Completion is not a success verdict.</strong>
@@ -223,39 +247,10 @@ export function ManagedWall({ runId }: { runId: string }) {
       <div className="managed-wall-actions">
         <button type="button" disabled={!canCancel || cancelling || reportBusy || !authorized} onClick={() => void request("cancel")}>{cancelling ? "Requesting cancellation…" : "Request cancellation"}</button>
         <button type="button" disabled={reportBusy || cancelling || !authorized} onClick={() => void request("report")}>{reportBusy ? "Loading provider report…" : "Refresh provider-reported report"}</button>
+        <button type="button" aria-pressed={hidden} onClick={() => setHidden((value) => !value)}>{hidden ? "Show live views" : "Hide live views"}</button>
         <p className="muted" role="status">{reportLoaded ? "Provider-reported report loaded; criterion claims are not independently verified." : "Updates from the owner API approximately every 1.5 seconds."}</p>
       </div>
-      <section className="managed-overview" aria-label="All agents live overview" data-testid="managed-live-overview">
-        <div className="section-heading"><h2>All {run.attempts.length} agents</h2>
-          <span className="muted">{run.attempts.filter((attempt) => attempt.providerStatus === "RUNNING"
-            && attempt.status === "running").length} provider runs reporting RUNNING</span></div>
-        <p className="muted">Starting is not browser-allocation proof. Elapsed includes startup; results and cleanup remain separate. No simulated progress.</p>
-        <div className="managed-overview-rows">
-          {run.attempts.map((attempt, slot) => {
-            const specialist = managedSpecialistForAssignment({ personaId: attempt.persona.id, goal: attempt.goal, criteria: attempt.criteria });
-            const live = managedLiveSummary(attempt, now);
-            return <article className="managed-overview-row" key={attempt.id} data-testid="managed-live-agent"
-              data-attempt-id={attempt.id} data-provider-status={attempt.providerStatus ?? ""}
-              data-elapsed-seconds={live.elapsedSeconds ?? ""} data-status={attempt.status}>
-              <a className="managed-overview-person" href={`#managed-attempt-${attempt.id}`}>
-                <PersonaAvatar id={attempt.persona.id} slot={slot} state={attempt.providerStatus === "RUNNING"
-                  && attempt.status === "running" && !attempt.cancelRequested ? "working" : "idle"} />
-                <strong>{specialist?.label ?? attempt.persona.name}</strong>
-              </a>
-              <div><span className="managed-status" data-status={attempt.status}>{live.status}</span>
-                <small>{live.elapsedSeconds === null ? attempt.startedAt ? "Elapsed unavailable" : "Not started" : `${live.elapsedSeconds}s elapsed`}</small></div>
-              <div className="managed-current-event" aria-live="polite">
-                <strong>Latest action: {live.action?.text ?? live.latest?.text ?? "No provider event yet"}</strong>
-                <p title={live.observation?.text}>{live.observation?.text ?? (attempt.status === "queued"
-                  ? "Waiting for worker capacity." : "Waiting for the next provider observation.")}</p>
-                {live.latest && <time dateTime={live.latest.timestamp}>{new Date(live.latest.timestamp).toLocaleTimeString()}</time>}
-              </div>
-              <div><strong>{live.result}</strong><small>Cleanup: {attempt.cleanup.replaceAll("_", " ")}</small>
-                {attempt.actualBrowserSeconds !== null && <small>{attempt.actualBrowserSeconds.toFixed(3)}s browser use</small>}</div>
-            </article>;
-          })}
-        </div>
-      </section>
+      <ManagedWindows run={run} sessions={sessionsActive && authorized ? sessions : []} hidden={hidden} now={now} />
       <details className="managed-scope"><summary>Saved requested scope</summary>
         <p className="muted">Initial target admission was restricted to the operator&apos;s allowlist. Later browsing is not independently network-enforced.</p>
         <p className="managed-wrap"><strong>Initial URL:</strong> {run.scope.targetUrl}<br /><strong>Path prompts:</strong> {run.scope.pathPrefixes.join(", ")}<br />

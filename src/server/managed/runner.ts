@@ -31,6 +31,7 @@ const CLEANUP_MS = 30_000;
 const terminalStatuses = new Set(["COMPLETED", "FAILED", "STOPPED", "TIMED_OUT"]);
 const statuses = new Set(["PENDING", "RUNNING", ...terminalStatuses]);
 const sessionStatuses = new Set(["PENDING", "RUNNING", "COMPLETED", "ERROR", "TIMED_OUT"]);
+const lifecycleCodes = new Set(["managed_lease_lost", "managed_cancelled", "managed_deadline_elapsed"]);
 const dateTime = z.iso.datetime({ offset: true });
 const resultEnvelopeSchema = z.strictObject({
   output: managedResultSchema,
@@ -144,6 +145,7 @@ export async function executeManagedAgent(
   let cleaning = false;
   let released = false;
   let stopped = false;
+  let liveViewAttempted = false;
   let browserDeadline = Infinity;
   const deadline = claim.startedAt + claim.reservedSeconds * 1000;
   const pollMs = Math.min(5_000, Math.max(0, options.pollMs ?? 1_000));
@@ -266,7 +268,7 @@ export async function executeManagedAgent(
   function publishReplay(): void {
     if (!sessionId || session?.status !== "COMPLETED" || !terminalVerified || !closed || !ownsRun || identityRejected) return;
     try {
-      // Live-view docs only describe iframe pointer blocking, not a read-only URL capability.
+      // Closure clears the access-bearing live URL; only the replay reference survives the session.
       const parsed = referenceSchema.safeParse({
         sessionId, liveViewUrl: "",
         replayUrl: `https://www.browserbase.com/sessions/${sessionId}`,
@@ -280,6 +282,32 @@ export async function executeManagedAgent(
     } catch (caught) {
       if (code(caught) === "managed_lease_lost") throw caught;
       progress("view:unavailable", "error", "managed_replay_unavailable");
+    }
+  }
+
+  async function publishLiveView(): Promise<void> {
+    if (liveViewAttempted || cleaning || terminalVerified || !sessionId || session?.status !== "RUNNING"
+      || !ownsRun || identityRejected) return;
+    // Set before the await: exactly one debug request per execution, never retried.
+    liveViewAttempted = true;
+    try {
+      const debug = await call(() => provider!.debugSession(sessionId!));
+      const url = new URL(debug.debuggerFullscreenUrl);
+      url.searchParams.set("navbar", "false");
+      const parsed = referenceSchema.safeParse({
+        sessionId, liveViewUrl: url.href,
+        replayUrl: `https://www.browserbase.com/sessions/${sessionId}`,
+        timeoutSeconds: Math.min(300, Math.max(1, Math.ceil(claim.reservedSeconds))),
+      });
+      if (!parsed.success || !parsed.data.liveViewUrl
+        || redactSecrets(parsed.data.liveViewUrl) !== parsed.data.liveViewUrl) failure("managed_live_view_rejected");
+      fence();
+      journal.liveView({ liveViewUrl: parsed.data.liveViewUrl });
+    } catch (caught) {
+      // Lease loss, cancellation and deadline propagate; anything else only costs the optional live view.
+      if (lifecycleCodes.has(code(caught))) throw caught;
+      fence();
+      if (progressIds.size < MAX_PROGRESS) progress("view:live-unavailable", "error", "managed_live_view_unavailable");
     }
   }
 
@@ -511,6 +539,7 @@ export async function executeManagedAgent(
         while (true) {
           await call(() => provider!.retrieveRun(runId!), false, (value) => observeRun(value, true));
           await readSession(false);
+          await publishLiveView();
           await readMessages();
           if (terminalVerified) break;
           await pause();

@@ -7,57 +7,57 @@ type Specialist = Assignment & { label: string; purpose: string; checks: readonl
 export const managedSpecialists: readonly Specialist[] = [
   {
     personaId: "careful-first-timer", label: "UI/UX",
-    purpose: "Find confusing labels, dead ends and missing feedback.",
+    purpose: "Hunt for misleading labels, dead ends and navigation that changes between pages.",
     checks: ["Clear next steps", "Readable labels", "Navigation feedback"],
-    goal: "Review the approved public pages as a first-time visitor. Observe navigation, labels, hierarchy and feedback using read-only browsing. Do not submit forms, authenticate, purchase or change data.",
+    goal: "Review the approved public pages as a first-time visitor using read-only browsing, and hunt for problems rather than confirming that the site works. Visit at least three different pages through the site's own navigation. On each page look for: link or button labels that do not predict where they lead, dead ends (no visible way onward or back, a broken or empty destination), and navigation that changes name, order or position between pages. For every issue quote the exact visible label, heading or sentence and name the page it appeared on. If a link leaves the approved site, record its label and destination host, do not click it again, and continue elsewhere. Do not repeat an action that already failed or showed nothing new. Do not submit forms, authenticate, purchase or change data. A criterion is met only when you checked it on at least three pages and found no problem; a problem found is not_met with the specifics; anything you could not observe is inconclusive.",
     criteria: [
-      "The main purpose and next step are clear from the visible page.",
-      "Navigation labels make destinations understandable, without unexplained dead ends.",
-      "Visible feedback explains what happened after read-only navigation.",
+      "On at least three visited pages, every navigation label followed led to a page whose heading matched what the label promised; name any label that did not, quoting the label and the heading it led to, with the page it appeared on. If fewer than three pages were visited, mark this inconclusive.",
+      "No visited page was a dead end: each offered a visible way onward and a way back to the main sections; name any page that did not and quote its heading. If a followed link leads to another site, name its label and the destination host.",
+      "The main navigation kept the same labels in the same order on every visited page; list the navigation labels seen on each page and quote any label that appeared, vanished or was renamed between pages.",
     ],
   },
   {
     personaId: "security-minded", label: "Security & privacy",
-    purpose: "Review visible trust cues and requests for personal data.",
+    purpose: "Check where the privacy policy lives, why data is requested and who runs the site.",
     checks: ["Privacy disclosures", "Permission explanations", "Trust cues"],
-    goal: "Passively review visible privacy, permission and trust information on the approved public pages. Use read-only browsing only. Do not probe vulnerabilities, submit payloads, enter secrets, authenticate or change data. This is not penetration testing.",
+    goal: "Passively review the visible privacy, data-request and trust information on the approved public pages, using read-only browsing only, and hunt for gaps rather than confirming that the site looks trustworthy. Visit at least three different pages, including the home page and any page that shows a form or asks for personal data. Look for: a privacy policy that is missing, takes more than one click to reach, or is hosted on a different site; fields or permission prompts that ask for personal data without saying why; and pages that never say who operates the site or how to contact them. For every issue quote the exact visible label, heading or sentence and name the page. If the privacy link leaves the approved site, that is itself the finding: record the link label and the destination host, do not click it again, and continue with the other checks. Only look at forms; never type into them. Do not probe vulnerabilities, submit payloads, enter secrets, submit forms, authenticate or change data. This is not penetration testing and says nothing about server-side security; controls you did not observe are reported as unknown. A criterion is met only on quoted evidence; a gap found is not_met with the specifics; anything unobserved is inconclusive.",
     criteria: [
-      "Visible requests for personal data or permissions explain their purpose.",
-      "Privacy information is easy to locate and uses understandable labels.",
-      "Visible trust claims and optional data requests are clear rather than misleading; untested controls are reported as unknown.",
+      "A privacy policy link is reachable in one click from the home page AND opens on the approved site; quote the link label and name the page where it was found. If it leads to a different host, name the destination host and mark this not_met; if it stays on this host but outside the approved paths, report it as not explored and mark this inconclusive; if no such link was seen, report that and list the pages checked.",
+      "Every visible field or prompt that asks for personal data (name, email, phone, address, account, location) states its purpose next to it; list each such field seen with its page and quote the stated purpose, or name the fields that gave none. If no personal-data field was seen, state that none was seen and mark this inconclusive.",
+      "The site states who operates it and how to contact them, on the approved site; quote the operator name and the contact detail exactly as shown and name the page. If either was not found, report which one was missing and which pages were checked; do not assume it exists elsewhere.",
     ],
   },
   {
     personaId: "keyboard-only", label: "Accessibility",
-    purpose: "Look for barriers in keyboard navigation and labels.",
+    purpose: "Look for keyboard traps, missing focus indicators and vague link text.",
     checks: ["Keyboard navigation", "Visible focus", "Control labels"],
-    goal: "Observe keyboard navigation, focus and control labels on the approved public pages using read-only browsing. Do not submit forms, authenticate or change data. Report only observed barriers and untested areas, not certified WCAG compliance.",
+    goal: "Check the approved public pages for keyboard and labelling barriers using read-only browsing, and hunt for barriers rather than confirming that the site looks tidy. Visit at least three different pages. On each page, when your tools can press keys, press Tab from the top of the page, count the presses until focus reaches the main navigation, note the first controls that received focus, and check whether the focused control shows a visible indicator; when the harness reports focus readings, cite them. Also hunt for vague link text: 'here', 'more', 'click here', bare URLs and icons with no text label. For every issue quote the exact visible label, heading or sentence and name the page. Keyboard and focus verdicts may rest only on keys that were actually pressed: if no key was pressed or no focus reading was provided, mark that criterion untested (inconclusive); never infer keyboard behaviour from page structure or from clicking. Do not submit forms, authenticate or change data. Report only observed barriers and untested areas, not certified WCAG compliance. A barrier found is not_met with the specifics.",
     criteria: [
-      "The observed read-only navigation can be reached and used with the keyboard without a focus trap.",
-      "Keyboard focus is visible and follows an understandable order through the observed controls.",
-      "Observed links and controls have meaningful labels that explain their purpose.",
+      "Pressing Tab from the top of the page reaches the main navigation without focus getting trapped or lost; report the number of Tab presses and the focused controls the harness read when it provides them, otherwise mark this untested. If no key was actually pressed this is inconclusive; never infer it from page structure or from clicking.",
+      "Each focused control the harness read shows a visible focus indicator; cite the harness focus reading (control and indicator) per page when provided. A reading of 'no outline or box-shadow detected' leaves other styles unchecked: name that control, report its indicator as not detected and mark this inconclusive, not not_met. If no focus reading was provided, report the indicator as unknown and mark this inconclusive.",
+      "Every link and control has text that says where it goes or what it does; quote each vague one found ('here', 'more', 'click here', a bare URL, an icon with no label) with the page it appeared on. If none was found, list the pages whose links were read; this covers visible text only, and programmatic labels are untested.",
     ],
   },
   {
     personaId: "slow-connection", label: "Loading & performance",
-    purpose: "Spot stuck loading states and unclear error recovery.",
+    purpose: "Find blank, stuck or slow pages, citing load times only when they were measured.",
     checks: ["Loading feedback", "Stuck spinners", "Recovery guidance"],
-    goal: "Observe visible loading, content appearance and error recovery on the approved public pages using read-only browsing. Do not repeatedly retry, submit forms, authenticate or change data. Do not claim packet capture, throttling, timing instrumentation or benchmarks; report missing measurement evidence.",
+    goal: "Observe how the approved public pages load, using read-only browsing, and hunt for slow, blank, stuck or broken states rather than confirming that the site feels fast. Visit at least three different pages through the site's own navigation, one load per page. For each page record whether it reached readable content, and cite a load time only when the harness measured and reported one; otherwise write 'unmeasured' for that page. How long a click or step took is not a load time. Never describe speed with impressions such as 'fast' or 'instant' in place of a number. Look for: blank or half-rendered pages, spinners or placeholders that never resolve, layout that jumps after content appears, and error messages that give no way to recover. For every issue quote the exact visible heading, label or sentence and name the page. Do not repeatedly retry or reload, submit forms, authenticate or change data. Do not claim packet capture, throttling, timing instrumentation of your own or benchmarks; report missing measurement evidence. If no delay or error occurred, feedback for delays and errors is untested, not met. A problem found is not_met with the specifics.",
     criteria: [
-      "Observed navigation gives understandable loading feedback rather than an unexplained blank state.",
-      "Visible loading indicators resolve into content or an explanatory error during the observed journey.",
-      "Any observed loading or connection error gives clear recovery guidance; absent error states and timing evidence are reported as untested.",
+      "Every visited page reached readable content (a heading plus body text) rather than staying blank, partial or stuck; list each page visited and cite the harness's measured load time per page when provided, otherwise report timing as unmeasured. Name any page that did not reach readable content and quote what was shown instead.",
+      "No visited page took longer than 3 seconds to load, judged only by the page timing (DOMContentLoaded or load) or the initial page-open time the harness reported; cite that timing per page and name every page over 3 seconds (any such page makes this not_met). Never judge speed from how long a click or step took, which includes harness overhead. If no such timing was provided, report timing as unmeasured and mark this inconclusive.",
+      "When a page was delayed or failed, the site showed feedback that explained what was happening and how to recover; quote the message and name the page. If no delay or error occurred during the visit, report this as untested and mark it inconclusive; the absence of a problem never makes this met.",
     ],
   },
   {
     personaId: "non-native-reader", label: "Content clarity",
-    purpose: "Check whether the words and examples explain the purpose.",
+    purpose: "Find jargon openers, unexplained terms and instructions a newcomer cannot follow.",
     checks: ["Plain language", "Useful examples", "Clear explanations"],
-    goal: "Read the approved public pages as a non-native reader. Observe whether wording, examples and explanations make the purpose understandable. Use read-only browsing; do not submit forms, authenticate or change data. Distinguish observed confusing wording from personal preferences.",
+    goal: "Read the approved public pages as a non-native reader who is new to the subject, using read-only browsing, and hunt for wording that would stop such a reader rather than confirming that the text is well written. Visit at least three different pages. On each page read the opening sentence, the headings and any instructions. Look for: openings that start with jargon or history instead of saying what the page is for, terms and abbreviations used without an explanation or example on that page, and instructions that assume prior knowledge or skip a step. For every issue quote the exact visible label, heading or sentence and name the page. Distinguish observed confusing wording from personal preferences: report a term only when the page itself gives no explanation. Do not submit forms, authenticate or change data. A criterion is met only when you checked it on at least three pages and quoted what you read; a problem found is not_met with the specifics; anything you did not read is inconclusive.",
     criteria: [
-      "The visible page explains its purpose in understandable language.",
-      "Important terms have helpful explanations or concrete examples.",
-      "Visible instructions make the next step understandable without unexplained jargon.",
+      "The opening sentence of each visited page says in plain words what the page is for; quote the opening sentence of each page and name the page. Any page that opens with jargon, an abbreviation or background instead of its purpose makes this not_met.",
+      "Terms and abbreviations a newcomer would not know are explained or shown with an example on the page where they appear; list each unexplained term met, with the page it appeared on. If none was found, quote one term together with its on-page explanation, or state that no specialist terms were seen.",
+      "Instructions can be followed by a newcomer without outside knowledge, each step saying what to do and where; quote any instruction that assumed prior knowledge, skipped a step or pointed to something not visible, with its page. If no instructions were seen on the visited pages, report that and mark this inconclusive.",
     ],
   },
 ];
@@ -83,11 +83,11 @@ export const managedIanaDemoAssignments: readonly Assignment[] = managedSpeciali
   criteria: demoMissions[index].criteria,
 }));
 
-export const managedDefaultGoal = "Review the approved public pages from this persona's perspective using read-only browsing. Do not submit forms, authenticate, enter sensitive data, purchase or change data. Report observed friction and limitations, not untested claims.";
+export const managedDefaultGoal = "Review the approved public pages from this persona's perspective using read-only browsing, and hunt for problems rather than confirming that the site works. Visit at least three different pages. For every issue quote the exact visible label, heading or sentence and name the page. If a link leaves the approved site, record its label and destination host and do not click it again. Do not submit forms, authenticate, enter sensitive data, purchase or change data. Report observed problems and limitations, not untested claims: a problem found is not_met with the specifics, and anything unobserved is inconclusive.";
 export const managedDefaultCriteria = [
-  "The page purpose and next steps are understandable.",
-  "Read-only navigation provides clear labels and feedback.",
-  "Observed obstacles are described concretely and untested areas are marked as unknown.",
+  "Each visited page makes its purpose and next step clear to this persona; quote the heading or sentence that does so for each page, and name any page where it was missing.",
+  "Navigation labels led where they promised on at least three pages; name any label that did not, with the page it appeared on and where it led instead.",
+  "No visited page showed an error, an empty state or a link that led nowhere; name any that did with the quoted text and its page. If fewer than three pages were visited, report that and mark this inconclusive.",
 ];
 
 export function managedSpecialistForAssignment(assignment: Assignment) {

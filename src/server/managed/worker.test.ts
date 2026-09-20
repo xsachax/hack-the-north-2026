@@ -55,6 +55,20 @@ describe("managed worker owns durable lifecycle", () => {
       progress: [{ text: "browser navigation" }], modelCalls: null,
     });
   });
+  it("forwards the live view to the store under the executing claim", async () => {
+    create();
+    const claim = repository.managed.claim("worker", repository.policy)!;
+    const liveView = vi.spyOn(repository.managed, "liveView").mockImplementation(() => {});
+    const liveViewUrl = "https://www.browserbase.com/devtools-fullscreen/inspector.html?navbar=false";
+    const execute = vi.fn(async (_claim, journal) => {
+      journal.dispatch({ agentId: options.agentId, task: "offline task" });
+      journal.identity({ providerRunId: "provider-run", providerSessionId: randomUUID() });
+      journal.liveView({ liveViewUrl });
+      return success;
+    });
+    await new ManagedWorker(repository, repository.policy, options, execute).executeClaim(claim, new AbortController().signal);
+    expect(liveView).toHaveBeenCalledExactlyOnceWith(claim, { liveViewUrl });
+  });
   it("fences cancellation but still permits independent cleanup", async () => {
     const run = create();
     const claim = repository.managed.claim("worker", repository.policy)!;

@@ -23,7 +23,7 @@ describe("persona foundation", () => {
     expect(() => remainingSteps(steps, 6, 12)).toThrow();
   });
 
-  it("distinguishes infrastructure failures from bugs and friction", () => {
+  it("distinguishes infrastructure failures from bugs and usability problems", () => {
     for (const status of ["target_failed", "infrastructure_failed", "gave_up", "blocked", "limit_reached"]) {
       expect(runStatusSchema.parse(status)).toBe(status);
     }

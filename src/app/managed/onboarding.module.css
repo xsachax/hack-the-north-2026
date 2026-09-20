@@ -60,17 +60,19 @@
 .page :global(.managed-target-heading label) { font-size: 13px; color: #c9dde5; margin: 0; font-weight: 400; }
 .page :global(.managed-target-badge) { color: #bed6dd; font-size: 10px; border: 1px solid var(--line); border-radius: 999px; padding: 5px 9px; }
 .page :global(.managed-target) > input:not([type=checkbox]) {
-  padding: 12px 0;
+  margin-top: 10px;
+  padding: 12px 16px;
   min-height: 64px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
+  border: 2px solid #b3e4dc99;
+  border-radius: 14px;
+  background: #0d2533a6;
   font-size: clamp(22px, 3vw, 30px);
   letter-spacing: -.6px;
   color: #f1fbff;
 }
 .page :global(.managed-target) > input::placeholder { color: #7c9aa9; }
-.page :global(.managed-target) > input:focus-visible { outline-offset: 2px; border-radius: 6px; }
+.page :global(.managed-target) > input:hover { border-color: #b3e4dc; }
+.page :global(.managed-target) > input:focus-visible { border-color: #d8fff6; outline-offset: 2px; }
 .page :global(.managed-target-toolbar) { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 20px; }
 .page :global(.managed-site-picker) { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; min-width: 0; max-width: 100%; margin: 0; color: #b8ccd5; font-size: 11px; font-weight: 400; }
 .page :global(.managed-site-picker select) { width: auto; min-width: 0; max-width: min(100%, 320px); min-height: 38px; border: 1px solid #afdfdf33; border-radius: 8px; background: #173344; padding: 8px 28px 8px 10px; font-size: 12px; color: #e4f2f4; }

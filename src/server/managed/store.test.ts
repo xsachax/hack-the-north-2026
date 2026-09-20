@@ -221,6 +221,77 @@ describe("managed durable store (offline)", () => {
     expect(repository.managed.view(owner, run.id, leased.id)).toEqual({ liveViewUrl: "", replayUrl: views.replayUrl });
   });
 
+  it("stores a live view only after session identity and never exposes it in the run payload", () => {
+    const run = create();
+    const leased = claim();
+    dispatch(leased);
+    expect(() => repository.managed.liveView(leased, { liveViewUrl: views.liveViewUrl })).toThrow("managed_identity_missing");
+    repository.managed.identity(leased, { providerRunId: "private-run" });
+    expect(() => repository.managed.liveView(leased, { liveViewUrl: views.liveViewUrl })).toThrow("managed_identity_missing");
+    repository.managed.identity(leased, { providerRunId: "private-run", providerSessionId: "private-session" });
+    expect(() => repository.managed.liveView(leased, { liveViewUrl: "https://browserbase.com.evil.example/live" })).toThrow();
+    expect(() => repository.managed.liveView(leased, { liveViewUrl: "http://www.browserbase.com/live" })).toThrow();
+    repository.managed.liveView(leased, { liveViewUrl: views.liveViewUrl });
+    expect(inspect().prepare("SELECT live_view_url FROM managed_attempts WHERE id=?").get(leased.id))
+      .toEqual({ live_view_url: views.liveViewUrl });
+    const encoded = JSON.stringify(repository.managed.get(owner, run.id));
+    expect(encoded).not.toContain(views.liveViewUrl);
+    expect(encoded).not.toContain("private-view");
+  });
+
+  it("serves the live view only while running, leased, uncancelled and unfinished", () => {
+    const live = (failure?: Partial<ManagedOutcome>, gate?: (runId: string) => void) => {
+      const run = create();
+      const leased = claim();
+      const unavailable = [{ attemptId: leased.id, available: false, liveViewUrl: null }];
+      dispatch(leased);
+      repository.managed.identity(leased, { providerRunId: `run-${run.id}`, providerSessionId: `session-${run.id}` });
+      expect(repository.managed.sessions(owner, run.id)).toEqual(unavailable);
+      repository.managed.liveView(leased, { liveViewUrl: views.liveViewUrl });
+      expect(repository.managed.sessions(owner, run.id)).toEqual(unavailable);
+      repository.managed.progress(leased, { id: "status", kind: "status", text: "RUNNING" });
+      expect(repository.managed.sessions(owner, run.id))
+        .toEqual([{ attemptId: leased.id, available: true, liveViewUrl: views.liveViewUrl }]);
+      expect(() => repository.managed.sessions(other, run.id))
+        .toThrow(expect.objectContaining({ code: "not_found", status: 404 }));
+      if (gate) gate(run.id);
+      else {
+        repository.managed.finish(leased, outcome(failure));
+        expect(inspect().prepare("SELECT live_view_url FROM managed_attempts WHERE id=?").get(leased.id))
+          .toEqual({ live_view_url: "" });
+      }
+      expect(repository.managed.sessions(owner, run.id)).toEqual(unavailable);
+      if (gate) repository.managed.finish(claimOrSame(leased), outcome());
+    };
+    const claimOrSame = (leased: ManagedClaim) => {
+      try { repository.managed.assertLease(leased, true); return leased; } catch { return claim(leased.workerId); }
+    };
+    live();
+    live({ status: "failed", cleanup: "unconfirmed" });
+    live(undefined, (runId) => { repository.managed.cancel(owner, runId); });
+    live(undefined, () => { time += repository.policy.leaseMs + 1; });
+  });
+
+  it("requires RUNNING status before a stored live view becomes available", () => {
+    const run = create();
+    const leased = claim();
+    dispatch(leased);
+    repository.managed.identity(leased, { providerRunId: "private-run", providerSessionId: "private-session" });
+    repository.managed.progress(leased, { id: "status", kind: "status", text: "RUNNING" });
+    expect(repository.managed.sessions(owner, run.id)).toEqual([{ attemptId: leased.id, available: false, liveViewUrl: null }]);
+    repository.managed.liveView(leased, { liveViewUrl: views.liveViewUrl });
+    expect(repository.managed.sessions(owner, run.id)[0]).toEqual({ attemptId: leased.id, available: true, liveViewUrl: views.liveViewUrl });
+  });
+
+  it("returns one session item per attempt in run order", () => {
+    const run = create(owner, 3);
+    expect(repository.managed.sessions(owner, run.id)).toEqual(run.attempts.map((attempt) => ({
+      attemptId: attempt.id, available: false, liveViewUrl: null,
+    })));
+    expect(() => repository.managed.sessions(owner, randomUUID()))
+      .toThrow(expect.objectContaining({ code: "not_found", status: 404 }));
+  });
+
   it("lists only the newest thirty owner runs and survives reopen", () => {
     const ids = Array.from({ length: 32 }, () => create().id);
     create(other);
@@ -447,6 +518,7 @@ describe("managed durable store (offline)", () => {
       () => repository.managed.identity(first, { providerRunId: "stable-run" }),
       () => repository.managed.progress(first, { id: "stale", kind: "text", text: "stale" }),
       () => repository.managed.sessionView(first, views),
+      () => repository.managed.liveView(first, { liveViewUrl: views.liveViewUrl }),
       () => repository.managed.finish(first, outcome()),
     ];
     for (const write of stale) expect(write).toThrow("managed_lease_lost");

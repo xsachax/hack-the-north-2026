@@ -26,6 +26,26 @@ endpoint; no SDK private mutation or vendor rewrite is used. Requests retain the
 same owner isolation, immutable objectives and shared reservation ceiling as
 the original worker, in separate managed tables.
 
+`MANAGED_ENGINE=sessions` swaps only the provider behind that runner. Instead of
+an Agents-API run, `src/server/managed/session-provider.ts` launches an ordinary
+Browserbase session and runs our own bounded Stagehand `extract`/`act` loop
+(plus Tab presses and two read-only page probes) and a final report extraction, so it is expected to consume browser time plus
+model-gateway inference instead of Agents-API runs; gateway billing/quota for
+this account is unverified until a paid run. The runner still validates run/session identity,
+publishes the real live view once and independently retrieves the real session
+before claiming closure. Scope and read-only behaviour keep the same
+un-enforced stance: prompts, a click-label keyword guard and a best-effort URL
+check after each action (a click that opens a new tab is closed and switched
+back to the original tab), **not confinement**. No model report is written
+from a final page outside the declared scope. Runs exist only in the worker's
+memory, so a worker crash mid-run leaves the attempt for fenced
+recovery/quarantine rather than rediscovery. Model calls stay unknown. The
+result is a model-authored report, criteria rebuilt in code against the exact
+supplied strings. The wall's provider wording still says Browserbase-managed
+(known copy limitation). Status: offline-tested with fakes only; hosted
+behaviour is unproved until an approved paid run. See the
+[worker runbook](WORKER.md).
+
 The managed launch page lets an authenticated owner prepare objectives and save
 custom personas while execution is disabled. Only launch is operator-gated;
 editing a persona never allocates a browser.
@@ -56,6 +76,21 @@ as evidence of a running browser. Provider status is persisted as received.
 Elapsed time includes allocation and cleanup and freezes at settlement; it is
 separate from independently measured browser usage. Historical missing
 timestamps stay unavailable. Results and cleanup are displayed independently.
+
+The managed wall now opens a window for every agent automatically. After
+session identity validation and a provider `RUNNING` status, the worker performs
+exactly one `sessions.debug` metadata read per attempt. It is never retried;
+failure is non-fatal and recorded as `managed_live_view_unavailable`. The link
+is served only by the owner-only `GET /managed-runs/:id/sessions` route while
+the attempt is running, leased and not cancelled, and is cleared at settlement.
+It never appears in run, report or progress payloads. The wall renders it in an
+inert, sandboxed iframe with `readOnly=true` and `navbar=false`. That is
+pointer-blocking in our page, **not a provider-enforced read-only capability**,
+and it is not managed takeover. This supersedes the earlier "no live control
+URL" stance for the managed path only; the native path is unchanged. Status:
+offline-verified only. Hosted live-view rendering for Agents-API sessions is
+unproved until an approved rehearsal. Surfer sprites, speech bubbles and window
+chrome are presentation, not execution evidence.
 
 The explicitly authorized local five-agent demo uses a 60-second operational
 allowance (not a provider TTL), global and owner concurrency five, and a bounded

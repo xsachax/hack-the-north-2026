@@ -61,6 +61,13 @@ Lifetime reservations are not refunded after failures or early closure.
 Lease fencing and cancellation surround provider awaits; independently retrieved
 Browserbase session `COMPLETED` is necessary for confirmed cleanup.
 
+For the managed wall's live windows the worker makes one extra `sessions.debug`
+metadata read per attempt. It allocates nothing and adds no browser-seconds or
+reservations. It is attempted once per execution, never retried and never on
+recovery claims; failure is recorded as `managed_live_view_unavailable` and does
+not fail the attempt. Live-view URLs are access-bearing: never put them in logs,
+PR text, analytics, reports or browser storage.
+
 `SESSION_TIMEOUT_SECONDS` is an **operational stop deadline**, not a provider
 hard TTL in managed mode. The Agents API exposes neither a hard model-call cap
 nor a way to disable its built-in tools. Existing `MAX_MODEL_CALLS_PER_PERSONA`
@@ -69,6 +76,81 @@ process death can outlive the stop deadline; retained reservations prevent
 replacement work, but cannot themselves stop a remote agent. Record missing
 usage as unknown and reconcile it. Read-only/scope prompts are not network
 confinement; only approved public sites without secrets are eligible.
+
+### `MANAGED_ENGINE=sessions` (browser-time engine)
+
+`MANAGED_ENGINE` defaults to `agents`; any value other than `agents` or
+`sessions` stops the worker with `managed_engine_invalid`. With `sessions` the
+worker logs `managed_engine_sessions` and keeps the same managed queue, runner,
+store, wall and live windows, but replaces the Agents-API run with
+`src/server/managed/session-provider.ts`: the worker launches one ordinary
+Browserbase session per attempt (`keepAlive: false`, no proxies, provider
+timeout `max(60, min(300, SESSION_TIMEOUT_SECONDS))`) and drives it with a short
+Stagehand `extract`/`act` loop (default six steps, fewer when time runs out)
+plus one report extraction (two when the first fails and time remains) through
+Browserbase's model gateway. The loop may
+also press the Tab key (three presses per tab step; no other key is ever
+pressed) and run fixed read-only `page.evaluate` expressions in the target
+page (Navigation Timing, and the focused element's tag, text, outline and
+box-shadow); their output reaches the model as `engineFacts`. A wall-clock time
+is reported only for the initial page open, never for a click. A third fixed
+expression reads only the document's element and text counts: above 3,000
+elements or 60,000 characters Stagehand is asked to leave the page's `<table>`
+subtrees (when it has any) out of a step read, and a failed read of a page that
+was never read sends the loop back to the last readable page (bounded to 10 s;
+two failed reads in a row end browsing). The report is written from the loop's
+notes (`stepsSoFar` and `engineFacts`); a fourth fixed expression picks a small
+rendered element (`h1`, `h2`, `h3`, `p` or `a`) and Stagehand is asked to scope
+the page down to it, best effort only: Stagehand reads the whole page when it
+cannot resolve that element. The report is retried at most once; when no model report exists the result returns the
+recorded observations and harness facts in the summary while every criterion
+stays `inconclusive`. It is expected to consume browser time
+plus model-gateway inference instead of Agents-API runs; gateway billing/quota
+for this account is unverified until a paid run. Only the Browserbase key is
+used.
+`BROWSERBASE_MANAGED_AGENT_ID` is still required by admission but is only an
+echoed label in this mode; no provider Agent is contacted.
+
+Only `npm run worker` (which loads `.env.local`) honours the switch: the
+packaged release runtime does not forward `MANAGED_ENGINE` and stays on the
+agents engine. The scope check is exact-origin, so launch against the origin
+the site actually serves (for Browserbase, `https://www.browserbase.com/` with
+that origin in `MANAGED_AGENT_ALLOWED_ORIGINS`); a bare domain that redirects to
+`www.` lands outside the declared scope and yields an all-inconclusive result
+with no exploration. Keep `SESSION_TIMEOUT_SECONDS` at 120 or higher: exploring
+stops at 55% and the report at 80% of it. An engine failure logs only
+`managed_session_engine_error:<stage>:<error class>:<http status>` and shows
+"The browser session failed during <stage>." on the wall; messages, keys and
+URLs are never logged.
+
+Limits, stated plainly:
+
+- Scope and read-only behaviour remain **prompts plus best-effort checks**: a
+  keyword guard on the proposed click label and a URL check after each action
+  that navigates back to the last in-scope page. A click that opens a new tab
+  is closed and switched back to the original tab. Neither is confinement; an
+  out-of-scope page can load before the check runs, and Stagehand's `act` picks
+  its own method for a click instruction. When the model says it is done before
+  three actions, the loop scrolls instead (no model call) so the page is looked
+  at. No model report is written from a final page outside the declared scope. Every result carries that
+  limitation.
+- Runs live only in the worker's memory. A worker crash mid-run cannot be
+  rediscovered; the dispatched attempt stays for fenced recovery/quarantine and
+  the session ends at its provider timeout. Never start a replacement.
+- Cancel, deadline and shutdown reject the engine's in-flight awaits directly
+  (closing the browser does not settle Stagehand calls), then close. A stop
+  that lands during session launch itself still waits for launch (30 s bound)
+  and can end `cleanup_required`.
+- Session closure is still proved only by the independently retrieved real
+  session reaching `COMPLETED`; the engine reports a terminal run status only
+  after its own close attempts.
+- Model calls are still reported as unknown, and `MAX_MODEL_CALLS_PER_PERSONA`
+  is not enforced here either (the loop is bounded by steps and time instead).
+- The wall's provider wording still says Browserbase-managed (known copy
+  limitation).
+- Status: offline-tested with injected fakes only. Hosted behaviour (session
+  launch, Stagehand startup, gateway inference, live view) is unproved until an
+  approved paid run.
 
 The source/package/ledger-bound managed proof uses the **existing** authoritative
 ledger and fresh explicit approval. Native failures already reserved 900 of the

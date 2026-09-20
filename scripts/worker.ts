@@ -5,7 +5,8 @@ import { readConfig } from "../src/lib/config";
 import { readWorkerPolicy, workerExecutionModes } from "../src/server/worker/config";
 import { WorkerRepository } from "../src/server/worker/repository";
 import { DurableWorker, productionDependencies } from "../src/server/worker/runtime";
-import { requireManagedWorker } from "../src/server/managed/config";
+import { managedEngine, requireManagedWorker } from "../src/server/managed/config";
+import { createSessionManagedProvider } from "../src/server/managed/session-provider";
 import { ManagedWorker } from "../src/server/managed/worker";
 
 nextEnv.loadEnvConfig(process.cwd());
@@ -18,8 +19,21 @@ async function main() {
     throw new Error("worker_requires_explicit_paid_confirmation");
   }
   const policy = readWorkerPolicy(process.env);
-  const managedOptions = managed ? requireManagedWorker(process.env) : undefined;
+  const managedBase = managed ? requireManagedWorker(process.env) : undefined;
   const config = { ...readConfig(process.env), SESSION_TIMEOUT_SECONDS: policy.sessionSeconds };
+  // One shared in-memory engine: its runs must outlive individual claims within this process.
+  const managedOptions = managedBase && managedEngine(process.env) === "sessions" ? {
+    ...managedBase,
+    provider: createSessionManagedProvider({
+      apiKey: managedBase.apiKey, projectId: managedBase.projectId,
+      modelName: config.STAGEHAND_MODEL, runSeconds: policy.sessionSeconds,
+    }),
+  } : managedBase;
+  if (managedOptions && "provider" in managedOptions) {
+    console.log("managed_engine_sessions");
+    // A rejection leaking from a closed browser connection must not kill every in-flight agent.
+    process.on("unhandledRejection", () => console.error("worker_unhandled_rejection"));
+  }
   const port = z.coerce.number().int().min(1).max(65535).parse(process.env.FIXTURE_PORT ?? 4321);
   const shutdownMs = z.coerce.number().int().min(10000).max(120000).parse(process.env.WORKER_SHUTDOWN_MS ?? 60000);
   if (modes.controlled) {

@@ -64,3 +64,19 @@ export const managedCapabilitiesSchema = z.strictObject({
   policy: z.literal(MANAGED_EXECUTION_POLICY), notice: z.string(),
 });
 export type ManagedCapabilities = z.infer<typeof managedCapabilitiesSchema>;
+
+/** Access-bearing provider link: HTTPS on browserbase.com (or a subdomain), no credentials, no explicit port. */
+export const browserbaseUrlSchema = z.string().max(8192).refine((value) => {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password && !url.port
+      && (url.hostname === "browserbase.com" || url.hostname.endsWith(".browserbase.com"));
+  } catch { return false; }
+}, "The provider viewer URL is not allowed.");
+export const managedSessionsSchema = z.strictObject({
+  items: z.array(z.strictObject({
+    attemptId: idSchema, available: z.boolean(), liveViewUrl: browserbaseUrlSchema.nullable(),
+  })).max(8),
+});
+export type ManagedSessions = z.infer<typeof managedSessionsSchema>;
+export type ManagedSessionView = ManagedSessions["items"][number];

@@ -202,7 +202,7 @@ export function compareReports(before: ComparisonSource, after: ComparisonSource
       "Only selected immutable parent assignments are compared. Other parent attempts are outside this rerun cohort.",
       "All five criterion statuses and milestone/current semantics are preserved. Unknown, cancelled, infrastructure-failed or unsettled outcomes never establish a fix.",
       "A missing finding is not a fix. Confirmation requires actual comparable persisted observations, not only a completed run.",
-      "Diagnostics, performance signals and subjective friction remain separate from trusted functional defects and unmet criteria.",
+      "Diagnostics, performance signals and subjective usability problems remain separate from trusted functional defects and unmet criteria.",
       "Known-page identities use original private source context. Only opaque versioned signatures leave the server.",
       "Human-assisted attempts are explicitly marked and excluded from agent-only confirmation, even after control returns to the agent.",
     ],

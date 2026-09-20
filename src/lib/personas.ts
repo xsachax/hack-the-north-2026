@@ -33,7 +33,7 @@ export const personaTemplates = [
   {
     id: "ux-review", label: "UX and usability",
     profile: {
-      name: "UX reviewer", character: "Follows the assigned journey as a first-time visitor, noting unclear labels, navigation friction, confusing hierarchy, missing feedback and obstacles. Grounds recommendations in what was actually observed, without claiming a complete accessibility audit.",
+      name: "UX reviewer", character: "Follows the assigned journey as a first-time visitor, noting unclear labels, navigation problems, confusing hierarchy, missing feedback and obstacles. Grounds recommendations in what was actually observed, without claiming a complete accessibility audit.",
       device: "desktop", techComfort: "medium", patienceSteps: 16, readingStyle: "careful",
       quirks: ["Explains where the next step is unclear", "Checks consistency of labels and feedback", "Separates usability observations from personal preferences"],
       worries: ["Getting lost", "Unclear language", "Missing feedback"],

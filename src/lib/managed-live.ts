@@ -1,4 +1,4 @@
-import type { ManagedAttempt } from "./managed-contracts";
+import type { ManagedAttempt, ManagedSessionView } from "./managed-contracts";
 
 export function managedLiveSummary(attempt: ManagedAttempt, now: number) {
   const active = ["running", "cleanup_required"].includes(attempt.status);
@@ -21,4 +21,16 @@ export function managedLiveSummary(attempt: ManagedAttempt, now: number) {
       ? `${attempt.result.criteria.filter((criterion) => criterion.status === "met").length} met / ${attempt.result.criteria.length} reported`
       : attempt.error ? "See recorded error" : "Awaiting report",
   };
+}
+
+export type ManagedWindowState = "queued" | "starting" | "live" | "live-unavailable" | "hidden" | "finished";
+/** Pure window state: a live view needs a RUNNING provider and an available, owner-served session link. */
+export function managedWindowState(
+  attempt: ManagedAttempt, session: ManagedSessionView | undefined, hidden: boolean,
+): ManagedWindowState {
+  if (["completed", "failed", "cancelled", "cleanup_required"].includes(attempt.status)) return "finished";
+  if (hidden || attempt.cancelRequested) return "hidden";
+  if (attempt.status === "queued") return "queued";
+  if (attempt.providerStatus?.toUpperCase() !== "RUNNING") return "starting";
+  return session?.available && session.liveViewUrl ? "live" : "live-unavailable";
 }

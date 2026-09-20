@@ -262,7 +262,7 @@ export function ManagedLaunch() {
     <header className="managed-welcome">
       <WaveMark />
       <p className="eyebrow">A FRESH SET OF EYES. A WHOLE NEW WAVE.</p>
-      <h1>Make waves. <span>Find friction.</span></h1>
+      <h1>Make waves. <span>Find what breaks.</span></h1>
       <p>Send a crew of AI testers surfing through your website.</p>
     </header>
     <form className="managed-composer" onSubmit={submit} noValidate>
@@ -292,7 +292,7 @@ export function ManagedLaunch() {
             <span className="managed-target-badge">Public websites only</span>
           </div>
           <input id="managed-target-url" aria-label="Initial target URL" type="text" inputMode="url" autoComplete="url"
-            spellCheck={false} maxLength={4096} placeholder="browserbase.com" value={target}
+            spellCheck={false} maxLength={4096} placeholder="yourwebsite.com" value={target}
             onChange={(event) => chooseTarget(event.target.value)}
             onBlur={() => { if (normalizedTarget) setTarget(normalizedTarget.href); }}
             onKeyDown={(event) => { if (event.key === "Enter") event.preventDefault(); }}
