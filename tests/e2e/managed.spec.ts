@@ -32,7 +32,9 @@ function makeRun(body = defaultBody, people = profiles): ManagedRun {
   };
 }
 
-async function mockManaged(page: Page, options: { enabled?: boolean; run?: ManagedRun; lostReply?: boolean; malformedReply?: boolean; delayPoll?: number } = {}) {
+async function mockManaged(page: Page, options: {
+  enabled?: boolean; allowedOrigins?: string[]; run?: ManagedRun; lostReply?: boolean; malformedReply?: boolean; delayPoll?: number;
+} = {}) {
   let currentOwner = owner;
   let run = options.run ?? null;
   let runOwner = owner;
@@ -54,7 +56,7 @@ async function mockManaged(page: Page, options: { enabled?: boolean; run?: Manag
   const personaMutations: { method: string; persona: Persona }[] = [];
   const submissions: { body: ManagedCreate; key: string | undefined; stored: string | null; csrf: string | undefined }[] = [];
   const capabilities: ManagedCapabilities = {
-    enabled: options.enabled ?? true, allowedOrigins: ["https://example.com", "https://www.iana.org"], maxAgents: 8,
+    enabled: options.enabled ?? true, allowedOrigins: options.allowedOrigins ?? ["https://example.com", "https://www.iana.org"], maxAgents: 8,
     policy: MANAGED_EXECUTION_POLICY, notice: MANAGED_POLICY_NOTICE,
   };
   await page.route("**/*", async (route) => {
@@ -154,7 +156,6 @@ async function configure(page: Page) {
   await page.goto("/managed");
   await expect(page.getByLabel("Initial target URL")).toBeEnabled();
   await page.getByLabel("Initial target URL").fill("https://example.com/help");
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
   await advanced(page);
   await page.getByLabel("Shared goal for additional personas").fill("  Read delivery information.  ");
   await page.getByLabel("Shared criteria for additional personas (one per line, up to 6)").fill("  Delivery costs are clear. \n\n");
@@ -162,8 +163,9 @@ async function configure(page: Page) {
 }
 
 async function review(page: Page) {
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Ready to make waves?" })).toBeFocused();
+  const details = page.locator(".managed-mission-review");
+  if (await details.getAttribute("open") === null) await details.locator(":scope > summary").click();
+  await expect(details.locator(".onboarding-review")).toBeVisible();
 }
 
 async function createFromTemplate(page: Page, templateId: string, name: string) {
@@ -176,24 +178,41 @@ async function createFromTemplate(page: Page, templateId: string, name: string) 
 }
 
 for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
-  test(`role-first demo launches concrete assignments by keyboard at ${viewport.width}px`, async ({ page }, testInfo) => {
+  test(`single-panel onboarding launches concrete assignments by keyboard at ${viewport.width}px`, async ({ page }, testInfo) => {
     await page.setViewportSize(viewport);
-    const fixture = await mockManaged(page);
+    const fixture = await mockManaged(page, {
+      allowedOrigins: ["https://example.com", "https://www.iana.org", "https://www.browserbase.com", "https://browserbase.com"],
+    });
     await page.goto("/managed");
     const target = page.getByLabel("Initial target URL");
+    const approved = page.getByRole("combobox", { name: "Approved website", exact: true });
     await expect(target).toBeEnabled();
+    await expect(target).toHaveValue("https://www.browserbase.com/");
+    await expect(approved).toHaveValue("https://www.browserbase.com");
+    await expect(page.locator("form.managed-composer")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: /^(Continue|Back(?: to .*)?)$/ })).toHaveCount(0);
+    await expect(page.locator(".onboarding-progress, [aria-current=step], [role=progressbar]")).toHaveCount(0);
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Make waves. Find friction.");
+    await expect(page.getByRole("heading", { name: "Choose your crew", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Launch agents", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Launch agents", exact: true })).toBeDisabled();
     await target.fill("https://example.com/help");
     await target.press("Enter");
-    await expect(page.getByRole("heading", { name: "Choose your specialists.", exact: true })).toBeFocused();
-    await expect(target).toBeHidden();
+    await expect(target).toBeFocused();
+    await expect(target).toBeVisible();
     await expect(page.getByLabel("Shared goal for additional personas")).toBeHidden();
     await expect(page.getByLabel("Requested path prefixes (one per line)")).toBeHidden();
     await expect(page.getByRole("button", { name: "+ Create persona", exact: true })).toBeHidden();
+    await expect(page.getByRole("button", { name: "Prepare five-agent IANA demo", exact: true })).toBeHidden();
+    await expect(page.locator(".onboarding-review")).toBeHidden();
     const cards = page.locator(".managed-specialist");
     await expect(cards).toHaveCount(5);
     await expect(page.getByText("0 / 8 selected", { exact: true })).toBeVisible();
-    const body = await page.locator(".onboarding-body").boundingBox();
-    expect(body).not.toBeNull();
+    for (const specialist of managedSpecialists) {
+      await expect(page.getByLabel(`Select ${specialist.label}`, { exact: true })).not.toBeChecked();
+    }
+    const grid = await page.locator(".managed-specialist-grid").boundingBox();
+    expect(grid).not.toBeNull();
     const boxes = await cards.evaluateAll((elements) => elements.map((element) => {
       const rect = element.getBoundingClientRect();
       return { x: rect.x, y: rect.y, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height };
@@ -201,47 +220,71 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     for (const box of boxes) {
       expect(box.width).toBeGreaterThan(120);
       expect(box.height).toBeGreaterThan(65);
-      expect(box.x).toBeGreaterThanOrEqual(body!.x);
-      expect(box.right).toBeLessThanOrEqual(body!.x + body!.width);
-      expect(box.y).toBeGreaterThanOrEqual(body!.y);
-      expect(box.bottom).toBeLessThanOrEqual(body!.y + body!.height);
+      expect(box.x).toBeGreaterThanOrEqual(grid!.x);
+      expect(box.right).toBeLessThanOrEqual(grid!.x + grid!.width + 1);
+      expect(box.y).toBeGreaterThanOrEqual(grid!.y);
+      expect(box.bottom).toBeLessThanOrEqual(grid!.y + grid!.height + 1);
     }
     expect(boxes[0].right).toBeLessThanOrEqual(boxes[1].x);
-    expect(boxes[0].bottom).toBeLessThanOrEqual(boxes[2].y);
-    await page.screenshot({ path: testInfo.outputPath("specialists.png"), animations: "disabled" });
+    if (viewport.width > 800) {
+      for (const [index, box] of boxes.entries()) {
+        expect(box.y).toBeCloseTo(boxes[0].y, 0);
+        expect(box.width).toBeCloseTo(boxes[0].width, 0);
+        if (index) expect(boxes[index - 1].right).toBeLessThanOrEqual(box.x);
+      }
+    } else {
+      expect(boxes[0].y).toBeCloseTo(boxes[1].y, 0);
+      expect(boxes[2].y).toBeCloseTo(boxes[3].y, 0);
+      expect(boxes[0].bottom).toBeLessThanOrEqual(boxes[2].y);
+      expect(boxes[2].right).toBeLessThanOrEqual(boxes[3].x);
+      expect(boxes[2].bottom).toBeLessThanOrEqual(boxes[4].y);
+      expect(boxes[4].x).toBeCloseTo(grid!.x, 0);
+      expect(boxes[4].width).toBeCloseTo(grid!.width, 0);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("specialists.png"), fullPage: true, animations: "disabled" });
+    await page.keyboard.press("Tab");
+    await expect(approved).toBeFocused();
     for (const [index, specialist] of managedSpecialists.entries()) {
       const checkbox = page.getByLabel(`Select ${specialist.label}`, { exact: true });
-      if (index === 0) await checkbox.focus(); else await page.keyboard.press("Tab");
+      await page.keyboard.press("Tab");
       await expect(checkbox).toBeFocused();
+      await expect(checkbox).toHaveAccessibleDescription(specialist.purpose);
       await page.keyboard.press("Space");
       await expect(checkbox).toBeChecked();
       await expect(page.getByText(`${index + 1} / 8 selected`, { exact: true })).toBeVisible();
       await expect(cards.nth(index).getByText(specialist.purpose, { exact: true })).toBeVisible();
+      await expect(cards.nth(index).locator(".managed-specialist-checks")).toHaveAttribute("data-customized", "false");
+      await expect(cards.nth(index).locator(".managed-specialist-checks")).toBeHidden();
       for (const check of specialist.checks) {
         const chip = cards.nth(index).getByText(check, { exact: true });
-        if (viewport.width > 600) await expect(chip).toBeVisible();
-        else await expect(chip).toBeHidden();
+        await expect(chip).toBeHidden();
       }
       await expect(cards.nth(index).locator(".persona-avatar")).toHaveAttribute("data-sprite-state", "idle");
       await expect.poll(() => cards.nth(index).locator("img").evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0);
     }
-    // The native details control is the only advanced stop in the primary keyboard path.
     await page.keyboard.press("Tab");
     await expect(page.getByText("Advanced: missions & personas", { exact: true })).toBeFocused();
+    await page.keyboard.press("Space");
+    await expect(page.getByLabel("Shared goal for additional personas")).toBeVisible();
+    await page.keyboard.press("Space");
+    await expect(page.getByLabel("Shared goal for additional personas")).toBeHidden();
+    await page.keyboard.press("Tab");
+    await expect(page.getByText("Review selected missions (5)", { exact: true })).toBeFocused();
+    await expect(page.locator(".onboarding-review")).toBeHidden();
     expect(fixture.submissions).toHaveLength(0);
-    expect(await page.evaluate(() => document.documentElement.scrollHeight <= window.innerHeight)).toBe(true);
-    await page.getByRole("button", { name: "Continue", exact: true }).focus();
-    await page.keyboard.press("Enter");
-    await expect(page.getByRole("heading", { name: "Ready to make waves?" })).toBeFocused();
     const launch = page.getByRole("button", { name: "Launch 5 agents", exact: true });
-    await expect(launch).toBeEnabled();
-    await expect(page.getByRole("checkbox")).toHaveCount(0);
-    await page.getByRole("button", { name: "Back", exact: true }).click();
-    for (const specialist of managedSpecialists) await expect(page.getByLabel(`Select ${specialist.label}`, { exact: true })).toBeChecked();
-    await review(page);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-    await launch.focus();
+    await page.keyboard.press("Tab");
     await expect(launch).toBeFocused();
+    await expect(launch).toBeEnabled();
+    await expect(target).toBeVisible();
+    await expect(page.getByRole("checkbox")).toHaveCount(5);
+    for (const specialist of managedSpecialists) await expect(page.getByLabel(`Select ${specialist.label}`, { exact: true })).toBeChecked();
+    if (viewport.width < 520) {
+      expect(await page.evaluate(() => document.documentElement.scrollHeight > window.innerHeight)).toBe(true);
+      expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath("onboarding.png"), fullPage: true, animations: "disabled" });
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(/\/managed\/[a-f0-9-]+$/);
@@ -254,13 +297,269 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
   });
 }
 
+for (const enabled of [true, false]) {
+  test(`Approved website is the actual allowlist when managed execution is ${enabled ? "enabled" : "disabled"}`, async ({ page }) => {
+    const allowedOrigins = ["https://example.com", "https://www.iana.org", "https://www.browserbase.com", "https://browserbase.com"];
+    const fixture = await mockManaged(page, { enabled, allowedOrigins });
+    await page.goto("/managed");
+    const target = page.getByLabel("Initial target URL");
+    const approved = page.getByRole("combobox", { name: "Approved website", exact: true });
+    await expect(target).toBeEnabled();
+    await expect(target).toHaveValue("https://www.browserbase.com/");
+    await expect(approved).toBeEnabled();
+    expect(await approved.evaluate((select: HTMLSelectElement) => select.tagName)).toBe("SELECT");
+    const options = approved.locator("option:not([value=''])");
+    await expect(options).toHaveText(allowedOrigins.map((origin) => new URL(origin).host));
+    expect(await options.evaluateAll((elements) => elements.map((option) => (option as HTMLOptionElement).value))).toEqual(allowedOrigins);
+    await page.getByLabel("Select UI/UX", { exact: true }).check();
+    for (const origin of allowedOrigins) {
+      await approved.selectOption(origin);
+      await expect(target).toHaveValue(`${origin}/`);
+      await expect(target).toHaveAttribute("aria-invalid", "false");
+      if (enabled) await expect(page.getByRole("button", { name: "Launch 1 agent", exact: true })).toBeEnabled();
+      else await expect(page.getByRole("button", { name: "Launch 1 agent", exact: true })).toBeDisabled();
+    }
+    await advanced(page);
+    await expect(page.getByRole("button", { name: "Prepare five-agent IANA demo", exact: true })).toBeEnabled();
+    expect(fixture.submissions).toHaveLength(0);
+    expect(fixture.unexpected).toEqual([]);
+  });
+}
+
+for (const approvedBrowserbase of [null, "https://browserbase.com"]) {
+  test(`Browserbase is ${approvedBrowserbase ? "prefilled only at its approved non-www origin" : "not implicitly approved or prefilled"}`, async ({ page }) => {
+    const allowedOrigins = ["https://example.com", "https://www.iana.org", ...(approvedBrowserbase ? [approvedBrowserbase] : [])];
+    const fixture = await mockManaged(page, { allowedOrigins });
+    await page.goto("/managed");
+    const target = page.getByLabel("Initial target URL");
+    const approved = page.getByRole("combobox", { name: "Approved website", exact: true });
+    await expect(target).toBeEnabled();
+    await expect(target).toHaveValue(approvedBrowserbase ? `${approvedBrowserbase}/` : "");
+    await expect(approved).toHaveValue(approvedBrowserbase ?? "");
+    await expect(approved.locator("option[value='https://www.browserbase.com']")).toHaveCount(0);
+    await page.getByLabel("Select UI/UX", { exact: true }).check();
+    await target.fill("https://www.browserbase.com/");
+    await expect(target).toHaveAttribute("aria-invalid", "true");
+    await expect(approved).toHaveValue("");
+    await expect(page.getByRole("button", { name: "Launch 1 agent", exact: true })).toBeDisabled();
+    if (!approvedBrowserbase) {
+      await expect(approved.locator("option[value='https://browserbase.com']")).toHaveCount(0);
+      await target.fill("browserbase.com");
+      await expect(target).toHaveAttribute("aria-invalid", "true");
+      await expect(page.getByRole("button", { name: "Launch 1 agent", exact: true })).toBeDisabled();
+    }
+    expect(fixture.submissions).toHaveLength(0);
+    expect(fixture.unexpected).toEqual([]);
+  });
+}
+
+for (const normalization of ["blur", "submit"]) {
+  test(`a bare Browserbase host is canonicalized on ${normalization} before launch`, async ({ page }) => {
+    const fixture = await mockManaged(page, { allowedOrigins: ["https://example.com", "https://www.iana.org", "https://browserbase.com"] });
+    await page.goto("/managed");
+    const target = page.getByLabel("Initial target URL");
+    await expect(target).toBeEnabled();
+    await page.getByLabel("Select UI/UX", { exact: true }).check();
+    await target.fill("browserbase.com");
+    await expect(target).toHaveValue("browserbase.com");
+    await expect(target).toHaveAttribute("aria-invalid", "false");
+    await expect(page.getByRole("combobox", { name: "Approved website", exact: true })).toHaveValue("https://browserbase.com");
+    await expect(page.getByRole("button", { name: "Launch 1 agent", exact: true })).toBeEnabled();
+    expect(fixture.submissions).toHaveLength(0);
+    if (normalization === "blur") {
+      await target.press("Tab");
+      await expect(target).toHaveValue("https://browserbase.com/");
+      await page.getByRole("button", { name: "Launch 1 agent", exact: true }).click();
+    } else {
+      // Exercise submit normalization without a preceding blur.
+      await target.evaluate((input: HTMLInputElement) => input.form!.requestSubmit());
+    }
+    await expect(page).toHaveURL(/\/managed\/[a-f0-9-]+$/);
+    expect(new URL(page.url()).pathname).toBe(`/managed/${fixture.run.id}`);
+    expect(fixture.submissions).toHaveLength(1);
+    expect(fixture.submissions[0].body.scope).toEqual({
+      targetUrl: "https://browserbase.com/", pathPrefixes: ["/"], allowedSubdomains: [],
+    });
+    expect(JSON.parse(fixture.submissions[0].stored!).body).toEqual(fixture.submissions[0].body);
+    expect(fixture.unexpected).toEqual([]);
+  });
+}
+
+test("unknown, lookalike, credentialed and other unapproved origins cannot launch", async ({ page }) => {
+  const fixture = await mockManaged(page, { allowedOrigins: ["https://browserbase.com"] });
+  await page.goto("/managed");
+  const target = page.getByLabel("Initial target URL");
+  await expect(target).toBeEnabled();
+  await page.getByLabel("Select UI/UX", { exact: true }).check();
+  for (const value of [
+    "unknown.invalid",
+    "browserbase.com.attacker.invalid",
+    "https://browserbase.com@attacker.invalid/",
+    "https://guest:password@browserbase.com/",
+    "https://www.browserbase.com/",
+    "http://browserbase.com/",
+    "https://browserbase.com:8443/",
+    "ftp://browserbase.com/",
+  ]) {
+    await test.step(value, async () => {
+      await target.fill(value);
+      await target.press("Tab");
+      await expect(target).toHaveAttribute("aria-invalid", "true");
+      await expect(page.getByRole("combobox", { name: "Approved website", exact: true })).toHaveValue("");
+      await expect(page.locator(".managed-target").getByRole("alert")).toContainText("This initial target is not an exact approved HTTP(S) origin.");
+      await expect(page.getByRole("button", { name: "Launch 1 agent", exact: true })).toBeDisabled();
+      expect(fixture.submissions).toHaveLength(0);
+    });
+  }
+  await page.getByRole("combobox", { name: "Approved website", exact: true }).selectOption("https://browserbase.com");
+  await expect(target).toHaveValue("https://browserbase.com/");
+  await expect(page.locator(".managed-target").getByRole("alert")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Launch 1 agent", exact: true })).toBeEnabled();
+  expect(fixture.unexpected).toEqual([]);
+});
+
+test("an empty approved list disables the website picker and launch with an actionable message", async ({ page }) => {
+  const fixture = await mockManaged(page, { allowedOrigins: [] });
+  await page.goto("/managed");
+  const target = page.getByLabel("Initial target URL");
+  const approved = page.getByRole("combobox", { name: "Approved website", exact: true });
+  await expect(target).toBeEnabled();
+  await expect(target).toHaveValue("");
+  await expect(approved).toBeDisabled();
+  await expect(approved.locator("option:not([value=''])")).toHaveCount(0);
+  await expect(page.getByText("No websites approved yet. Ask your operator to add one.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("status")).toContainText("has no approved initial origins");
+  await page.getByLabel("Select UI/UX", { exact: true }).check();
+  await target.fill("browserbase.com");
+  await expect(page.getByRole("button", { name: "Launch 1 agent", exact: true })).toBeDisabled();
+  await advanced(page);
+  await expect(page.getByRole("button", { name: "Prepare five-agent IANA demo", exact: true })).toHaveCount(0);
+  expect(fixture.submissions).toHaveLength(0);
+  expect(fixture.unexpected).toEqual([]);
+});
+
+test("Enter in the target URL never submits even with a launch-ready crew", async ({ page }) => {
+  const fixture = await mockManaged(page, { allowedOrigins: ["https://browserbase.com"] });
+  await page.goto("/managed");
+  const target = page.getByLabel("Initial target URL");
+  await expect(target).toBeEnabled();
+  await page.getByLabel("Select Accessibility", { exact: true }).check();
+  for (const value of ["browserbase.com", "https://browserbase.com/"]) {
+    await target.fill(value);
+    await expect(page.getByRole("button", { name: "Launch 1 agent", exact: true })).toBeEnabled();
+    await target.press("Enter");
+    await expect(target).toBeFocused();
+    await expect(target).toBeEnabled();
+    await expect(target).toHaveValue(value);
+    await expect(page).toHaveURL(/\/managed$/);
+    expect(await page.evaluate((key) => sessionStorage.getItem(key), pendingKey())).toBeNull();
+    expect(fixture.submissions).toHaveLength(0);
+  }
+  await page.getByRole("button", { name: "Launch 1 agent", exact: true }).click();
+  await expect(page).toHaveURL(/\/managed\/[a-f0-9-]+$/);
+  expect(fixture.submissions).toHaveLength(1);
+  expect(fixture.unexpected).toEqual([]);
+});
+
+test("onboarding controls fit narrow, tablet and desktop widths without horizontal overflow", async ({ page }) => {
+  const fixture = await mockManaged(page, { allowedOrigins: ["https://www.browserbase.com", "https://www.iana.org"] });
+  await page.goto("/managed");
+  await expect(page.getByLabel("Initial target URL")).toBeEnabled();
+  await page.getByLabel("Select UI/UX", { exact: true }).check();
+  await advanced(page);
+  await page.getByText("Customize requested scope", { exact: true }).click();
+  for (const width of [320, 768, 1024]) {
+    await page.setViewportSize({ width, height: 844 });
+    const controls = page.locator(".managed-composer, #managed-target-url, .managed-site-picker select, .managed-specialist, .managed-advanced textarea:visible, .launch-button");
+    const boxes = await controls.evaluateAll((elements) => elements.map((element) => {
+      const rect = element.getBoundingClientRect();
+      return { x: rect.x, right: rect.right, width: rect.width };
+    }));
+    for (const box of boxes) {
+      expect(box.width).toBeGreaterThan(0);
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.right).toBeLessThanOrEqual(width);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    const launch = page.getByRole("button", { name: "Launch 1 agent", exact: true });
+    await launch.scrollIntoViewIfNeeded();
+    await expect(launch).toBeInViewport();
+  }
+  expect(fixture.submissions).toHaveLength(0);
+  expect(fixture.unexpected).toEqual([]);
+});
+
+for (const switchMethod of ["website picker", "typed target"]) {
+  test(`switching from IANA to Browserbase through the ${switchMethod} resets only demo missions and scope`, async ({ page }) => {
+    const fixture = await mockManaged(page, { allowedOrigins: ["https://example.com", "https://www.iana.org", "https://browserbase.com"] });
+    await page.goto("/managed");
+    await expect(page.getByLabel("Initial target URL")).toBeEnabled();
+    await advanced(page);
+    await page.getByRole("button", { name: "Prepare five-agent IANA demo", exact: true }).click();
+    await page.getByLabel("Select Security & privacy", { exact: true }).uncheck();
+    await page.getByLabel("Select Dana", { exact: true }).check();
+    await page.getByLabel("Shared goal for additional personas").fill("Read the approved website without changing data.");
+    await page.getByLabel("Shared criteria for additional personas (one per line, up to 6)").fill("The website purpose is clear.");
+    await page.getByText("Customize requested scope", { exact: true }).click();
+    await expect(page.getByLabel("Requested path prefixes (one per line)")).toHaveValue("/domains/reserved");
+    if (switchMethod === "website picker") {
+      await page.getByRole("combobox", { name: "Approved website", exact: true }).selectOption("https://browserbase.com");
+    } else {
+      await page.getByLabel("Initial target URL").fill("browserbase.com");
+      await page.getByLabel("Initial target URL").press("Tab");
+    }
+    await expect(page.getByLabel("Initial target URL")).toHaveValue("https://browserbase.com/");
+    await expect(page.getByLabel("Requested path prefixes (one per line)")).toHaveValue("/");
+    await expect(page.getByText("5 / 8 selected", { exact: true })).toBeVisible();
+    for (const specialist of managedSpecialists) {
+      await expect(page.getByLabel(`Select ${specialist.label}`, { exact: true })).toBeChecked({ checked: specialist.personaId !== "security-minded" });
+    }
+    await expect(page.getByLabel("Select Dana", { exact: true })).toBeChecked();
+    await expect(page.getByText("Short one-page IANA mission", { exact: true })).toHaveCount(0);
+    await review(page);
+    await expect(page.locator(".managed-mission-review .onboarding-target")).toHaveText("https://browserbase.com/");
+    await expect(page.locator(".managed-mission-review")).toContainText("Requested paths: /");
+    expect(fixture.submissions).toHaveLength(0);
+    await page.getByRole("button", { name: "Launch 5 agents", exact: true }).click();
+    await expect(page).toHaveURL(/\/managed\/[a-f0-9-]+$/);
+    expect(fixture.submissions).toHaveLength(1);
+    expect(fixture.submissions[0].body.scope).toEqual({ targetUrl: "https://browserbase.com/", pathPrefixes: ["/"], allowedSubdomains: [] });
+    expect(fixture.submissions[0].body.assignments).toEqual([
+      ...managedSpecialists.filter((specialist) => specialist.personaId !== "security-minded")
+        .map(({ personaId, goal, criteria }) => ({ personaId, goal, criteria })),
+      { personaId: profiles[0].id, goal: "Read the approved website without changing data.", criteria: ["The website purpose is clear."] },
+    ]);
+    expect(fixture.unexpected).toEqual([]);
+  });
+}
+
 test("five-agent IANA shortcut prepares immutable missions without launching early", async ({ page }) => {
   const fixture = await mockManaged(page);
   await page.goto("/managed");
+  await expect(page.getByLabel("Initial target URL")).toBeEnabled();
+  await advanced(page);
   await page.getByRole("button", { name: "Prepare five-agent IANA demo" }).click();
+  await expect(page.getByLabel("Initial target URL")).toHaveValue(managedIanaDemoScope.targetUrl);
   await expect(page.getByText("5 / 8 selected", { exact: true })).toBeVisible();
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const badges = page.locator(".managed-specialist-checks[data-customized=true]");
+    await expect(badges).toHaveCount(5);
+    for (let index = 0; index < 5; index++) {
+      await expect(badges.nth(index)).toBeVisible();
+      await expect(badges.nth(index)).toHaveText("Short one-page IANA mission");
+    }
+  }
   expect(fixture.submissions).toHaveLength(0);
   await review(page);
+  await expect(page.locator(".managed-mission-review")).toContainText("Requested paths: /domains/reserved");
+  await expect(page.locator(".onboarding-review > li")).toHaveCount(5);
+  for (const [index, assignment] of managedIanaDemoAssignments.entries()) {
+    const mission = page.locator(".onboarding-review > li").nth(index);
+    await mission.getByText("Checks for this agent", { exact: true }).click();
+    await expect(mission.getByText(assignment.goal, { exact: true })).toBeVisible();
+    for (const criterion of assignment.criteria) await expect(mission.getByText(criterion, { exact: true })).toBeVisible();
+  }
   await page.getByRole("button", { name: "Launch 5 agents", exact: true }).click();
   await expect(page).toHaveURL(/\/managed\/[a-f0-9-]+$/);
   expect(fixture.submissions).toHaveLength(1);
@@ -273,16 +572,24 @@ test("advanced specialist overrides are disclosed and saved without claiming the
   const fixture = await mockManaged(page);
   await page.goto("/managed");
   await page.getByLabel("Initial target URL").fill("https://example.com/help");
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page.getByLabel("Select UI/UX", { exact: true }).check();
   await advanced(page);
   await page.getByText("Alex: goal, criteria & character", { exact: true }).click();
   await page.getByRole("textbox", { name: "Goal for Alex", exact: true }).fill("Read the public help page without changing data.");
   await page.getByLabel("Criteria for Alex (one per line, up to 6)").fill("The help heading is visible.");
   await page.getByText("Advanced: missions & personas", { exact: true }).click();
-  await expect(page.getByText("Custom mission: review goals and checks in Advanced.", { exact: true })).toBeVisible();
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const badge = page.locator(".managed-specialist").first().locator(".managed-specialist-checks");
+    await expect(badge).toHaveAttribute("data-customized", "true");
+    await expect(badge).toBeVisible();
+    await expect(badge).toHaveText("Custom mission: review goals and checks in Advanced.");
+  }
   await expect(page.locator(".managed-specialist").first().getByText("Clear next steps", { exact: true })).toHaveCount(0);
   await review(page);
+  await expect(page.locator(".onboarding-review")).toContainText("Read the public help page without changing data.");
+  await page.locator(".onboarding-review").getByText("Checks for this agent", { exact: true }).click();
+  await expect(page.locator(".onboarding-review").getByText("The help heading is visible.", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Launch 1 agent", exact: true }).click();
   await expect(page).toHaveURL(/\/managed\/[a-f0-9-]+$/);
   expect(fixture.submissions[0].body.assignments).toEqual([{
@@ -298,10 +605,8 @@ test("demo role missions survive an ambiguous reply without automatic resubmissi
   const fixture = await mockManaged(page, { lostReply: true });
   await page.goto("/managed");
   await page.getByLabel("Initial target URL").fill("https://example.com/help");
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page.getByLabel("Select Accessibility", { exact: true }).check();
   await page.getByLabel("Select Security & privacy", { exact: true }).check();
-  await review(page);
   await page.getByRole("button", { name: "Launch 2 agents", exact: true }).click();
   await expect(page.getByRole("button", { name: "Reconcile saved launch", exact: true })).toBeEnabled();
   const saved = fixture.submissions[0];
@@ -324,15 +629,12 @@ test("disabled managed execution still allows preparing cards and personas witho
   await page.goto("/managed");
   await expect(page.getByRole("status")).toContainText("Managed launch is disabled by the operator");
   await page.getByLabel("Initial target URL").fill("https://example.com/help");
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page.getByLabel("Select Security & privacy", { exact: true }).check();
-  await review(page);
   await expect(page.getByRole("button", { name: "Launch 1 agent", exact: true })).toBeDisabled();
-  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await advanced(page);
   await expect(page.getByText("Passive trust review, not penetration testing.", { exact: false })).toBeVisible();
   await page.getByLabel("Select Security & privacy", { exact: true }).uncheck();
   await createFromTemplate(page, "ux-review", "Offline UX reviewer");
-  await review(page);
   await expect(page.getByRole("button", { name: "Launch 1 agent", exact: true })).toBeDisabled();
   await page.getByText("Managed execution policy and limits", { exact: true }).click();
   await expect(page.getByText("Browserbase tools cannot be disabled.", { exact: false }).first()).toBeVisible();
@@ -346,14 +648,12 @@ test("launch accepts terms on the final action, retains approved targets and cap
   const fixture = await mockManaged(page);
   await configure(page);
   await expect(page.getByRole("checkbox", { name: /authorized|acknowledge/i })).toHaveCount(0);
-  await page.getByRole("button", { name: "Back to Website", exact: true }).click();
   await page.getByLabel("Initial target URL").fill("https://example.com.attacker.invalid/help");
-  await expect(page.getByRole("button", { name: "Continue", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Launch 1 agent", exact: true })).toBeDisabled();
   await expect(page.getByText("This initial target is not an exact approved HTTP(S) origin.")).toBeVisible();
   await page.getByLabel("Initial target URL").fill("https://example.com/help");
   await page.getByText("Customize requested scope", { exact: true }).click();
   await page.getByLabel("Requested path prefixes (one per line)").fill("/help\n/delivery");
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
   for (const persona of profiles.slice(1, 8)) await page.getByLabel(`Select ${persona.name}`, { exact: true }).check();
   await expect(page.getByText("8 / 8 selected")).toBeVisible();
   await expect(page.getByLabel("Select Robin", { exact: true })).toBeDisabled();
@@ -362,7 +662,9 @@ test("launch accepts terms on the final action, retains approved targets and cap
   await expect(page.getByLabel("Select Security & privacy", { exact: true })).toBeEnabled();
   await page.getByLabel("Select Dana", { exact: true }).check();
   await review(page);
-  await expect(page.getByRole("checkbox")).toHaveCount(0);
+  await expect(page.locator(".onboarding-review > li")).toHaveCount(8);
+  await expect(page.locator(".managed-mission-review")).toContainText("Requested paths: /help, /delivery");
+  await expect(page.getByLabel("Select Dana", { exact: true })).toBeChecked();
   expect(fixture.submissions).toHaveLength(0);
   await page.getByRole("button", { name: "Launch 8 agents", exact: true }).click();
   await expect(page).toHaveURL(/\/managed\/[a-f0-9-]+$/);
@@ -384,7 +686,6 @@ test("launch accepts terms on the final action, retains approved targets and cap
 test("a lost launch reply survives refresh and only explicitly reconciles the same body and key", async ({ page }) => {
   const fixture = await mockManaged(page, { lostReply: true });
   await configure(page);
-  await review(page);
   await page.getByRole("button", { name: "Launch 1 agent", exact: true }).click();
   await expect(page.getByRole("button", { name: "Reconcile saved launch", exact: true })).toBeEnabled();
   await expect(page.getByLabel("Shared goal for additional personas")).toBeDisabled();
@@ -404,7 +705,6 @@ test("a lost launch reply survives refresh and only explicitly reconciles the sa
 test("malformed success responses keep the request locked until deliberate discard", async ({ page }) => {
   const fixture = await mockManaged(page, { malformedReply: true });
   await configure(page);
-  await review(page);
   await page.getByRole("button", { name: "Launch 1 agent", exact: true }).click();
   await expect(page.getByRole("button", { name: "Reconcile saved launch", exact: true })).toBeEnabled();
   await expect(page.getByLabel("Initial target URL")).toBeDisabled();
@@ -419,7 +719,6 @@ test("malformed success responses keep the request locked until deliberate disca
 test("a different owner never reuses a pending launch or sees the previous owner's saved runs", async ({ page }) => {
   const fixture = await mockManaged(page, { lostReply: true });
   await configure(page);
-  await review(page);
   await page.getByRole("button", { name: "Launch 1 agent", exact: true }).click();
   await expect(page.getByRole("button", { name: "Reconcile saved launch", exact: true })).toBeEnabled();
   fixture.setOwner(nextOwner);
@@ -443,10 +742,53 @@ test("unavailable tab storage prevents submission before any paid request", asyn
     };
   });
   await configure(page);
-  await review(page);
   await page.getByRole("button", { name: "Launch 1 agent", exact: true }).click();
   await expect(page.locator(".error[role=alert]")).toContainText("Nothing was submitted");
   await expect(page.getByLabel("Initial target URL")).toBeDisabled();
+  expect(fixture.submissions).toHaveLength(0);
+  expect(fixture.unexpected).toEqual([]);
+});
+
+test("the same-panel persona editor restores the original form DOM and unsaved mission and scope", async ({ page }) => {
+  const fixture = await mockManaged(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await configure(page);
+  await page.getByText("Customize requested scope", { exact: true }).click();
+  await page.getByLabel("Requested path prefixes (one per line)").fill("/help\n/delivery");
+  await page.getByText("Dana: goal, criteria & character", { exact: true }).click();
+  await page.getByRole("textbox", { name: "Goal for Dana", exact: true }).fill("Read delivery information without changing data.");
+  await page.getByLabel("Criteria for Dana (one per line, up to 6)").fill("Delivery costs are clear.");
+  await review(page);
+  const form = await page.locator("form.managed-composer").elementHandle();
+  expect(form).not.toBeNull();
+  await page.getByRole("button", { name: "+ Create persona", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Managed persona editor", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Initial target URL")).toBeHidden();
+  await expect(page.getByLabel("Name", { exact: true })).toBeFocused();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.locator("form form")).toHaveCount(0);
+  expect(await form!.evaluate((element) => element.isConnected)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.getByLabel("Name", { exact: true }).fill("Discard this draft");
+  await page.getByRole("button", { name: "Close editor", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("region", { name: "Managed persona editor", exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Initial target URL")).toHaveValue("https://example.com/help");
+  await expect(page.getByLabel("Requested path prefixes (one per line)")).toBeVisible();
+  await expect(page.getByLabel("Requested path prefixes (one per line)")).toHaveValue("/help\n/delivery");
+  await expect(page.getByRole("textbox", { name: "Goal for Dana", exact: true })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Goal for Dana", exact: true })).toHaveValue("Read delivery information without changing data.");
+  await expect(page.locator(".onboarding-review")).toBeVisible();
+  await expect(page.getByLabel("Select Dana", { exact: true })).toBeChecked();
+  expect(await form!.evaluate((element) => element === document.querySelector("form.managed-composer"))).toBe(true);
+  expect(fixture.personaMutations).toHaveLength(0);
+  await createFromTemplate(page, "ux-review", "Saved from the same panel");
+  expect(await form!.evaluate((element) => element.isConnected && element === document.querySelector("form.managed-composer"))).toBe(true);
+  await expect(page.getByLabel("Requested path prefixes (one per line)")).toHaveValue("/help\n/delivery");
+  await expect(page.getByRole("textbox", { name: "Goal for Dana", exact: true })).toHaveValue("Read delivery information without changing data.");
+  await expect(page.getByLabel("Criteria for Dana (one per line, up to 6)")).toHaveValue("Delivery costs are clear.");
+  await expect(page.getByRole("button", { name: "Launch 2 agents", exact: true })).toBeEnabled();
+  expect(fixture.personaMutations).toHaveLength(1);
   expect(fixture.submissions).toHaveLength(0);
   expect(fixture.unexpected).toEqual([]);
 });
@@ -462,7 +804,7 @@ for (const template of personaTemplates) {
     });
     expect(fixture.personaMutations[0].persona.id).toMatch(/^[a-f0-9-]{36}$/);
     await expect(page.getByText("Analysis focus does not grant tools or permissions.", { exact: false })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Launch 2 agents", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Launch 2 agents", exact: true })).toBeEnabled();
     expect(fixture.submissions).toHaveLength(0);
     expect(fixture.unexpected).toEqual([]);
   });
@@ -480,10 +822,15 @@ test("different per-persona assignments survive a lost reply with the same canon
   await page.getByLabel("Criteria for Trust reviewer (one per line, up to 6)").fill("The purpose of requested permissions is visible.\nThe privacy policy is clearly labelled.");
   await page.getByLabel("Shared goal for additional personas").fill("");
   await page.getByRole("textbox", { name: "Shared criteria for additional personas (one per line, up to 6)", exact: true }).fill("");
-  await review(page);
   await page.getByRole("button", { name: "Launch 2 agents", exact: true }).click();
   await expect(page.getByRole("button", { name: "Reconcile saved launch", exact: true })).toBeEnabled();
-  await expect(page.getByRole("button", { name: "Back", exact: true })).toBeDisabled();
+  await expect(page.getByLabel("Initial target URL")).toBeDisabled();
+  await expect(page.getByRole("combobox", { name: "Approved website", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Launch 2 agents", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "+ Create persona", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Edit saved persona", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Delete Trust reviewer", exact: true })).toBeDisabled();
+  await expect(page.getByRole("textbox", { name: "Goal for Trust reviewer", exact: true })).toBeDisabled();
   const request = fixture.submissions[0];
   expect(request.body.assignments.map((assignment) => assignment.goal)).toEqual([
     "Observe visible loading and recovery feedback.",
@@ -494,10 +841,15 @@ test("different per-persona assignments survive a lost reply with the same canon
   ]);
   await page.reload();
   await expect(page.getByRole("button", { name: "Reconcile saved launch", exact: true })).toBeEnabled();
-  await expect(page.locator(".onboarding-review")).toContainText(request.body.assignments[1].goal);
-  for (const criterion of request.body.assignments[1].criteria) await expect(page.locator(".onboarding-review")).toContainText(criterion);
-  await expect(page.locator(".onboarding-review")).toContainText(request.body.assignments[0].goal);
-  await expect(page.getByRole("button", { name: "Back to Specialists", exact: true })).toBeDisabled();
+  await review(page);
+  for (const [index, assignment] of request.body.assignments.entries()) {
+    const mission = page.locator(".onboarding-review > li").nth(index);
+    await expect(mission.getByText(assignment.goal, { exact: true })).toBeVisible();
+    await mission.getByText("Checks for this agent", { exact: true }).click();
+    for (const criterion of assignment.criteria) await expect(mission.getByText(criterion, { exact: true })).toBeVisible();
+  }
+  await expect(page.getByLabel("Select UI/UX", { exact: true })).toBeDisabled();
+  await expect(page.getByLabel("Initial target URL")).toBeDisabled();
   expect(fixture.submissions).toHaveLength(1);
   await page.getByRole("button", { name: "Reconcile saved launch", exact: true }).click();
   await expect(page).toHaveURL(`/managed/${fixture.run.id}`);
@@ -527,7 +879,6 @@ test("preset customization creates a copy, while later edits and deletion leave 
   await page.getByRole("button", { name: "Save persona", exact: true }).click();
   await expect(page.getByRole("button", { name: "+ Create persona", exact: true })).toBeEnabled();
   expect(fixture.personaMutations[1]).toMatchObject({ method: "PUT", persona: { id: copy.id } });
-  await review(page);
   await page.getByRole("button", { name: "Launch 2 agents", exact: true }).click();
   await expect(page).toHaveURL(/\/managed\/[a-f0-9-]+$/);
   const snapshot = structuredClone(fixture.run.attempts.find((attempt) => attempt.persona.id === copy.id)!.persona);
