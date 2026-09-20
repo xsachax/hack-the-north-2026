@@ -11,6 +11,7 @@ import {
   MANAGED_EXECUTION_POLICY, managedCapabilitiesSchema, managedCreateSchema, managedRunSchema,
   type ManagedCapabilities, type ManagedRun,
 } from "@/lib/managed-contracts";
+import { managedDefaultCriteria, managedDefaultGoal, managedSpecialistForAssignment, managedSpecialists } from "@/lib/managed-specialists";
 import { useOwnerSession } from "./owner-session";
 import { PersonaAvatar } from "./persona-avatar";
 import { PersonaEditor } from "./persona-editor";
@@ -42,8 +43,8 @@ export function ManagedLaunch() {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
   const [target, setTarget] = useState("");
-  const [goal, setGoal] = useState("");
-  const [criteria, setCriteria] = useState("");
+  const [goal, setGoal] = useState(managedDefaultGoal);
+  const [criteria, setCriteria] = useState(managedDefaultCriteria.join("\n"));
   const [prefixes, setPrefixes] = useState("/");
   const [selected, setSelected] = useState<string[]>([]);
   const [drafts, setDrafts] = useState<Record<string, AssignmentDraft>>({});
@@ -59,6 +60,16 @@ export function ManagedLaunch() {
   const inFlight = useRef(false);
   const submission = useRef<AbortController | null>(null);
   const personaMutation = useRef<AbortController | null>(null);
+
+  function assignmentFor(personaId: string) {
+    const specialist = managedSpecialists.find((value) => value.personaId === personaId);
+    return {
+      personaId,
+      goal: drafts[personaId]?.goal?.trim() || specialist?.goal || goal.trim(),
+      criteria: (drafts[personaId]?.criteria?.trim() || specialist?.criteria.join("\n") || criteria)
+        .split("\n").map((value) => value.trim()).filter(Boolean),
+    };
+  }
 
   useEffect(() => {
     if (!authorized || !ownerId) return;
@@ -163,10 +174,7 @@ export function ManagedLaunch() {
         executionPolicy: MANAGED_EXECUTION_POLICY,
         authorizationAcknowledged: acknowledged, managedPolicyAcknowledged: policyAcknowledged,
         scope: { targetUrl: new URL(target).href, pathPrefixes, allowedSubdomains: [] },
-        assignments: selected.map((personaId) => ({
-          personaId, goal: drafts[personaId]?.goal?.trim() || goal,
-          criteria: (drafts[personaId]?.criteria?.trim() || criteria).split("\n").map((value) => value.trim()).filter(Boolean),
-        })),
+        assignments: selected.map(assignmentFor),
       });
       void send({ ownerId, key: crypto.randomUUID(), body });
     } catch (failure) {
@@ -216,19 +224,15 @@ export function ManagedLaunch() {
   const validTarget = !!capabilities && targetAllowed(target, capabilities.allowedOrigins);
   const enabled = loaded && !!capabilities?.enabled && !!capabilities.allowedOrigins.length;
   const locked = !!pending || !!storageError || storageOwner !== ownerId || busy || !authorized;
-  const assignmentsReady = selected.length > 0 && selected.every((id) =>
-    (drafts[id]?.goal?.trim() || goal.trim()) && (drafts[id]?.criteria?.trim() || criteria.trim()));
+  const assignmentsReady = selected.length > 0 && selected.every((id) => {
+    const assignment = assignmentFor(id);
+    return assignment.goal && assignment.criteria.length;
+  });
   return <section className="managed-launch" aria-label="Managed launch workspace">
-    <div className="managed-policy">
-      <p className="eyebrow">A DIFFERENT EXECUTION POLICY</p>
-      <h2>Browserbase runs these agents.</h2>
-      <p>{capabilities?.notice || "Managed Agents are disabled unless the operator explicitly enables this service."}</p>
-      <ul>
-        <li>Browserbase tools cannot be disabled. Read-only and scope prompts are instructions, not enforced browser or network boundaries.</li>
-        <li>Hard model-call and browser-time caps are unavailable. A cancellation request does not itself confirm browser cleanup.</li>
-        <li>This MVP accepts only an allowlisted initial target. It is not arbitrary safe browsing. Use approved public sites only, without credentials or sensitive data.</li>
-      </ul>
-    </div>
+    <p className={`managed-readiness ${loaded && !enabled ? "notice" : "muted"}`} role="status">{!loaded
+      ? "Checking managed execution readiness…" : enabled
+        ? "Approved public sites only · up to 8 agents · no automatic paid retries"
+        : "Managed launch is disabled by the operator or has no approved initial origins. Explore the cards and prepare your URL; no browser will be started."}</p>
     {error && <div className="error" role="alert"><p>{error}</p>
       <button type="button" disabled={busy || !!deleting || !!editor} onClick={() => setLoadVersion((value) => value + 1)}>Refresh saved runs and readiness</button>{" "}
       <button type="button" disabled={busy || !!deleting || !!editor} onClick={retry}>Refresh owner session</button>
@@ -252,73 +256,114 @@ export function ManagedLaunch() {
     </section>}
     <form className="launch-form" onSubmit={submit} noValidate>
       <fieldset disabled={locked || !loaded || !!editor || !!deleting}>
-        <legend className="managed-form-title">Give your crowd a mission.</legend>
-        <p className="muted">Start with a shared goal and criteria, then adjust them for each selected persona below. The server snapshots each persona when the run is saved.</p>
+        <legend className="managed-form-title"><span className="managed-step" aria-hidden="true">1</span> Pick a starting point.</legend>
         <label>Initial target URL
-          <input type="url" maxLength={4096} placeholder="https://approved-site.example/help" value={target} onChange={(event) => setTarget(event.target.value)} aria-describedby="managed-target-help" />
+          <input type="url" maxLength={4096} placeholder="https://approved-site.example/help" value={target} onChange={(event) => setTarget(event.target.value)}
+            aria-invalid={!!target && !validTarget} aria-describedby="managed-target-help" />
         </label>
         <div id="managed-target-help" className="muted">
           <strong>Operator-approved initial origins:</strong>
           {capabilities?.allowedOrigins.length ? <ul className="managed-origins">{capabilities.allowedOrigins.map((origin) => <li key={origin}><code>{origin}</code></li>)}</ul> : <p>No initial origins are approved.</p>}
           {target && !validTarget && <p className="error">This initial target is not an exact approved HTTP(S) origin.</p>}
         </div>
-        <label className="goal-label">What should the agents try?
-          <textarea className="goal-input" rows={3} maxLength={2000} placeholder="Find delivery information and explain whether the cost is clear." value={goal} onChange={(event) => setGoal(event.target.value)} />
-        </label>
-        <label>Success criteria (one per line, up to 6)
-          <textarea rows={3} maxLength={3005} placeholder="Delivery costs are stated before checkout." value={criteria} onChange={(event) => setCriteria(event.target.value)} />
-        </label>
-        <p className="muted">Criteria are evaluated by the agent, not independently verified by Flash Flood.</p>
-        <label>Requested path prefixes (one per line)
-          <textarea rows={2} value={prefixes} onChange={(event) => setPrefixes(event.target.value)} />
-        </label>
-        <p className="muted">Requested scope only; not enforced. No additional hosts or subdomains are added.</p>
-        <section className="people-section" aria-label="Managed personas">
-          <div className="section-heading"><h2>Who&apos;s in your crowd?</h2><span className="muted" aria-live="polite">{selected.length} / 8 selected</span>
-            <button type="button" className="text-button" onClick={() => setEditor("new")}>+ Create persona</button></div>
-          <div className="people-picker">
-            {profiles.map((persona) => <label key={persona.id} className={`person-chip${selected.includes(persona.id) ? " selected" : ""}`}>
-              <input type="checkbox" aria-label={`Select ${persona.name}`} checked={selected.includes(persona.id)}
-                disabled={selected.length >= 8 && !selected.includes(persona.id)}
-                onChange={(event) => setSelected((current) => selectRunAssignment(current, persona.id, event.target.checked))} />
-              <PersonaAvatar id={persona.id} slot={selected.includes(persona.id) ? selected.indexOf(persona.id) : undefined} />
-              <span>{persona.name}<small>{persona.character}</small></span>
-            </label>)}
+        <section className="managed-specialists" aria-labelledby="managed-specialists-title">
+          <div className="section-heading">
+            <h2 id="managed-specialists-title"><span className="managed-step" aria-hidden="true">2</span> Choose your specialists.</h2>
+            <span className="managed-selection-count" aria-live="polite">{selected.length} / 8 selected</span>
           </div>
-          <p className="muted">Choose 1–8 existing personas. Persona behavior and device preferences are instructions, not guaranteed emulation.</p>
-          <p className="muted">Analysis focus does not grant tools or permissions. Security reviews are read-only trust/privacy checklists, not penetration tests. Networking reviews describe observed loading and visible errors, not packet capture, DNS analysis, or timing instrumentation.</p>
-          {selected.map((id) => {
-            const persona = profiles.find((profile) => profile.id === id);
-            if (!persona) return null;
-            const custom = idSchema.safeParse(id).success;
-            return <details className="persona-config managed-persona-config" key={id}>
-              <summary>{persona.name}: goal, criteria & character</summary>
-              <p>{persona.character}</p>
-              <p className="muted">{persona.quirks.join("; ")}. Worries: {persona.worries.join(", ")}.</p>
-              <label>Goal for {persona.name}<textarea maxLength={2000} rows={2} value={drafts[id]?.goal ?? ""}
-                placeholder={goal || "Uses the shared goal above"} onChange={(event) => updateDraft(id, "goal", event.target.value)} /></label>
-              <label>Criteria for {persona.name} (one per line, up to 6)<textarea maxLength={3005} rows={3} value={drafts[id]?.criteria ?? ""}
-                placeholder={criteria || "Uses the shared criteria above"} onChange={(event) => updateDraft(id, "criteria", event.target.value)} /></label>
-              <p className="muted">Leave an override blank to inherit its shared text. Agent-reported criteria are not independently verified.</p>
-              <div className="button-row">
-                <button type="button" onClick={() => setEditor(persona)}>{custom ? "Edit saved persona" : "Customize a copy"}</button>
-                {custom && <button type="button" disabled={!!deleting} onClick={() => void deletePersona(persona)}>{deleting === id ? "Deleting…" : `Delete ${persona.name}`}</button>}
-              </div>
-            </details>;
-          })}
-          <p className="muted">Preset customization saves a separate profile. Editing or deleting a saved persona does not change snapshots in existing runs.</p>
+          <p className="muted">Pick the perspectives you want. Each comes with a ready-to-go, read-only mission.</p>
+          <div className="managed-specialist-grid">
+            {managedSpecialists.map((specialist, slot) => {
+              const checked = selected.includes(specialist.personaId);
+              const available = profiles.some((profile) => profile.id === specialist.personaId);
+              const customized = !managedSpecialistForAssignment(assignmentFor(specialist.personaId));
+              return <label key={specialist.personaId} className={`managed-specialist${checked ? " selected" : ""}`}>
+                <input type="checkbox" aria-label={`Select ${specialist.label}`} checked={checked}
+                  disabled={!available || (selected.length >= 8 && !checked)}
+                  onChange={(event) => setSelected((current) => selectRunAssignment(current, specialist.personaId, event.target.checked))}
+                  aria-describedby={`specialist-${specialist.personaId}`} />
+                <span className="managed-specialist-top"><PersonaAvatar id={specialist.personaId} slot={slot} />
+                  <span className="managed-specialist-state">{!available ? "Unavailable" : checked ? "Selected" : "Select"}</span></span>
+                <strong>{specialist.label}</strong>
+                <span className="managed-specialist-purpose" id={`specialist-${specialist.personaId}`}>{specialist.purpose}</span>
+                <span className="managed-specialist-checks">{customized
+                  ? <span>Custom mission: review goals and checks in Advanced.</span>
+                  : specialist.checks.map((check) => <span key={check}>{check}</span>)}</span>
+              </label>;
+            })}
+          </div>
+          <p className="muted">Passive trust review, not penetration testing. Observed accessibility, not WCAG certification. Visible loading, not benchmarks.</p>
         </section>
-        <label className="acknowledgement"><input type="checkbox" checked={policyAcknowledged} onChange={(event) => setPolicyAcknowledged(event.target.checked)} />
-          <span>I acknowledge the managed policy: tools cannot be disabled, scope and read-only prompts are not enforced, and hard model-call / browser-time caps are unavailable.</span></label>
-        <label className="acknowledgement"><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} />
-          <span>I am authorized to test this initial target and requested scope, without credentials or sensitive data.</span></label>
-        <button type="submit" className="primary launch-button" disabled={!enabled || !acknowledged || !policyAcknowledged || !validTarget || !assignmentsReady}>
-          {busy ? "Saving managed launch…" : `Launch ${selected.length || ""}${selected.length ? " " : ""}managed agent${selected.length === 1 ? "" : "s"}`}
-        </button>
+        <details className="managed-advanced">
+          <summary>Advanced: missions, personas & scope</summary>
+          <p className="muted">Optional. The four specialists already have goals and checks. Additional personas use the shared mission below. Every launch saves immutable persona, goal and criteria snapshots.</p>
+          <label>Shared goal for additional personas
+            <textarea className="goal-input" rows={3} maxLength={2000} placeholder="Find delivery information and explain whether the cost is clear." value={goal} onChange={(event) => setGoal(event.target.value)} />
+          </label>
+          <label>Shared criteria for additional personas (one per line, up to 6)
+            <textarea rows={3} maxLength={3005} placeholder="Delivery costs are stated before checkout." value={criteria} onChange={(event) => setCriteria(event.target.value)} />
+          </label>
+          <p className="muted">Criteria are evaluated by the agent, not independently verified by Flash Flood.</p>
+          <label>Requested path prefixes (one per line)
+            <textarea rows={2} value={prefixes} onChange={(event) => setPrefixes(event.target.value)} />
+          </label>
+          <p className="muted">Requested scope only; not enforced. No additional hosts or subdomains are added.</p>
+          <section className="people-section" aria-label="Managed personas">
+            <div className="section-heading"><h2>All personas</h2>
+              <button type="button" className="text-button" onClick={() => setEditor("new")}>+ Create persona</button></div>
+            <div className="people-picker">
+              {profiles.map((persona) => <label key={persona.id} className={`person-chip${selected.includes(persona.id) ? " selected" : ""}`}>
+                <input type="checkbox" aria-label={`Select ${persona.name}`} checked={selected.includes(persona.id)}
+                  disabled={selected.length >= 8 && !selected.includes(persona.id)}
+                  onChange={(event) => setSelected((current) => selectRunAssignment(current, persona.id, event.target.checked))} />
+                <PersonaAvatar id={persona.id} slot={selected.includes(persona.id) ? selected.indexOf(persona.id) : undefined} />
+                <span>{persona.name}<small>{persona.character}</small></span>
+              </label>)}
+            </div>
+            <p className="muted">Choose 1–8 existing personas. Persona behavior and device preferences are instructions, not guaranteed emulation.</p>
+            <p className="muted">Analysis focus does not grant tools or permissions. Security reviews are read-only trust/privacy checklists, not penetration tests. Networking reviews describe observed loading and visible errors, not packet capture, DNS analysis, or timing instrumentation.</p>
+            {selected.map((id) => {
+              const persona = profiles.find((profile) => profile.id === id);
+              if (!persona) return null;
+              const custom = idSchema.safeParse(id).success;
+              return <details className="persona-config managed-persona-config" key={id}>
+                <summary>{persona.name}: goal, criteria & character</summary>
+                <p>{persona.character}</p>
+                <p className="muted">{persona.quirks.join("; ")}. Worries: {persona.worries.join(", ")}.</p>
+                <label>Goal for {persona.name}<textarea maxLength={2000} rows={2} value={drafts[id]?.goal ?? ""}
+                  placeholder={assignmentFor(id).goal} onChange={(event) => updateDraft(id, "goal", event.target.value)} /></label>
+                <label>Criteria for {persona.name} (one per line, up to 6)<textarea maxLength={3005} rows={3} value={drafts[id]?.criteria ?? ""}
+                  placeholder={assignmentFor(id).criteria.join("\n")} onChange={(event) => updateDraft(id, "criteria", event.target.value)} /></label>
+                <p className="muted">Leave an override blank to use the specialist preset, or the shared mission for additional personas. Agent-reported criteria are not independently verified.</p>
+                <div className="button-row">
+                  <button type="button" onClick={() => setEditor(persona)}>{custom ? "Edit saved persona" : "Customize a copy"}</button>
+                  {custom && <button type="button" disabled={!!deleting} onClick={() => void deletePersona(persona)}>{deleting === id ? "Deleting…" : `Delete ${persona.name}`}</button>}
+                </div>
+              </details>;
+            })}
+            <p className="muted">Preset customization saves a separate profile. Editing or deleting a saved persona does not change snapshots in existing runs.</p>
+          </section>
+        </details>
+        <div className="managed-launch-dock">
+          <h2>Ready to make waves?</h2>
+          <p className="muted">{selected.length ? `${selected.length} agent${selected.length === 1 ? "" : "s"} ready with individual missions.` : "Select at least one specialist to get started."} Results are agent-reported, not independently verified.</p>
+          <label className="acknowledgement"><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} />
+            <span>I am authorized to test this initial target and requested scope. No credentials or sensitive data.</span></label>
+          <label className="acknowledgement"><input type="checkbox" checked={policyAcknowledged} onChange={(event) => setPolicyAcknowledged(event.target.checked)} />
+            <span>I acknowledge the managed policy: tools cannot be disabled; read-only and scope are prompts, not enforced boundaries. No hard model-call or browser-time caps.</span></label>
+          <details className="managed-policy-details"><summary>About this execution policy</summary>
+            <p className="muted">{capabilities?.notice || "Managed Agents are disabled unless the operator explicitly enables this service."}</p>
+            <p className="muted">It is not arbitrary safe browsing. Cancellation does not confirm browser cleanup. Returning contexts, takeover and reduction are not supported.</p>
+          </details>
+          <button type="submit" className="primary launch-button" disabled={!enabled || !acknowledged || !policyAcknowledged || !validTarget || !assignmentsReady}>
+            {busy ? "Saving managed launch…" : `Launch ${selected.length || ""}${selected.length ? " " : ""}agent${selected.length === 1 ? "" : "s"}`}
+          </button>
+          <p className="muted center">{!enabled ? "Launch unavailable. Preparing a mission does not start a browser."
+            : !validTarget ? "Enter an approved URL to launch."
+              : !assignmentsReady ? "Choose at least one agent to launch."
+                : !acknowledged || !policyAcknowledged ? "Confirm both statements above to launch." : "Starts a paid Browserbase-managed run. No automatic retries."}</p>
+        </div>
       </fieldset>
-      <p className="muted center" role="status">{!loaded ? "Checking managed execution readiness…" : enabled
-        ? "Browserbase-managed · up to 8 agents per run · no automatic paid retries"
-        : "Managed launch is disabled by the operator or has no approved initial origins. You can prepare goals and personas, but no browser will be started."}</p>
     </form>
     {editor && !locked && <PersonaEditor key={editor === "new" ? "new" : editor.id}
       persona={editor === "new" ? undefined : editor} onClose={() => setEditor(null)}

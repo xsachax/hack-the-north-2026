@@ -11,9 +11,9 @@ export default function ManagedPage() {
       <Link href="/">Classic workspace</Link>
     </header>
     <section className="intro managed-intro">
-      <p className="eyebrow">BROWSERBASE MANAGED AGENTS · MVP</p>
-      <h1>Real browsers.<br /><span>A managed little crowd.</span></h1>
-      <p>Choose an approved starting point. Give each persona a goal. Follow what the provider actually reports.</p>
+      <p className="eyebrow">FRESH EYES. DIFFERENT PERSPECTIVES.</p>
+      <h1>Your site.<br /><span>A fresh wave of feedback.</span></h1>
+      <p>Drop in an approved URL. Pick your specialists. Launch your crowd.</p>
       <WaveDivider />
     </section>
     <OwnerSession><ManagedLaunch /></OwnerSession>
