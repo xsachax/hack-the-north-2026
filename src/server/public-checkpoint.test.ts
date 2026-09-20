@@ -18,7 +18,9 @@ const input = createRunSchema.parse({
   assignments: [{ personaId: "careful-first-timer", goal: "Read help", criteria: ["Delivery costs are explained"] }],
 });
 
-describe("real unmocked offline checkpoint admission", () => {
+vi.mock("./public-execution-readiness", () => ({ PUBLIC_EXECUTION_IMPLEMENTATION_READY: false }));
+
+describe("source-disabled rollback admission", () => {
   let directory: string;
   let repository: Repository;
   beforeEach(() => {

@@ -13,8 +13,6 @@ import { CloudStartupError } from "../execution/cloud";
 import { LeaseLostError, WorkerRepository, type Claim } from "./repository";
 import { DurableWorker, type WorkerDependencies } from "./runtime";
 
-// Future-path coverage only; the unmocked checkpoint suite verifies the hard stop.
-vi.mock("../public-execution-readiness", () => ({ PUBLIC_EXECUTION_IMPLEMENTATION_READY: true }));
 
 const admission = { enabled: true, implementationReady: true };
 const scope = { targetUrl: "https://example.com/docs", allowedSubdomains: [], pathPrefixes: ["/docs"] };

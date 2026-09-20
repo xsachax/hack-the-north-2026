@@ -44,6 +44,14 @@ beforeEach(() => {
     const dns = require('node:dns');
     dns.lookup = deny; dns.resolve = deny;
     dns.promises.lookup = deny; dns.promises.resolve = deny;
+    if (process.env.FF_OFFLINE_STOP_AFTER_READY === 'true') {
+      const output = process.stdout.write.bind(process.stdout);
+      process.stdout.write = function(chunk, ...args) {
+        const result = output(chunk, ...args);
+        if (String(chunk).includes('worker_ready')) setTimeout(() => process.kill(process.pid, 'SIGTERM'), 1000);
+        return result;
+      };
+    }
   `, { mode: 0o600 });
 });
 afterEach(() => rmSync(directory, { recursive: true, force: true }));
@@ -65,13 +73,14 @@ describe("maintained worker startup entrypoints (offline, no provider allocation
           PATH: process.env.PATH, NODE_ENV: "test", TSX_DISABLE_CACHE: "1", TMPDIR: directory,
           NODE_OPTIONS: `--require ${JSON.stringify(guard)}`, NPM_CONFIG_UPDATE_NOTIFIER: "false",
           DATA_DIR: directory, ENABLE_PUBLIC_RUNS: "true", ENABLE_DEMO_RUNS: "false",
+          FF_OFFLINE_STOP_AFTER_READY: "true",
           BROWSERBASE_API_KEY: "test", BROWSERBASE_PROJECT_ID: randomUUID(),
         },
         encoding: "utf8", timeout: 20000,
       });
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("worker_failed_check_private_configuration_and_database");
-      expect(`${result.stdout}${result.stderr}`).not.toMatch(/Client Component|worker_ready/);
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("worker_ready");
+      expect(`${result.stdout}${result.stderr}`).not.toMatch(/Client Component|worker_failed/);
       expect(existsSync(join(directory, "network-attempted"))).toBe(false);
       expect(database.prepare("SELECT * FROM jobs").all()).toEqual(before);
       expect(repository.accounting()).toEqual(usage);
@@ -91,7 +100,7 @@ describe("maintained worker startup entrypoints (offline, no provider allocation
     const result = spawnSync(process.execPath, ["--require", guard, ...args], {
       env: {
         PATH: process.env.PATH, NODE_ENV: "test", TSX_DISABLE_CACHE: "1", TMPDIR: directory,
-        DATA_DIR: directory, ENABLE_PUBLIC_RUNS: "true", ENABLE_DEMO_RUNS: "false",
+        DATA_DIR: directory, ENABLE_PUBLIC_RUNS: "false", ENABLE_DEMO_RUNS: "false",
         BROWSERBASE_API_KEY: "test", BROWSERBASE_PROJECT_ID: randomUUID(),
       },
       encoding: "utf8", timeout: 20000,
@@ -151,7 +160,7 @@ describe("maintained worker startup entrypoints (offline, no provider allocation
     expect(`${result.stdout}${result.stderr}`).not.toMatch(/offline_network_forbidden|Client Component|worker_ready/);
   });
 
-  it("refuses restored native reconciliation through the maintained command without provider I/O or false cleanup", () => {
+  it("refuses restored native reconciliation without explicit release confirmation or provider I/O", () => {
     const repository = new WorkerRepository(directory);
     let runId: string;
     try {
@@ -175,7 +184,7 @@ describe("maintained worker startup entrypoints (offline, no provider allocation
         .run(jobId, extensionId, resource, now);
       database.prepare("INSERT INTO native_resource_events(job_id,resource,created_at) VALUES(?,?,?)").run(jobId, resource, now);
       const before = database.prepare("SELECT state,recovery_count,recovery_after,usage FROM launches WHERE job_id=?").get(jobId);
-      const result = spawnSync("npm", ["run", "worker:reconcile", "--", "--confirm-release", jobId], {
+      const result = spawnSync("npm", ["run", "worker:reconcile", "--", jobId], {
         env: {
           PATH: process.env.PATH, NODE_ENV: "test", TSX_DISABLE_CACHE: "1", TMPDIR: directory,
           NODE_OPTIONS: `--require ${JSON.stringify(guard)}`, NPM_CONFIG_UPDATE_NOTIFIER: "false",
@@ -185,7 +194,7 @@ describe("maintained worker startup entrypoints (offline, no provider allocation
         encoding: "utf8", timeout: 20000,
       });
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain("public_recovery_checkpoint_disabled_reservation_retained");
+      expect(result.stderr).toContain("worker_reconciliation_failed");
       expect(`${result.stdout}${result.stderr}`).not.toMatch(/offline_network_forbidden|orphan_release_confirmed/);
       expect(`${result.stdout}${result.stderr}`).not.toContain(extensionId);
       expect(`${result.stdout}${result.stderr}`).not.toContain(sessionId);

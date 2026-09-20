@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createRunSchema, runSchema } from "../lib/contracts";
 import { PUBLIC_ASSET_POLICY, PUBLIC_EXECUTION_POLICY } from "../lib/public-execution";
 import { capabilitiesSchema } from "../lib/ui-contracts";
@@ -12,8 +12,6 @@ import { migrations } from "./migrations";
 import { Repository } from "./repository";
 import { WorkerRepository } from "./worker/repository";
 
-// Future admission contracts only; real checkpoint readiness is tested without this mock.
-vi.mock("./public-execution-readiness", () => ({ PUBLIC_EXECUTION_IMPLEMENTATION_READY: true }));
 
 const origin = "http://127.0.0.1:3000";
 const legacy = () => createRunSchema.parse({

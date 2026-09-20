@@ -1,11 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { workerExecutionModes } from "./config";
 import { deploymentConfig } from "../deployment/config";
 
-// Future-path coverage only; real CLI tests keep the source checkpoint disabled.
-vi.mock("../public-execution-readiness", () => ({ PUBLIC_EXECUTION_IMPLEMENTATION_READY: true }));
-
-describe("future public-only worker startup", () => {
+describe("public-only worker startup", () => {
   it("keeps public and controlled authorization separate", () => {
     expect(workerExecutionModes({ NODE_ENV: "test" })).toEqual({ controlled: false, public: false });
     expect(workerExecutionModes({ NODE_ENV: "test", ENABLE_PUBLIC_RUNS: "true" })).toEqual({ controlled: false, public: true });

@@ -119,6 +119,7 @@ describe("safe capabilities", () => {
     const body = await response.json();
     expect(body).toEqual({ data: capabilitiesSchema.parse({
       controlledRunsEnabled: true, websiteExecutionEnabled: false, maxActiveViews: 3,
+      publicExecutionEnabled: false, publicExecutionReason: "implementation_not_ready",
       accessCodeConfigured: true, browserbaseKeyConfigured: true,
       executionLimits: { maxSteps: 14, maxModelCalls: 14, maxDurationMs: 180000 },
       executionLimitsSource: "defaults",

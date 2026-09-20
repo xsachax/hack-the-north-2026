@@ -12,8 +12,6 @@ import { executePersona } from "../execution/loop";
 import { WorkerRepository, type Claim } from "./repository";
 import { DurableWorker, type WorkerDependencies } from "./runtime";
 
-// Future-path coverage only; production remains source-disabled at this checkpoint.
-vi.mock("../public-execution-readiness", () => ({ PUBLIC_EXECUTION_IMPLEMENTATION_READY: true }));
 
 const completed: ExecutionResult = {
   status: "succeeded", reason: "Read-only checks completed", originalTerminal: { status: "succeeded", reason: "Read-only checks completed" },
