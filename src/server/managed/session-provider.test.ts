@@ -969,7 +969,7 @@ describe("managed runner over the session-backed provider", () => {
     };
     const journal: ManagedJournal = {
       assertActive: vi.fn(), dispatch: vi.fn(), identity: vi.fn(), progress: vi.fn(),
-      sessionView: vi.fn(), liveView: vi.fn(),
+      sessionView: vi.fn(), liveView: vi.fn(), createFailure: vi.fn(),
     };
     const outcome = await executeManagedAgent(claim, journal, {
       apiKey: SECRET, projectId: PROJECT, agentId: AGENT, signal: new AbortController().signal,
@@ -1015,7 +1015,7 @@ describe("managed runner over the session-backed provider", () => {
     };
     const journal: ManagedJournal = {
       assertActive: vi.fn(), dispatch: vi.fn(), identity: vi.fn(), progress: vi.fn(),
-      sessionView: vi.fn(), liveView: vi.fn(),
+      sessionView: vi.fn(), liveView: vi.fn(), createFailure: vi.fn(),
     };
     const pending = executeManagedAgent(claim, journal, {
       apiKey: SECRET, projectId: PROJECT, agentId: AGENT, signal: controller.signal,
