@@ -484,7 +484,7 @@ export function RunReportView({ runId, selection }: { runId: string; selection: 
         runId={runId} evidenceId={selection.evidence} selectedAttempt={selection.attempt}
         attemptScope={report.agents.map((item) => item.attemptId).join(",")} retryOwner={retryOwner} />}
       <section aria-labelledby="report-groups-title"><div className="report-section-heading"><h2 id="report-groups-title">Grouped findings</h2><span>{report.groups.length} groups · {report.agents.length} assigned agents</span></div>
-        <p className="report-muted">Signals and friction are not automatically bugs. Group counts retain tested and untested denominators.</p>
+        <p className="report-muted">Signals and usability problems are not automatically bugs. Group counts retain tested and untested denominators.</p>
         {!report.groups.length && <p className="report-panel">No grouped findings persisted. This does not establish that the target is defect-free.</p>}
         <ul className="report-groups">{report.groups.map((item) => <li key={item.signature}>
           <Link href={reportHref(runId, { attempt: selection.attempt, group: item.signature })} aria-current={selection.group === item.signature ? "true" : undefined}>

@@ -262,7 +262,7 @@ export function ManagedLaunch() {
     <header className="managed-welcome">
       <WaveMark />
       <p className="eyebrow">A FRESH SET OF EYES. A WHOLE NEW WAVE.</p>
-      <h1>Make waves. <span>Find friction.</span></h1>
+      <h1>Make waves. <span>Find what breaks.</span></h1>
       <p>Send a crew of AI testers surfing through your website.</p>
     </header>
     <form className="managed-composer" onSubmit={submit} noValidate>

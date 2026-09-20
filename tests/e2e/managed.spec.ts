@@ -199,7 +199,7 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     await expect(page.locator("form.managed-composer")).toHaveCount(1);
     await expect(page.getByRole("button", { name: /^(Continue|Back(?: to .*)?)$/ })).toHaveCount(0);
     await expect(page.locator(".onboarding-progress, [aria-current=step], [role=progressbar]")).toHaveCount(0);
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Make waves. Find friction.");
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Make waves. Find what breaks.");
     await expect(page.getByRole("heading", { name: "Choose your crew", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Launch agents", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Launch agents", exact: true })).toBeDisabled();
