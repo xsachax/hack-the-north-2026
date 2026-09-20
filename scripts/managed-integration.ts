@@ -6,6 +6,7 @@ import { mkdir, open } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { managedCapabilitiesSchema, managedResultSchema, managedRunSchema } from "../src/lib/managed-contracts";
 import { readPrivateJson, writePrivateJson } from "./advanced-proof";
@@ -200,10 +201,10 @@ export async function runManagedProof(planPath: string, approvalPath: string, si
       agentCreation = "returned";
       signal.throwIfAborted();
       const reviewed = await provider.agents.retrieve(agentId);
+      await writePrivateJson(join(directory, "agent-reviewed.json"), reviewed);
       if (reviewed.agentId !== agentId || reviewed.name !== plan.agent.name ||
         reviewed.systemPrompt !== plan.agent.systemPrompt ||
-        publicProofHash(reviewed.resultSchema) !== plan.agent.resultSchemaDigest) throw new Error("managed_agent_review_mismatch");
-      await writePrivateJson(join(directory, "agent-reviewed.json"), reviewed);
+        !isDeepStrictEqual(reviewed.resultSchema, z.toJSONSchema(managedResultSchema))) throw new Error("managed_agent_review_mismatch");
       phase = "packaged-runtime";
       const accessCode = randomBytes(32).toString("hex");
       runtime = await packagedManagedDeployment(plan.packageDir, {

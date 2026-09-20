@@ -421,22 +421,49 @@ describe("independent evidence versus model-authored goal reports", () => {
 });
 
 describe("failed invocation persistence (mock provider only)", () => {
-  it("deletes a returned temporary Agent only after empty related-run readback and exact retrieve 404", async () => {
+  function reorderObjectKeys(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map(reorderObjectKeys);
+    if (value !== null && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).reverse().map(([key, item]) => [key, reorderObjectKeys(item)]));
+    }
+    return value;
+  }
+
+  it.each([
+    "original", "reordered", "changed-prompt", "changed-name", "changed-id", "changed-schema",
+    "missing-schema", "added-schema-key", "changed-array-order",
+  ])("checks %s Agent readback before runtime startup and independently deletes the temporary Agent", async (variant) => {
     for (let i = 0; i < 3; i++) nativeReservation();
     const value = plan();
     const input = join(directory, "plan.json"), approved = join(directory, "approval.json");
     await writePrivateJson(input, value); await writePrivateJson(approved, approval(value));
     vi.spyOn(proof, "verifyManagedProofInputs").mockResolvedValue();
-    vi.spyOn(runtime, "packagedManagedDeployment").mockReturnValue({
-      verifyPackage: vi.fn(),
-      start: vi.fn().mockRejectedValue(new Error("Offline simulated runtime startup failure")),
-    });
+    const start = vi.fn().mockRejectedValue(new Error("Offline simulated runtime startup failure"));
+    vi.spyOn(runtime, "packagedManagedDeployment").mockReturnValue({ verifyPackage: vi.fn(), start });
     vi.stubEnv("BROWSERBASE_API_KEY", "offline-test-placeholder");
     vi.stubEnv("BROWSERBASE_PROJECT_ID", value.projectId);
     const agent = { agentId: "offline-agent", name: value.agent.name, systemPrompt: value.agent.systemPrompt,
       resultSchema: z.toJSONSchema(managedResultSchema) };
+    const reviewed: { agentId: string; name: string; systemPrompt?: string; resultSchema?: unknown } = { ...agent };
+    switch (variant) {
+      case "reordered": reviewed.resultSchema = reorderObjectKeys(agent.resultSchema); break;
+      case "changed-prompt": reviewed.systemPrompt = `${agent.systemPrompt}\nDifferent instructions`; break;
+      case "changed-name": reviewed.name = "different-agent"; break;
+      case "changed-id": reviewed.agentId = "different-agent"; break;
+      case "changed-schema":
+        reviewed.resultSchema = { ...agent.resultSchema, properties: { ...agent.resultSchema.properties,
+          summary: { type: "string", minLength: 1, maxLength: 3999 } } };
+        break;
+      case "missing-schema": delete reviewed.resultSchema; break;
+      case "added-schema-key": reviewed.resultSchema = { ...agent.resultSchema, title: "Unapproved schema" }; break;
+      case "changed-array-order":
+        reviewed.resultSchema = { ...agent.resultSchema, required: [...(agent.resultSchema.required ?? [])].reverse() };
+        break;
+    }
+    const valid = variant === "original" || variant === "reordered";
+    if (variant === "reordered") expect(publicProofHash(reviewed.resultSchema)).not.toBe(value.agent.resultSchemaDigest);
     const order: string[] = [];
-    const retrieve = vi.fn().mockResolvedValueOnce(agent).mockImplementationOnce(async () => {
+    const retrieve = vi.fn().mockResolvedValueOnce(reviewed).mockImplementationOnce(async () => {
       order.push("absent");
       throw new Browserbase.APIError(404, {}, "Offline exact-ID absence", {});
     });
@@ -447,12 +474,15 @@ describe("failed invocation persistence (mock provider only)", () => {
       sessions: { retrieve: vi.fn() }, extensions: { retrieve: vi.fn() },
     };
     const result = await runManagedProof(input, approved, new AbortController().signal);
-    expect(result).toMatchObject({ accepted: false, identityUncertain: false, cleanupUncertain: false });
+    expect(result).toMatchObject({ accepted: false, identityUncertain: false, cleanupUncertain: false,
+      errorCode: valid ? "managed_proof_failed" : "managed_agent_review_mismatch" });
+    expect(start).toHaveBeenCalledTimes(valid ? 1 : 0);
     expect(order).toEqual(["related", "delete", "absent"]);
     expect(remove).toHaveBeenCalledExactlyOnceWith("offline-agent");
     const inventory = await proof.readManagedInvocationInventory(directory);
     expect(inventory.inventory).toHaveLength(1);
     expect(inventory.used).toHaveLength(1);
+    expect(await readPrivateJson(join(directory, inventory.inventory[0].directory, "agent-reviewed.json"))).toEqual(reviewed);
   });
 
   it("journals intent before the sole create, consumes approval before reads, and retains unknown outcomes", async () => {

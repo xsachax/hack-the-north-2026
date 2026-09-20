@@ -47,6 +47,16 @@ all 900 seconds of existing native lifetime reservations. Hosted success and
 usage are recorded only after an actual approved run and independent closure;
 the presence of this implementation is not a hosted acceptance claim.
 
+The first approved managed attempt on 2026-09-20 created and independently
+deleted its temporary Agent, but stopped at configuration readback before any
+browser/run allocation. The retained provider response had identical schema
+values with reordered JSON object keys, exposing an order-sensitive comparison.
+The proof now compares schema structure and values without depending on object
+key order; changed or missing values, array order, prompt, name and identity
+still fail closed. Raw readback is retained privately before validation.
+Existing approval and ledger digest formats are unchanged. No managed browser
+goal has been accepted from that attempt.
+
 The managed proof can explicitly bind `localUiBrowser: "webkit"` for its local
 owner-wall renderer when local Chromium is unavailable. This does not replace
 the remote Browserbase agent or change its browser settings. The default remains
