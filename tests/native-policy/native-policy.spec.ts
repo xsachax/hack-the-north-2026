@@ -150,9 +150,12 @@ test("native proxy alone blocks navigation, aliases and fallback after repeated 
     expect(sentinel.connections()).toBe(0);
     expect(sentinel.hits).toEqual([]);
     expect(await state(browser.worker)).toMatchObject({ ready: true,fault: null });
+    // A rejected goto can still commit Chrome's error document; settle that page first.
+    await page.close();
     await clearForPositiveControl(browser.worker);
+    const positive=await browser.context.newPage();
     for(const hostname of ["127.0.0.1","127.1","2130706433","0x7f000001","[::ffff:127.0.0.1]","localhost"]) {
-      await page.goto(`http://${hostname}:${sentinel.port}/redirect`);
+      await positive.goto(`http://${hostname}:${sentinel.port}/redirect`);
     }
     expect(sentinel.hits.filter((path) => path==="/redirect-destination")).toHaveLength(6);
     expect(sentinel.connections()).toBeGreaterThan(0);

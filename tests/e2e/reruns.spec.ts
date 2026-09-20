@@ -45,7 +45,7 @@ function comparison(): RunComparison {
     notices: ["Only selected immutable assignments are compared.", "Unknown is not success."],
   };
 }
-async function fixture(page: Page, site: "store" | "project-board" = "store") {
+async function fixture(page: Page, site: "store" | "project-board" = "store", snapshot = report()) {
   const state = {
     requests: [] as { body: unknown; key: string; csrf: string }[],
     lostReply: false, firstFailure: 0, comparisonStatus: 200, comparison: comparison(),
@@ -62,7 +62,7 @@ async function fixture(page: Page, site: "store" | "project-board" = "store") {
         allowedSubdomains: [], pathPrefixes: [site === "store" ? "/demo" : "/project-board"] },
       createdAt: time, updatedAt: time, cancelRequestedAt: null, executionMode: "controlled-fixture", controlledSiteId: site,
     });
-    if (path === `/runs/${parentId}/reports`) return data(report());
+    if (path === `/runs/${parentId}/reports`) return data(snapshot);
     if (path === `/runs/${parentId}/attempts/${parentAttempt}/replay`) return data({ status: "unavailable", reason: "not_recorded" });
     if (path === `/runs/${parentId}/reruns`) {
       state.requests.push({ body: request.postDataJSON(), key: request.headers()["idempotency-key"], csrf: request.headers()["x-csrf-token"] });
@@ -130,6 +130,51 @@ test("lost reply and refresh retry the exact persisted request without a second 
   await page.getByRole("button", { name: "Retry same rerun" }).click();
   await expect(page.getByRole("link", { name: "Open rerun report" })).toBeVisible();
   expect(state.requests).toEqual([original, original]);
+});
+
+function historicalReport() {
+  const snapshot = report();
+  const agent = snapshot.agents[0];
+  snapshot.agents = Array.from({ length: 12 }, (_, index) => ({
+    ...structuredClone(agent), attemptId: `77777777-7777-4777-8777-${String(index + 1).padStart(12, "0")}`,
+    persona: { ...agent.persona, id: `historical-${index}`, name: `Historical reader ${index + 1}` },
+  }));
+  return snapshot;
+}
+
+test("historical reports allow only eight assignments in a new rerun", async ({ page }) => {
+  const snapshot = historicalReport();
+  const state = await fixture(page, "store", snapshot);
+  const selection = (index: number) => page.getByLabel(`Historical reader ${index} · Apply both coupons`, { exact: true });
+  for (let index = 1; index <= 8; index++) await selection(index).check();
+  await expect(selection(9)).toBeDisabled();
+  await selection(1).uncheck();
+  await expect(selection(9)).toBeEnabled();
+  await selection(9).check();
+  await expect(selection(1)).toBeDisabled();
+  await page.getByLabel("I authorize this fresh scoped rerun.").check();
+  await page.getByRole("button", { name: "Rerun selected attempts", exact: true }).click();
+  await expect(page.getByRole("link", { name: "Open rerun report" })).toBeVisible();
+  expect(state.requests).toHaveLength(1);
+  expect(state.requests[0].body).toEqual({
+    authorizationAcknowledged: true, attemptIds: snapshot.agents.slice(1, 9).map((agent) => agent.attemptId),
+  });
+});
+
+test("a saved historical twelve-assignment rerun retains its exact request and key", async ({ page }) => {
+  const snapshot = historicalReport();
+  const state = await fixture(page, "store", snapshot);
+  const saved = {
+    key: "66666666-6666-4666-8666-666666666666",
+    request: { authorizationAcknowledged: true, attemptIds: snapshot.agents.map((agent) => agent.attemptId) },
+  };
+  await page.evaluate(({ key, value }) => sessionStorage.setItem(key, JSON.stringify(value)), {
+    key: `ff:rerun:owner-rerun:${parentId}`, value: saved,
+  });
+  await page.reload();
+  await page.getByRole("button", { name: "Retry same rerun" }).click();
+  await expect(page.getByRole("link", { name: "Open rerun report" })).toBeVisible();
+  expect(state.requests).toEqual([{ body: saved.request, key: saved.key, csrf: "rerun-csrf" }]);
 });
 
 test("failed owner-only comparison hides stale success and never infers an outcome", async ({ page }) => {

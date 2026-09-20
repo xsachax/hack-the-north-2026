@@ -29,6 +29,8 @@ npm run test:e2e
 npm run report:integration -- --offline-preflight
 npm run advanced:integration -- --offline-preflight
 npx --no-install tsx scripts/release-integration.ts --offline-preflight
+npm run deployment:build
+npm run public:integration -- --offline-preflight
 npm run release:package -- data/release-package
 RELEASE_PACKAGE_DIR="$PWD/data/release-package" npm run release:package-check
 ```
@@ -57,6 +59,10 @@ SIGTERM shutdown, persistent database row, quiescent backup and restored
 web-only readiness. It also invokes the real pinned Playwright CDP client
 against a local 503 stub inside the read-only container, proving its required
 private temporary-directory path works without a provider allocation.
+The clean Node package and container also load the isolated Stagehand worker
+from their own packaged TypeScript/dependency tree, connect it only to an owned
+loopback refusal fixture, and await actual worker termination. The Node check
+preloads the loopback-only guard in the parent and worker.
 Restored backup markers must block paid startup; the gate does not claim a
 snapshot contains later reservations or unresolved resource identities.
 Its random project owns only its own images, containers and volumes;
@@ -73,6 +79,11 @@ is simulated over loopback HTTP, not a TLS handshake. The report and advanced
 preflights additionally use a real local HTTPS proxy, Chromium, production
 cookies and genuine-owner restart/resume paths. They allocate no remote session;
 local browser/fixture proof is not a paid provider proof.
+The public receipt preflight requires the deployment receipt written by
+`deployment:build`, not the separate advanced/rehearsal receipt from `build`.
+Run it immediately after `deployment:build`, after finishing advanced/rehearsal
+preflights, because either builder replaces `.next`. A missing or mismatched
+receipt is a failed gate, not an expected successful offline result.
 
 The job is capped at 35 minutes, with individual gate timeouts. A newer run
 cancels an obsolete run for the same ref. No cookies, database, HLS, live URLs,
@@ -99,6 +110,13 @@ gates. It evaluates the native Chromium extension hypothesis with owned local
 listeners, not Playwright request interception. It requires Linux and fails
 rather than skipping when namespaces, IPv6, DNS, or browser dependencies are
 unavailable. macOS lint/type checks are not Linux acceptance evidence.
+
+The local public-browser suite also tunnels local Chromium CDP through an owned
+WSS endpoint, then exercises the production SDK worker, native attestation and
+extension Gateway dispatch with synthetic replies. Node trusts the ephemeral
+fixture CA explicitly, and only that fixture's SPKI is trusted in Chromium.
+Production certificate checks are unchanged. SDK lifecycle child tests deny
+non-loopback Node traffic, and neither fixture is hosted public-site acceptance.
 
 ### Installation and invocation
 

@@ -8,6 +8,7 @@ import {
 import { decisionSchema, type Brain, type BrainInput, type Decision, type EvaluationInput } from "./types";
 
 type WireOperation = { budget: ModelBudget; signal: AbortSignal; requests: number; denied?: { error: unknown } };
+export type GatewayExtraction = (prompt: string, schema: z.ZodType) => Promise<{ data: unknown }>;
 
 export class GatewayBrain implements Brain {
   readonly managesModelBudget = true;
@@ -17,7 +18,7 @@ export class GatewayBrain implements Brain {
   private readonly wireBudget: boolean;
   private wireOperation: WireOperation | undefined;
 
-  constructor(private readonly stagehand: Stagehand, private readonly page: Page, options: { readOnly?: boolean; wireBudget?: boolean } = {}) {
+  constructor(private readonly stagehand: Stagehand | GatewayExtraction, private readonly page: Page | undefined, options: { readOnly?: boolean; wireBudget?: boolean } = {}) {
     this.readOnly = options.readOnly === true;
     this.wireBudget = options.wireBudget === true;
   }
@@ -57,9 +58,11 @@ export class GatewayBrain implements Brain {
     // Track the real SDK RPC; its transport does not support AbortSignal.
     let extraction: Promise<unknown> | undefined;
     try {
-      const extracting = this.stagehand.extract(prompt, schema, {
-        page: this.page, screenshot: true, timeout: 25000,
-      });
+      const extracting = typeof this.stagehand === "function"
+        ? this.stagehand(prompt, schema)
+        : this.stagehand.extract(prompt, schema, {
+          page: this.page, screenshot: true, timeout: 25000,
+        });
       extraction = extracting;
       this.pending.add(extraction);
       const { data } = await extracting;

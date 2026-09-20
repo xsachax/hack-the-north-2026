@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { personas } from "../../lib/personas";
+import { demoCriteria } from "../../lib/demo-run";
 import { PUBLIC_ASSET_POLICY, PUBLIC_EXECUTION_POLICY } from "../../lib/public-execution";
 import { NativeResources, type NativeResource } from "../execution/native-resources";
 import type { NativeCloudUsage } from "../execution/native-browser";
@@ -89,6 +90,40 @@ describe("public worker admission and native durable journal (offline)", () => {
     for (const id of [old.id, fresh.id]) expect(() => database.prepare(
       "UPDATE runs SET public_execution_policy=?,public_asset_policy=? WHERE id=?")
       .run(id === old.id ? PUBLIC_EXECUTION_POLICY : null, id === old.id ? PUBLIC_ASSET_POLICY : null, id)).toThrow();
+  });
+
+  it("does not spend on or mutate queued controlled jobs in a public-only worker", () => {
+    const controlled = repository.createDemoRun(owner, randomUUID(), {
+      authorizationAcknowledged: true, scenario: "fixed",
+      assignments: [{ personaId: personas[0].id, goal: "Read the cart", criteria: [...demoCriteria] }],
+    }).run;
+    const before = database.prepare("SELECT * FROM jobs WHERE run_id=?").all(controlled.id);
+    const legacy = create(false);
+    const fresh = create();
+    const held = repository.claim("public-only", { ...admission, controlledEnabled: false })!;
+    expect(held.runId).toBe(fresh.id);
+    expect(database.prepare("SELECT * FROM jobs WHERE run_id=?").all(controlled.id)).toEqual(before);
+    expect(repository.getRun(owner, legacy.id).status).toBe("blocked");
+    expect(repository.accounting().reservedSeconds).toBe(repository.policy.sessionSeconds);
+    expect(repository.claim("controlled", { ...admission, controlledEnabled: true })?.runId).toBe(controlled.id);
+  });
+
+  it("fences a directly supplied controlled claim before launch in a public-only worker", async () => {
+    repository.createDemoRun(owner, randomUUID(), {
+      authorizationAcknowledged: true, scenario: "fixed",
+      assignments: [{ personaId: personas[0].id, goal: "Read the cart", criteria: [...demoCriteria] }],
+    });
+    const held = repository.claim("public-only")!;
+    const launch = vi.fn(), artifacts = vi.fn();
+    const worker = new DurableWorker(repository, {
+      launch, artifacts, controlledEnabled: false,
+      recover: vi.fn(),
+    }, 4321);
+    await worker.executeClaim(held, new AbortController().signal);
+    expect(launch).not.toHaveBeenCalled();
+    expect(artifacts).not.toHaveBeenCalled();
+    expect(repository.getRun(owner, held.runId).status).toBe("blocked");
+    expect(repository.accounting().committedSeconds).toBe(0);
   });
 
   it("synchronously journals private resources during cancellation without changing their identities", () => {

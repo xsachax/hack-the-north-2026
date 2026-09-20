@@ -3,7 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import { attemptSchema, idempotencyKeySchema, idSchema, type Run } from "../../lib/contracts";
 import { controlledNavigationScope, controlledSite } from "../../lib/controlled-sites";
-import { rerunRequestSchema, type RerunRequest, type RerunPair } from "../../lib/rerun-contracts";
+import { newRerunRequestSchema, rerunRequestSchema, type RerunRequest, type RerunPair } from "../../lib/rerun-contracts";
 import type { Repository } from "../repository";
 import { ServiceError } from "../errors";
 import { signature } from "../reports/aggregate";
@@ -27,6 +27,7 @@ export function insertRerun(
     readRerunLineage(db, repository, owner, parentRunId, id);
     return { run: repository.getRun(owner, id), created: false };
   }
+  if (!newRerunRequestSchema.safeParse(request).success) throw new ServiceError("invalid_request", 400);
   const all = repository.attempts(owner, parentRunId);
   const selected = request.attemptIds.map((id) => {
     const attempt = all.find((entry) => entry.id === id);

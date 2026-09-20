@@ -12,22 +12,36 @@ reject before provider operations; there is no approval-file or environment
 override. The legacy controlled factory rejects public targets. This is a release blocker, not a
 claim that the final product no longer needs authorized arbitrary websites.
 
-## Offline checkpoint and deferred public execution
+## Offline integration and deferred public acceptance
 
-The user requested a mergeable checkpoint followed by a new public-browser plan.
-This preserves implemented immutable admission contracts, historical idempotency,
+The integration starts from checkpoint #24 at
+`ccb57a7929c37b9329e1aee0b9305af4c256ed66` and preserves immutable admission contracts, historical idempotency,
 resource journals, native composition, scoped CDP routing, bounded HTTP/Gateway
 transports, source binding and offline regression coverage. Controlled execution
-remains available under its existing gates. Public activation is not part of this
-checkpoint, and #1, #8 and #16 remain open.
+remains available under its existing gates. Public activation is still blocked:
+the issue's GitHub state is not proof that the #8 acceptance requirements are met.
 
-Native factory lifecycle code is an **unreachable prototype**, not approved hosted
-cleanup: pinned Stagehand 4.1's branded browser `close()` can issue independently
-retried provider releases, including late connection results. Do not enable it.
-The separate metadata-only loopback adapter and SDK transport monitor are offline
-prototypes and are not wired into that factory. A successful SDK extraction test
-with synthetic Gateway responses does not establish production WSS startup,
-failure cleanup or a genuine external objective.
+The production native factory now owns pinned Stagehand through an exclusive
+Node worker thread (`native-sdk.ts`, `native-sdk-worker.ts`). It uses the supported
+branded Browserbase connection, the verified Chrome runtime extension identity,
+and the one-use metadata-only loopback adapter. Real session/key attribution is
+preserved. It never invokes branded Browserbase `close()` (which independently
+releases with hidden retries), local-browser `close()` (which sends
+`Browser.close`), or an unbounded Stagehand shutdown RPC. The parent alone sends
+no-retry provider release and verifies the returned identity/status.
+
+Actual worker termination, not an outer deadline, settles SDK connections,
+timers and inner retries before the metadata port or other CDP attachments can
+be retired. Rejected termination retains attachments and quarantines resources.
+The diagnostic-channel transport monitor remains an unintegrated prototype, not
+a lifecycle dependency. No native settings are cleared during teardown.
+
+Owned TLS/WSS fixtures exercise termination during connect, initialization and
+ready states. A full local Chromium test additionally combines the production
+SDK worker, native policy/proxy attestation, real extension Gateway requests and
+synthetic replies. It verifies actual one-key session metadata and SDK metrics.
+Only that fixture's ephemeral certificate is trusted; production TLS validation
+is unchanged. This is not hosted Browserbase conformance or a public objective.
 
 Actual Linux diagnostics measured stopped-trace completion at 5.018–5.145 seconds,
 after the former generic three-second wait had already failed. Trace completion
@@ -38,19 +52,88 @@ unchanged; no retry is added. Refusal acquisition closes its finished owned prob
 before ending the trace and rejects unexpected early completion. Diagnostics
 retain only constant phase/reason codes, never raw NetLog.
 
-Local composed probes have also exhibited native-worker CDP readiness timeouts
-and a strict trace-format rejection whose causes remain unresolved. Offline
-results are not hosted startup-reliability proof. Native-only channel tests now
+Worker readiness uses the trusted vendor wake document before evaluating the
+extension bindings. It adds no page messaging/network bridge. Local startup
+stress is not hosted startup-reliability proof. Native-only channel tests
 require a single owned-sentinel refusal before starting the negative lane:
 `chrome.proxy.settings.set()` completion alone is not a network-service barrier.
 
-Deferred work includes a reviewed supported SDK connection/termination lifecycle,
-settlement of inner HTTP retries before recycling metadata ports, actual hosted
-version/profile/native-policy conformance, and a separately approved external-goal
+Deferred acceptance includes actual hosted version/profile/native-policy
+conformance and a separately approved external-goal
 proof with independently verified accounting and closure. Timer expiry is never
-retirement evidence. No provider reads, uploads, allocations or model calls were
-authorized by this checkpoint. A new plan and source changes are required before
-reconsidering public activation.
+retirement evidence. No provider reads, uploads, allocations or model calls are
+authorized. The existing shared 1,800-second lifetime reservation ledger must be
+identified and reconciled without resetting it. Fresh explicit approval must bind
+source/package/harness/archive/ledger digests; default concurrency is one,
+maximum two, TTL <=300 seconds and failed attempts count. Operator flags cannot
+replace approval or per-session attestation.
+
+### Guarded public-goal integration command
+
+The maintained `public:integration` command now has an offline planner and a
+source-gated hosted runner. It uses the actual Browserbase API, the clean
+packaged supervisor/worker, owner API, durable artifacts, live-wall events and
+reports. It does not call a second model provider or inherit `OPENAI_API_KEY`;
+the pinned Stagehand Gateway retains Browserbase key/session attribution.
+These commands are **not authorization**, and the hosted mode remains blocked
+by the source readiness constant until the reviewed acceptance plan permits it.
+
+```sh
+npm run deployment:build
+npm run public:integration -- --ledger-preflight /private/existing-public-ledger
+npm run public:integration -- --prepare-plan /private/input.json /private/plan.json
+# Only after separate explicit approval and the reviewed source gate:
+npm run public:integration -- --confirm-paid /private/plan.json /private/approval.json
+```
+
+The private input contains `dataDir` (the **existing authoritative public
+worker SQLite ledger**), `packageDir` (a freshly built clean package), an explicit
+Browserbase `projectId`, and `request` (the canonical authorized `/runs` body).
+The planner opens the ledger read-only; it never creates one, migrates history,
+resets reservations or treats returned funds as renewed lifetime capacity.
+Other historical ledger formats require explicit reconciliation before use;
+renaming or copying unrelated data is not a supported import.
+The ledger-only preflight returns a fingerprint and aggregate reservations,
+including unresolved status, without publishing resource identities or making
+provider reads. A local settled state never claims independent remote closure.
+
+The stored policy must retain the shared 1,800-second lifetime ceiling,
+concurrency one by default and no more than two, and a TTL above the 80-second
+shutdown reserve and no more than 300 seconds. One proof plan has one or two
+personas. This is intentionally narrower than the eight-agent product ceiling.
+Each proof assignment must include a structural URL/text/control criterion;
+model-only semantic verdicts are not an acceptance oracle.
+Unfinished jobs, uncertain resource identities, unreconciled discovery events,
+and restored backups block planning. The request scope is checked without DNS or
+provider traffic. No default example URL is silently used as a real objective.
+
+The plan binds source, complete clean-package bytes, the harness's own runnable
+dependencies/build, harness sources, composed archive, the cumulative ledger,
+project, exact scope/goals/criteria/personas, and planned reservations. Approval
+must confirm target authorization, the authoritative ledger, provider operations
+and private evidence, reference the exact plan digest, and expire within 15
+minutes. The runner consumes each approval before its first provider read.
+It never authors approval, retries an invocation, or retries session allocation.
+
+After approval, exact prior sessions must independently read `COMPLETED`, and
+uploaded extensions must return authenticated exact-ID 404. The normal worker
+alone uploads/allocates/releases new resources. The hosted runner submits the
+canonical request through the actual owner API, verifies idempotent replay,
+observes durable completion through the live wall, and requires a successful
+report with actions, real Gateway counters, screenshot evidence and grounded
+citations. Independent final session/extension readback, actual usage and exact
+cumulative reservation accounting are mandatory. A failed or interrupted goal
+records its final ledger and cleanup uncertainty privately; it is not acceptance.
+Lost submission responses are resolved by the original owner/idempotency key
+after settling the submitting server; the committed run is cancelled without
+resending a creation request. A durably proven pre-start non-allocation may have
+no native-resource row, but its recorded lifetime reservation is never reset.
+Additional recovered session identities block further proof until explicitly
+reconciled; they are included in the approval fingerprint, not silently omitted.
+Unit tests of that sequence use explicitly synthetic adapters, never hosted
+acceptance evidence. Browserbase limits, inaccessible sites and unsupported
+channels may still prevent a goal from completing; “public URL” does not mean
+every website feature is supported.
 
 ## Public HTTP transport library (offline, not enabled)
 

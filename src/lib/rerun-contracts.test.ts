@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { rerunRequestSchema } from "./rerun-contracts";
+import { newRerunRequestSchema, rerunRequestSchema } from "./rerun-contracts";
 
 describe("immutable scoped rerun admission", () => {
   const request = () => ({ authorizationAcknowledged: true, attemptIds: [randomUUID()] });
@@ -21,5 +21,15 @@ describe("immutable scoped rerun admission", () => {
   it("rejects duplicate selected attempts", () => {
     const id = randomUUID();
     expect(rerunRequestSchema.safeParse({ ...request(), attemptIds: [id, id] }).success).toBe(false);
+  });
+  it("admits eight new selected attempts while preserving twelve-attempt historical replay", () => {
+    const attemptIds = Array.from({ length: 12 }, () => randomUUID());
+    const body = { ...request(), attemptIds: attemptIds.slice(0, 8) };
+    expect(newRerunRequestSchema.parse(body)).toEqual(rerunRequestSchema.parse(body));
+    for (const count of [9, 12]) {
+      const historical = { ...body, attemptIds: attemptIds.slice(0, count) };
+      expect(rerunRequestSchema.parse(historical)).toEqual(historical);
+      expect(newRerunRequestSchema.safeParse(historical).success).toBe(false);
+    }
   });
 });

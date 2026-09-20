@@ -5,12 +5,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { z } from "zod";
 import { api, ApiError, errorMessage } from "@/lib/client-api";
-import { createRunSchema, personaSchema, runSchema, type Persona, type Run } from "@/lib/contracts";
-import { controlledRunSchema, resolveControlledScope } from "@/lib/controlled-run";
+import { newCreateRunSchema, personaSchema, runSchema, type Persona, type Run } from "@/lib/contracts";
+import { newControlledRunSchema, resolveControlledScope } from "@/lib/controlled-run";
 import { controlledSites, type ControlledSiteId } from "@/lib/controlled-sites";
 import { criterionSchema, type Criterion } from "@/lib/criteria";
 import { personas as presets } from "@/lib/personas";
 import { pendingLaunchKey, readPendingLaunch, type PendingLaunch } from "@/lib/launch-request";
+import { MAX_ASSIGNMENTS_PER_RUN, selectRunAssignment } from "@/lib/execution-capacity";
 import { capabilitiesSchema, type Capabilities } from "@/lib/ui-contracts";
 import { useOwnerSession } from "./owner-session";
 import { PersonaAvatar } from "./persona-avatar";
@@ -149,14 +150,14 @@ export function Launch() {
         };
       });
       if (mode === "controlled") {
-        const body = controlledRunSchema.parse({
+        const body = newControlledRunSchema.parse({
           authorizationAcknowledged: acknowledged, controlledSiteId: site,
           scope: { targetPath, pathPrefixes: prefixes.split("\n") }, assignments,
         });
         resolveControlledScope(site, body.scope);
         void send({ ownerId, key: crypto.randomUUID(), path: "/controlled-runs", body });
       } else {
-        const body = createRunSchema.parse({
+        const body = newCreateRunSchema.parse({
           ...(publicOptIn ? { executionPolicy: PUBLIC_EXECUTION_POLICY, assetPolicy: PUBLIC_ASSET_POLICY } : {}),
           authorizationAcknowledged: acknowledged, scope: {
             targetUrl: url, allowedSubdomains: subdomains ? subdomains.split("\n") : [],
@@ -234,9 +235,13 @@ export function Launch() {
         </details>
         <section className="people-section" aria-labelledby="people-title">
           <div className="section-heading"><h2 id="people-title">Pick your people <span className="muted">/ {selected.length}</span></h2><button type="button" className="text-button" onClick={() => setEditor("new")}>+ Create persona</button></div>
+          <p className="muted" id="persona-selection-limit">Select up to {MAX_ASSIGNMENTS_PER_RUN} personas per run. Each gets an independent Browserbase session when execution is enabled; worker limits may queue them.</p>
           <div className="people-picker">
             {profiles.map((persona) => <label className={`person-chip ${selected.includes(persona.id) ? "selected" : ""}`} key={persona.id}>
-              <input type="checkbox" checked={selected.includes(persona.id)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, persona.id] : current.filter((id) => id !== persona.id))} />
+              <input type="checkbox" checked={selected.includes(persona.id)}
+                disabled={!selected.includes(persona.id) && selected.length >= MAX_ASSIGNMENTS_PER_RUN}
+                aria-describedby="persona-selection-limit"
+                onChange={(event) => setSelected((current) => selectRunAssignment(current, persona.id, event.target.checked))} />
               <PersonaAvatar id={persona.id} /><span><strong>{persona.name}</strong><small>{persona.device === "phone" ? "Phone-sized" : "Desktop"} · {persona.patienceSteps}-step patience</small></span>
             </label>)}
           </div>
@@ -273,7 +278,7 @@ export function Launch() {
           </details>
         </section>
         <label className="acknowledgement"><input type="checkbox" required checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} /><span>I am authorized to test this scope and will use only non-destructive tasks.</span></label>
-        <button className="primary launch-button" type="submit" disabled={!capabilities || !selected.length || (mode === "controlled" && !capabilities.controlledRunsEnabled) || (mode === "website" && publicOptIn && !capabilities.publicExecutionEnabled)}>
+        <button className="primary launch-button" type="submit" disabled={!capabilities || !selected.length || selected.length > MAX_ASSIGNMENTS_PER_RUN || (mode === "controlled" && !capabilities.controlledRunsEnabled) || (mode === "website" && publicOptIn && !capabilities.publicExecutionEnabled)}>
           {busy ? "Submitting..." : mode === "controlled" ? `Launch ${selected.length} ${selected.length === 1 ? "persona" : "personas"}` : publicOptIn ? "Launch public read-only run" : "Save website request (execution blocked)"}
         </button>
         <p className="muted center">{mode === "controlled" || (publicOptIn && capabilities?.publicExecutionEnabled) ? "Uses browser and model credits when the worker starts. Up to 3 live viewers." : "No paid public-site browser will be launched."}</p>
@@ -282,7 +287,7 @@ export function Launch() {
     {error && <div className="error" role="alert"><p>{error}</p><div className="button-row"><button type="button" onClick={() => void load()}>Reload workspace data</button><button type="button" onClick={retrySession}>Refresh owner session</button></div></div>}
     {editor && <PersonaEditor key={editor === "new" ? "new" : editor.id} persona={editor === "new" ? undefined : editor} onClose={() => setEditor(null)} onSaved={(persona) => {
       setProfiles((current) => [...current.filter((value) => value.id !== persona.id), persona]);
-      setSelected((current) => current.includes(persona.id) ? current : [...current, persona.id]);
+      setSelected((current) => selectRunAssignment(current, persona.id));
       setEditor(null);
     }} />}
     <details className="recent-runs"><summary>Your saved runs</summary>

@@ -53,6 +53,12 @@ describe("deployment configuration", () => {
     expect(config.env.DEPLOYMENT_BIND_HOST).toBe("127.0.0.1");
     expect(config.env.FIXTURE_PORT).toBe("4321");
   });
+  it("cannot start paid public work through a deployment flag while source readiness is false", () => {
+    const env = { ...environment(), ENABLE_PUBLIC_RUNS: "true" };
+    expect(deploymentConfig(env).paid).toBe(false);
+    expect(() => deploymentConfig({ ...env, DEPLOYMENT_CONFIRM_PAID: "true" }))
+      .toThrow("deployment_paid_confirmation_required");
+  });
   it.each([
     { APP_ORIGIN: "http://example.com" },
     { APP_ORIGIN: "https://example.com/path" },
@@ -61,6 +67,7 @@ describe("deployment configuration", () => {
     { ENABLE_DEMO_RUNS: "true" },
     { DEPLOYMENT_CONFIRM_PAID: "true" },
     { ENABLE_DEMO_RUNS: "1" },
+    { ENABLE_PUBLIC_RUNS: "1" },
     { FIXTURE_PORT: "3000" },
     { DEPLOYMENT_BIND_HOST: "localhost" },
     { WORKER_SHUTDOWN_MS: "120000" },

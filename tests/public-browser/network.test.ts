@@ -1,10 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chromium, type BrowserContext, type Worker } from "playwright-core";
 import { createServer, type Server } from "node:http";
+import { createServer as tlsServer } from "node:https";
+import { connect as tcpConnect } from "node:net";
+import { execFileSync, spawn } from "node:child_process";
+import { once } from "node:events";
+import type { Duplex } from "node:stream";
 import type { RequestOptions } from "node:https";
 import type { AddressInfo } from "node:net";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { z } from "zod";
@@ -17,6 +22,7 @@ import { attachCdpTarget } from "../../src/server/execution/cdp-target";
 import { connectNativeWorkerControl, type NativeWorkerControl } from "../../src/server/execution/native-worker-control";
 import { browserbase, Stagehand } from "@browserbasehq/stagehand";
 import { createNativeSdkTransportMonitor } from "../../src/server/execution/native-sdk-transport";
+import { establishNativePolicy } from "../../src/server/execution/native-policy-session";
 
 const mock = vi.hoisted(() => ({
   requests: new Array<PublicTransportRequest>(),
@@ -98,13 +104,24 @@ let network: Awaited<ReturnType<typeof installPublicNetwork>> | undefined;
 let server: Server | undefined;
 const origin = "https://routing-fixture.example.com";
 const gateway = "https://api.stagehand.browserbase.com/v1/llm/responses";
-beforeEach(async () => {
+beforeEach(async ({ task }) => {
   mock.requests.length = 0;
   mock.responses.clear();
   mock.gatewayCookies.length = 0;
   mock.gatewayPort = 0;
   mock.gatewayCalls.mockClear();
   directory = await mkdtemp(join(tmpdir(), "ff-routing-"));
+  const certificateArgs: string[] = [];
+  if (task.name.startsWith("composes the production isolated WSS")) {
+    execFileSync("openssl", [
+      "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=owned-sdk",
+      "-addext", "subjectAltName=IP:127.0.0.1", "-keyout", join(directory, "key.pem"), "-out", join(directory, "cert.pem"),
+    ], { stdio: "ignore" });
+    const publicKey = execFileSync("openssl", ["x509", "-in", join(directory, "cert.pem"), "-pubkey", "-noout"]);
+    const spki = execFileSync("openssl", ["pkey", "-pubin", "-outform", "DER"], { input: publicKey });
+    // Trust only this ephemeral owned WSS fixture certificate in local Chromium.
+    certificateArgs.push(`--ignore-certificate-errors-spki-list=${createHash("sha256").update(spki).digest("base64")}`);
+  }
   const extension = join(directory, "extension");
   const bundle = await buildComposedExtension();
   for (const [name, bytes] of bundle.files) {
@@ -118,6 +135,7 @@ beforeEach(async () => {
       `--disable-extensions-except=${extension}`, `--load-extension=${extension}`,
       "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1, EXCLUDE localhost",
       "--remote-debugging-port=0", "--remote-allow-origins=*",
+      ...certificateArgs,
     ],
   });
   worker = context.serviceWorkers()[0] ?? await context.waitForEvent("serviceworker");
@@ -154,7 +172,7 @@ afterEach(async () => {
     vi.restoreAllMocks();
   }
 });
-async function install(onFatal: () => void = () => {}) {
+async function install(onFatal: () => void = () => {}, verifyActive: () => Promise<void> = async () => {}) {
   const policy = publicExecutionPolicy({
     executionPolicy: PUBLIC_EXECUTION_POLICY, assetPolicy: PUBLIC_ASSET_POLICY,
     scope: { targetUrl: `${origin}/category/start`, pathPrefixes: ["/category"], allowedSubdomains: [] },
@@ -162,7 +180,7 @@ async function install(onFatal: () => void = () => {}) {
   const page = context.pages()[0];
   network = await installPublicNetwork({
     context, page, extensionOrigin: worker.url().slice(0, -"/service-worker.js".length),
-    authorize: policy.authorize, assertActive() {}, verifyActive: async () => {},
+    authorize: policy.authorize, assertActive() {}, verifyActive,
     signal: new AbortController().signal, onSignal() {}, onFatal, onGatewayDispatch() {},
   });
   return page;
@@ -202,6 +220,92 @@ async function ownedGateway(owned: string) {
 }
 
 describe("actual CDP routing with synthetic broker responses, not public-site acceptance", () => {
+  it("composes the production isolated WSS SDK, native attestation and exact one-key Gateway without provider traffic", async () => {
+    const [cdpPort, cdpPath] = (await readFile(join(directory, "profile", "DevToolsActivePort"), "utf8")).trim().split("\n");
+    const tunnel = tlsServer({ key: await readFile(join(directory, "key.pem")), cert: await readFile(join(directory, "cert.pem")) });
+    const sockets = new Set<Duplex>();
+    tunnel.on("upgrade", (request, downstream, head) => {
+      if (request.url !== cdpPath) { downstream.destroy(); return; }
+      const upstream = tcpConnect({ host: "127.0.0.1", port: Number(cdpPort) });
+      for (const socket of [downstream, upstream]) {
+        sockets.add(socket);
+        socket.once("close", () => { sockets.delete(socket); downstream.destroy(); upstream.destroy(); });
+        socket.on("error", () => { downstream.destroy(); upstream.destroy(); });
+      }
+      upstream.once("connect", () => {
+        const headers = Object.entries(request.headers).flatMap(([name, value]) =>
+          name === "host" ? [`host: 127.0.0.1:${cdpPort}`] : typeof value === "string" ? [`${name}: ${value}`] : []);
+        upstream.write(`GET ${cdpPath} HTTP/1.1\r\n${headers.join("\r\n")}\r\n\r\n`);
+        if (head.length) upstream.write(head);
+        downstream.pipe(upstream); upstream.pipe(downstream);
+      });
+    });
+    await new Promise<void>((resolve) => tunnel.listen(0, "127.0.0.1", resolve));
+    const address = tunnel.address();
+    if (!address || typeof address === "string") throw new Error("owned_tls_address_unavailable");
+    const endpoint = `wss://127.0.0.1:${address.port}${cdpPath}`;
+    const target = `${origin}/category/start`;
+    const child = spawn(process.execPath, [
+      "--conditions=react-server", "--require", resolve("tests/native-sdk-offline-guard.cjs"),
+      "--import", "tsx", resolve("tests/native-sdk-runner.ts"), endpoint, "extract", target, worker.url().split("/")[2],
+    ], {
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
+      env: { NODE_ENV: "test", PATH: process.env.PATH, NODE_EXTRA_CA_CERTS: join(directory, "cert.pem"), TSX_DISABLE_CACHE: "1" },
+    });
+    let output = "";
+    child.stdout!.on("data", (chunk) => { output += chunk; });
+    child.stderr!.on("data", (chunk) => { output += chunk; });
+    const exited = once(child, "exit");
+    let native: Awaited<ReturnType<typeof establishNativePolicy>> | undefined;
+    const requests: { key: unknown; session: unknown }[] = [];
+    try {
+      expect((await once(child, "message"))[0]).toBe("ready");
+      native = await establishNativePolicy({ context, worker, files: (await buildComposedExtension()).files, assertActive() {} });
+      const decision = { action: "give_up", candidateId: null, value: null, commentary: "Owned fixture heading read." };
+      server = createServer((request, response) => {
+        request.resume();
+        request.on("end", () => {
+          requests.push({ key: request.headers["x-bb-api-key"], session: request.headers["x-bb-session-id"] });
+          const output = requests.length === 1 ? decision : { progress: "Owned synthetic extraction complete", completed: true };
+          response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({
+            id: "resp_owned", object: "response", created_at: 1, status: "completed",
+            model: "google/gemini-2.5-flash", output: [{
+              id: "msg_owned", type: "message", role: "assistant", status: "completed",
+              content: [{ type: "output_text", text: JSON.stringify(output), annotations: [] }],
+            }], usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+          }));
+        });
+      });
+      await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+      await ownedGateway(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
+      respond("/category/start", "<h1>Owned isolated SDK Gateway fixture</h1>");
+      respond("/favicon.ico", "", [], 204);
+      const page = await install(() => {}, native.verify);
+      await page.goto(target);
+      const receipt = once(child, "message");
+      child.send("extract");
+      expect((await receipt)[0]).toMatchObject({
+        result: decision, metrics: { totalPromptTokens: 20, totalCompletionTokens: 10 },
+      });
+      expect(requests).toHaveLength(2);
+      expect(requests.every(({ key, session }) => key === "owned-offline-key" && session === "b32aa54d-748b-4c60-89e8-a0b115309a16")).toBe(true);
+      expect(network!.errors).toEqual([]);
+      await native.verify();
+      await context.close();
+      const closed = once(child, "message");
+      child.send("close");
+      expect((await closed)[0]).toMatchObject({ settled: true, rejected: false });
+      expect(await exited).toEqual([0, null]);
+      expect(output).toBe("");
+      expect(sockets.size).toBe(0);
+    } finally {
+      if (child.exitCode === null) { child.kill("SIGKILL"); await exited; }
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => tunnel.close(() => resolve()));
+      await native?.close();
+    }
+  }, 45000);
+
   it("routes actual browserbase-adapter SDK extraction through the original one-key Gateway session metadata", async () => {
     const [port, path] = (await readFile(join(directory, "profile", "DevToolsActivePort"), "utf8")).trim().split("\n");
     const cdpUrl = `ws://127.0.0.1:${port}${path}`;

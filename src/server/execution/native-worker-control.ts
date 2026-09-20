@@ -1,4 +1,4 @@
-import type { BrowserContext } from "playwright-core";
+import type { BrowserContext, Page } from "playwright-core";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { attachCdpTarget } from "./cdp-target";
@@ -32,6 +32,7 @@ export async function connectNativeWorkerControl(options: {
   assertActive();
   const root = await browser.newBrowserCDPSession();
   let target: Awaited<ReturnType<typeof attachCdpTarget>> | undefined;
+  let wake: Page | undefined;
   let contextId: number | undefined;
   let uniqueContextId: string | undefined;
   let lost = false;
@@ -76,6 +77,12 @@ export async function connectNativeWorkerControl(options: {
   };
   try {
     await verifyProfile();
+    // Target discovery precedes extension activation. Use the vendor's existing,
+    // trusted wake document before evaluating its worker bindings.
+    wake = await context.newPage();
+    active();
+    await wake.goto(new URL("wake-service-worker.html", workerUrl).href, { waitUntil: "load", timeout: 5000 });
+    active();
     const deadline = Date.now() + 10000;
     let targetId: string | undefined;
     while (!targetId) {
@@ -131,6 +138,9 @@ export async function connectNativeWorkerControl(options: {
       if (Date.now() >= deadline) throw new Error("native_worker_not_ready");
       await delay(25);
     }
+    await wake.close();
+    wake = undefined;
+    active();
     return {
       close,
       startupWaiting: target.startupWaiting,
@@ -161,7 +171,8 @@ export async function connectNativeWorkerControl(options: {
       },
     };
   } catch (error) {
-    await close();
+    try { await wake?.close(); }
+    finally { await close(); }
     const known = new Set(["public_cdp_timeout", "native_worker_not_ready", "native_worker_command_failed", "native_worker_lost", "native_worker_context_missing", "native_extension_identity_rejected", "native_profile_rejected"]);
     throw new Error(`${phase}:${error instanceof Error && known.has(error.message) ? error.message : "unconfirmed"}`);
   }

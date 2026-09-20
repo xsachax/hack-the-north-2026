@@ -3,6 +3,7 @@ import { createRunSchema, idempotencyKeySchema, idSchema } from "./contracts";
 import { controlledRunSchema } from "./controlled-run";
 
 export const pendingLaunchSchema = z.discriminatedUnion("path", [
+  // Reconciliation must retain historical 9-12-persona payloads and their exact keys.
   z.strictObject({ ownerId: idSchema, key: idempotencyKeySchema, path: z.literal("/runs"), body: createRunSchema }),
   z.strictObject({ ownerId: idSchema, key: idempotencyKeySchema, path: z.literal("/controlled-runs"), body: controlledRunSchema }),
 ]);

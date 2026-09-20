@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -13,6 +14,13 @@ await mkdir(directory, { mode: 0o700 });
 const packagePath = await assertPackagePath(process.env.RELEASE_PACKAGE_DIR ?? "data/release-package");
 const deployment = packagedReleaseDeployment(packagePath, { apiKey: "", projectId: "", replayOrigins: "" });
 const digest = await deployment.verifyPackage();
+execFileSync(process.execPath, [
+  "--conditions=react-server", "--require", resolve("tests/native-sdk-offline-guard.cjs"),
+  "--import", "tsx", "scripts/deployment-sdk-check.ts",
+], {
+  cwd: packagePath, stdio: "pipe", timeout: 20000,
+  env: { PATH: process.env.PATH, NODE_ENV: "production", TMPDIR: directory, TSX_DISABLE_CACHE: "1" },
+});
 const controller = new AbortController();
 const abort = () => controller.abort();
 process.once("SIGINT", abort);
@@ -67,7 +75,7 @@ try {
   if (ledger.launches.length || ledger.reservedSeconds) throw new Error("release_package_offline_allocation");
 } finally { db.close(); }
 await writePrivateJson(resolve(directory, "package-check.json"), {
-  packageDigest: digest, actualSupervisor: true, httpsOwnerRestart: true,
+  packageDigest: digest, actualSupervisor: true, httpsOwnerRestart: true, isolatedSdkWorker: true,
   providerCalls: 0, reservations: 0, paidAcceptance: false,
 });
 console.log("Clean packaged supervisor HTTPS/owner restart and graceful shutdown passed; zero provider calls.");

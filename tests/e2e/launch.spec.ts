@@ -1,9 +1,13 @@
 import { mkdirSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { test, expect, type Page, type Route } from "@playwright/test";
 import { createApi, type ApiConfiguration } from "../../src/server/api";
 import { Repository } from "../../src/server/repository";
 import { PUBLIC_ASSET_POLICY, PUBLIC_EXECUTION_POLICY } from "../../src/lib/public-execution";
+import { createRunSchema } from "../../src/lib/contracts";
+import { controlledRunSchema, resolveControlledScope } from "../../src/lib/controlled-run";
+import { personas } from "../../src/lib/personas";
 
 const accessCode = "offline-only-access-code-not-a-production-secret";
 const origin = "http://127.0.0.1:4317";
@@ -199,6 +203,83 @@ test("custom persona schema errors preserve the editable profile", async ({ page
     await editor.getByRole("button", { name: "Save persona" }).click();
     await expect(page.getByRole("checkbox", { name: /Juniper/ })).toBeChecked();
     expect(fixture.repository.listPersonas(fixture.owner)).toHaveLength(13);
+  } finally { await fixture.close(); }
+});
+
+test("selection and saved custom personas cannot exceed eight assignments", async ({ page }, info) => {
+  const fixture = await offlineApi(page, info.outputPath("api"));
+  try {
+    await unlock(page);
+    await configureDemo(page);
+    const choices = page.locator(".people-picker").getByRole("checkbox");
+    for (let index = 0; index < 8; index++) await choices.nth(index).check();
+    await expect(page.getByText("Select up to 8 personas per run.", { exact: false })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Launch 8 personas", exact: true })).toBeEnabled();
+    for (let index = 8; index < 12; index++) await expect(choices.nth(index)).toBeDisabled();
+    for (let index = 0; index < 8; index++) await expect(choices.nth(index)).toBeEnabled();
+    expect(fixture.submissions).toBe(0);
+    await page.getByRole("button", { name: "+ Create persona", exact: true }).click();
+    const editor = page.getByRole("region", { name: "Meet someone new" });
+    await editor.getByLabel("Name", { exact: true }).fill("Ninth saved profile");
+    await editor.getByLabel("Character", { exact: true }).fill("A careful reader.");
+    await editor.getByRole("button", { name: "Save persona" }).click();
+    const saved = page.getByRole("checkbox", { name: /Ninth saved profile/ });
+    await expect(saved).not.toBeChecked();
+    await expect(saved).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Launch 8 personas", exact: true })).toBeEnabled();
+    await choices.nth(0).uncheck();
+    await expect(saved).toBeEnabled();
+    await saved.check();
+    await page.getByRole("button", { name: "Launch 8 personas", exact: true }).click();
+    await expect(page).toHaveURL(/\/runs\/[a-f0-9-]+$/);
+    const runId = new URL(page.url()).pathname.split("/").at(-1)!;
+    const attempts = fixture.repository.attempts(fixture.owner, runId);
+    expect(attempts).toHaveLength(8);
+    expect(attempts.some(({ persona }) => persona.name === "Ninth saved profile")).toBe(true);
+    expect(fixture.submissions).toBe(1);
+  } finally { await fixture.close(); }
+});
+
+test("a saved historical twelve-persona launch reconciles its exact key and body", async ({ page }, info) => {
+  const directory = info.outputPath("api");
+  const fixture = await offlineApi(page, directory);
+  try {
+    await unlock(page);
+    const body = controlledRunSchema.parse({
+      authorizationAcknowledged: true, controlledSiteId: "store",
+      assignments: personas.map(({ id }) => ({ personaId: id, goal: "Read the cart", criteria: ["The cart is visible"] })),
+    });
+    const key = randomUUID();
+    const run = fixture.repository.createControlledRun(fixture.owner, key, {
+      ...body, assignments: body.assignments.slice(0, 8),
+    }).run;
+    const canonical = createRunSchema.parse({
+      authorizationAcknowledged: true, scope: resolveControlledScope("store"), assignments: body.assignments,
+    });
+    const db = new DatabaseSync(`${directory}/flash-flood.sqlite`);
+    try {
+      db.prepare("UPDATE runs SET request_hash=? WHERE id=?").run(
+        createHash("sha256").update(JSON.stringify({ request: canonical, controlledSiteId: "store", mode: "controlled-fixture" })).digest("hex"), run.id,
+      );
+      const source = fixture.repository.attempts(fixture.owner, run.id)[0];
+      for (const persona of personas.slice(8)) {
+        const id = randomUUID(), jobId = randomUUID();
+        db.prepare("INSERT INTO attempts VALUES(?,?,?,?)").run(id, run.id, "queued", JSON.stringify({ ...source, id, persona }));
+        db.prepare("INSERT INTO jobs(id,run_id,attempt_id,status) VALUES(?,?,?,'queued')").run(jobId, run.id, id);
+        db.prepare("INSERT INTO usage_reservations(job_id) VALUES(?)").run(jobId);
+      }
+    } finally { db.close(); }
+    await page.evaluate((saved) => sessionStorage.setItem("flash-flood.pending-launch.v1", JSON.stringify(saved)),
+      { ownerId: fixture.owner, key, path: "/controlled-runs", body });
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Reconcile saved launch" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Save website request (execution blocked)" })).toBeDisabled();
+    await page.getByRole("button", { name: "Reconcile saved launch" }).click();
+    await expect(page).toHaveURL(new RegExp(`/runs/${run.id}$`));
+    expect(fixture.repository.attempts(fixture.owner, run.id)).toHaveLength(12);
+    expect(fixture.repository.listRuns(fixture.owner, { after: 0, limit: 100 }).items).toHaveLength(1);
+    expect(fixture.submissions).toBe(1);
+    expect(await page.evaluate(() => sessionStorage.getItem("flash-flood.pending-launch.v1"))).toBeNull();
   } finally { await fixture.close(); }
 });
 

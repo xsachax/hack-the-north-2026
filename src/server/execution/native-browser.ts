@@ -1,5 +1,4 @@
 import Browserbase, { toFile } from "@browserbasehq/sdk";
-import { browserbase, Stagehand, type StagehandBrowser } from "@browserbasehq/stagehand";
 import { chromium, type Browser, type Worker } from "playwright-core";
 import { z } from "zod";
 import { setTimeout as delay } from "node:timers/promises";
@@ -10,6 +9,7 @@ import { PUBLIC_EXECUTION_IMPLEMENTATION_READY } from "../public-execution-readi
 import { CloudStartupError, type CloudUsage, type PrivateSessionReference } from "./cloud";
 import { buildComposedExtension, COMPOSED_POLICY_VERSION } from "./composed-extension";
 import { establishNativePolicy, assertTrustedBootstrap } from "./native-policy-session";
+import { createNativeSdk } from "./native-sdk";
 import { isNativeSessionRetired, NativeResources, type NativeResource, type NativeSessionClosure } from "./native-resources";
 import type { Brain, CleanupOutcome } from "./types";
 
@@ -54,9 +54,9 @@ export async function createNativeBrowser(config: AppConfig, options: NativeBrow
   let closing: Promise<CleanupOutcome> | undefined;
   let phase = "native_admission";
   let sessionId: string | undefined;
-  let browser: StagehandBrowser | undefined;
+  let sdk: ReturnType<typeof createNativeSdk> | undefined;
+  let initialized = false;
   let playwright: Browser | undefined;
-  let stagehand: Stagehand | undefined;
   let worker: Worker | undefined;
   let brain: Brain | undefined;
   let resources: NativeResources | undefined;
@@ -86,7 +86,7 @@ export async function createNativeBrowser(config: AppConfig, options: NativeBrow
       catch { fail(code); }
     };
     if (brain) await attempt("gateway_drain", () => brain?.drain?.(), 40000);
-    if (stagehand) await attempt("metrics_unavailable", async () => { usage.modelMetrics = await stagehand!.metrics(); });
+    if (initialized) await attempt("metrics_unavailable", async () => { usage.modelMetrics = await sdk!.metrics(); });
     let remote: NativeSessionClosure | undefined;
     if (usage.allocationAttempted && !sessionId) fail("startup_session_unconfirmed");
     if (sessionId && bb) {
@@ -127,14 +127,21 @@ export async function createNativeBrowser(config: AppConfig, options: NativeBrow
     }
     // Keep every attachment and the installed native policy until release readback.
     // Unconfirmed release still quarantines the extension; no settings are cleared.
-    for (const [name, operation] of [
-      ["network_close", () => cleanupNetwork?.()],
-      ["native_control_close", () => cleanupControl?.()],
-      ["stagehand_close", () => stagehand?.close()],
-      ["playwright_close", () => playwright?.close()],
-      ["browser_close", () => browser?.close()],
-    ] as const) await attempt(name, operation);
-    if (resources) await attempt("native_extension_cleanup_unconfirmed", () => resources!.close(remote), 25000);
+    // Actual worker exit settles every SDK socket/retry before CDP attachments or
+    // the metadata listener can be retired. No branded close method is invoked.
+    let sdkRetired = !sdk;
+    if (sdk) {
+      try { await sdk.close(); sdkRetired = true; }
+      catch { fail("native_sdk_close"); }
+    }
+    if (sdkRetired) {
+      for (const [name, operation] of [
+        ["network_close", () => cleanupNetwork?.()],
+        ["native_control_close", () => cleanupControl?.()],
+        ["playwright_close", () => playwright?.close()],
+      ] as const) await attempt(name, operation);
+    }
+    if (resources) await attempt("native_extension_cleanup_unconfirmed", () => resources!.close(sdkRetired ? remote : undefined), 25000);
     usage.elapsedSeconds = Math.ceil((Date.now() - started) / 1000);
     if (errors.length) usage.cleanupErrors = [...new Set(errors)];
     return { status: errors.length ? "failed" : "closed", errors };
@@ -188,19 +195,6 @@ export async function createNativeBrowser(config: AppConfig, options: NativeBrow
       sessionId, liveViewUrl: "", replayUrl: `https://www.browserbase.com/sessions/${sessionId}`, timeoutSeconds,
     }), 5000);
     assertActive();
-    phase = "native_browser_connect";
-    const connecting = browserbase.connect({ apiKey: config.BROWSERBASE_API_KEY, sessionId });
-    void connecting.then(async (late) => { if (closing) await late.close(); }).catch(() => { diagnostic("late_browser_connect"); });
-    browser = await bounded(connecting, 30000);
-    assertActive();
-    phase = "native_stagehand_create";
-    const initializing = Stagehand.create({
-      browser, apiKey: config.BROWSERBASE_API_KEY, model: { modelName: config.STAGEHAND_MODEL },
-      cache: false, selfHeal: false, logging: { level: "off" },
-    });
-    void initializing.then(async (late) => { if (closing) await late.close(); }).catch(() => { diagnostic("late_stagehand_create"); });
-    stagehand = await bounded(initializing, 30000);
-    assertActive();
     phase = "native_cdp_connect";
     const session = await bb.sessions.retrieve(sessionId);
     if (session.id !== sessionId || session.projectId !== config.BROWSERBASE_PROJECT_ID
@@ -227,6 +221,19 @@ export async function createNativeBrowser(config: AppConfig, options: NativeBrow
     worker.once("close", () => { nativeFault = true; stop.abort(); void close(); });
     const extensionOrigin = worker.url().slice(0, -"/service-worker.js".length);
     assertTrustedBootstrap(context, extensionOrigin);
+    phase = "native_browser_connect";
+    sdk = createNativeSdk({
+      session: { id: sessionId, connectUrl: session.connectUrl, region: session.region },
+      extensionId: extensionOrigin.slice("chrome-extension://".length),
+      apiKey: config.BROWSERBASE_API_KEY!, model: config.STAGEHAND_MODEL,
+      signal, assertActive, onLost: () => { nativeFault = true; stop.abort(); void close(); },
+    });
+    await bounded(sdk.connect(), 30000);
+    assertActive();
+    phase = "native_stagehand_create";
+    await bounded(sdk.initialize(), 30000);
+    initialized = true;
+    assertActive();
     phase = "native_attestation";
     const policy = await establishNativePolicy({
       context, worker, files: bundle.files, assertActive,
@@ -248,7 +255,7 @@ export async function createNativeBrowser(config: AppConfig, options: NativeBrow
     await page.setViewportSize(options.viewport);
     assertActive();
     return {
-      browser, stagehand, playwright, context, page, extensionOrigin, usage, signal, assertActive, close, executionDeadlineMs,
+      sdk, playwright, context, page, extensionOrigin, usage, signal, assertActive, close, executionDeadlineMs,
       verifyActive,
       attachBrain(value: Brain) { assertActive(); if (brain) throw new Error("native_brain_already_attached"); brain = value; },
       attachNetwork(value: () => Promise<void>) { assertActive(); if (cleanupNetwork) throw new Error("native_network_already_attached"); cleanupNetwork = value; },

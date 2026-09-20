@@ -77,15 +77,7 @@ export async function createPublicExecution(config: AppConfig, options: PublicEx
     await native.verifyActive();
     if (network.errors.length) throw new Error("public_network_unsupported");
     phase = "public_stagehand_page";
-    const actualUrl = native.page.url();
-    const pages = await native.browser.context.pages();
-    let stagehandPage;
-    for (const candidate of pages) {
-      native.assertActive();
-      if (await candidate.url() === actualUrl) { stagehandPage = candidate; break; }
-    }
-    if (!stagehandPage) throw new Error("public_stagehand_page_unavailable");
-    await native.browser.context.setActivePage(stagehandPage);
+    await native.sdk.selectPage(native.page.url());
     await native.verifyActive();
     const driver = new ScopedBrowserDriver({
       page: native.page, artifacts: options.artifacts, cleanupJson: options.cleanupJson,
@@ -113,7 +105,7 @@ export async function createPublicExecution(config: AppConfig, options: PublicEx
       },
       close: () => actualDriver.close(),
     };
-    const rawBrain = new GatewayBrain(native.stagehand, stagehandPage, { readOnly: true, wireBudget: true });
+    const rawBrain = new GatewayBrain(native.sdk.extract, undefined, { readOnly: true, wireBudget: true });
     gatewayHolder.current = rawBrain;
     native.attachBrain(rawBrain);
     const brain: Brain = {

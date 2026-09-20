@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readPendingLaunch } from "./launch-request";
+import { newCreateRunSchema } from "./contracts";
+import { newControlledRunSchema } from "./controlled-run";
 
 const ownerId = "11111111-1111-4111-8111-111111111111";
 const request = { ownerId, key: "durable-request-key-0001", path: "/controlled-runs", body: {
@@ -9,6 +11,21 @@ const request = { ownerId, key: "durable-request-key-0001", path: "/controlled-r
 describe("owner-bound uncertain launch replay", () => {
   it("retains the exact durable request identity and validated payload", () => {
     expect(readPendingLaunch(JSON.stringify(request), ownerId)).toEqual(request);
+  });
+  it.each(["/runs", "/controlled-runs"] as const)("recovers a twelve-persona historical %s launch without shrinking or rekeying it", (path) => {
+    const assignments = Array.from({ length: 12 }, (_, index) => ({
+      ...request.body.assignments[0], personaId: `persona-${index}`,
+    }));
+    const body = path === "/runs" ? {
+      authorizationAcknowledged: true,
+      scope: { targetUrl: "https://example.com/", allowedSubdomains: [], pathPrefixes: ["/"] },
+      assignments,
+    } : { ...request.body, assignments };
+    const historical = { ...request, path, body };
+    const recovered = readPendingLaunch(JSON.stringify(historical), ownerId);
+    expect(recovered).toEqual(historical);
+    expect(JSON.stringify(recovered)).toBe(JSON.stringify(historical));
+    expect((path === "/runs" ? newCreateRunSchema : newControlledRunSchema).safeParse(body).success).toBe(false);
   });
   it("never replays a previous owner's pending request", () => {
     expect(() => readPendingLaunch(JSON.stringify(request), "22222222-2222-4222-8222-222222222222")).toThrow("pending_owner_mismatch");

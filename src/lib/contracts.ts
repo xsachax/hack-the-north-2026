@@ -3,6 +3,7 @@ import { targetScopeSchema } from "./target-scope";
 import { citationSchema, criterionCheckSchema, criterionKey, criterionSchema } from "./criteria";
 import { browserStateSchema } from "./context-contracts";
 import { PUBLIC_ASSET_POLICY, PUBLIC_EXECUTION_POLICY } from "./public-execution";
+import { hasRunCapacity, HISTORICAL_MAX_ASSIGNMENTS_PER_RUN, MAX_ASSIGNMENTS_PER_RUN } from "./execution-capacity";
 
 const text = (max: number) => z.string().trim().min(1).max(max).refine(
   (value) => !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value),
@@ -54,13 +55,17 @@ export const createRunSchema = z.strictObject({
   executionPolicy: z.literal(PUBLIC_EXECUTION_POLICY).optional(),
   assetPolicy: z.literal(PUBLIC_ASSET_POLICY).optional(),
   scope: targetScopeSchema,
-  assignments: z.array(assignmentSchema).min(1).max(12),
+  assignments: z.array(assignmentSchema).min(1).max(HISTORICAL_MAX_ASSIGNMENTS_PER_RUN),
 }).refine((value) => new Set(value.assignments.map((entry) => entry.personaId)).size === value.assignments.length,
   "Each persona may appear only once")
   .refine((value) => !!value.executionPolicy === !!value.assetPolicy, "Public execution requires both explicit policies")
   .refine((value) => !value.executionPolicy || value.assignments.every((assignment) =>
     !assignment.browserState || assignment.browserState.mode === "fresh"), "Public runs require fresh profiles");
 export type CreateRun = z.infer<typeof createRunSchema>;
+// Apply only after exact-idempotency lookup; never use this schema to rehash a saved request.
+export const newCreateRunSchema = createRunSchema.refine((request) => hasRunCapacity(request.assignments), {
+  path: ["assignments"], message: `Select at most ${MAX_ASSIGNMENTS_PER_RUN} personas per run`,
+});
 export const runSchema = z.strictObject({
   id: idSchema,
   cursor: z.int().positive(),

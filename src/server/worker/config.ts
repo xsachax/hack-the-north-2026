@@ -1,9 +1,18 @@
 import { z } from "zod";
 import type { ExecutionLimits } from "../../lib/contracts";
+import { PUBLIC_EXECUTION_IMPLEMENTATION_READY } from "../public-execution-readiness";
+import { HISTORICAL_MAX_CONCURRENT_AGENTS, MAX_CONCURRENT_AGENTS } from "../../lib/execution-capacity";
+
+export function workerExecutionModes(env: NodeJS.ProcessEnv) {
+  return {
+    controlled: env.ENABLE_DEMO_RUNS === "true",
+    public: env.ENABLE_PUBLIC_RUNS === "true" && PUBLIC_EXECUTION_IMPLEMENTATION_READY,
+  };
+}
 
 export const workerPolicySchema = z.strictObject({
-  globalConcurrency: z.int().min(1).max(12).default(3),
-  ownerConcurrency: z.int().min(1).max(12).default(3),
+  globalConcurrency: z.int().min(1).max(HISTORICAL_MAX_CONCURRENT_AGENTS).default(3),
+  ownerConcurrency: z.int().min(1).max(HISTORICAL_MAX_CONCURRENT_AGENTS).default(3),
   developmentBudgetSeconds: z.int().min(363).max(90 * 3600).default(90 * 3600),
   ownerBudgetSeconds: z.int().min(1).max(90 * 3600).default(3600),
   baselineSeconds: z.int().min(363).max(90 * 3600).default(363),
@@ -15,6 +24,18 @@ export const workerPolicySchema = z.strictObject({
   lifetimeReservationLimitSeconds: z.int().min(60).max(90 * 3600).default(90 * 3600),
 });
 export type WorkerPolicy = z.infer<typeof workerPolicySchema>;
+export const newWorkerPolicySchema = workerPolicySchema.extend({
+  globalConcurrency: z.int().min(1).max(MAX_CONCURRENT_AGENTS).default(3),
+  ownerConcurrency: z.int().min(1).max(MAX_CONCURRENT_AGENTS).default(3),
+});
+
+// Persisted policy equality and accounting stay intact; every dispatch uses these lower ceilings.
+export function workerConcurrencyLimits(policy: Pick<WorkerPolicy, "globalConcurrency" | "ownerConcurrency">) {
+  return {
+    globalConcurrency: Math.min(policy.globalConcurrency, MAX_CONCURRENT_AGENTS),
+    ownerConcurrency: Math.min(policy.ownerConcurrency, policy.globalConcurrency, MAX_CONCURRENT_AGENTS),
+  };
+}
 export function workerExecutionLimits(policy: WorkerPolicy, requested: ExecutionLimits = {}): Required<ExecutionLimits> {
   return {
     maxSteps: Math.min(policy.maxSteps, requested.maxSteps ?? policy.maxSteps),

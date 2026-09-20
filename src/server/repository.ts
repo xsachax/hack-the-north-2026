@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { DatabaseSync, type SQLOutputValue } from "node:sqlite";
 import { z } from "zod";
 import {
-  attemptSchema, createRunSchema, evidenceSchema, findingSchema, idempotencyKeySchema,
+  attemptSchema, createRunSchema, newCreateRunSchema, evidenceSchema, findingSchema, idempotencyKeySchema,
   idSchema, paginationSchema, personaProfileSchema, personaSchema, runSchema,
   eventSchema, terminalStatusSchema, publicAttemptSummarySchema, gatewayMetricsSchema,
   type Attempt, type CreateRun, type Evidence, type Finding, type Pagination,
@@ -258,6 +258,7 @@ export class Repository {
         if (existing.request_hash !== hash) throw conflict();
         return { run: readRun(existing), created: false };
       }
+      if (!newCreateRunSchema.safeParse(request).success) throw new ServiceError("invalid_request", 400);
       if (!controlled && request.assignments.some((assignment) =>
         assignment.browserState && assignment.browserState.mode !== "fresh")) {
         throw new ServiceError("invalid_request", 400);

@@ -4,7 +4,7 @@ The separate Node process preserves registered controlled-site execution and
 contains a distinct, source-disabled public read-only path. Legacy/unversioned
 website requests remain `blocked_unsupported` without allocating a browser;
 enabling a flag cannot upgrade those stored requests. Release gate #8 remains
-open. There is no fixture fallback or target-validation exception.
+unproved regardless of the issue's GitHub state. There is no fixture fallback or target-validation exception.
 Layer 04b (#11) adds custom structural and evidence-grounded semantic
 criteria for the store and project board before the layer 05 wall. Natural-language
 evaluation is a recorded heuristic, not a deterministic outcome oracle.
@@ -20,6 +20,14 @@ the source-level stop. Queued versioned public jobs finish `blocked_unsupported`
 any launch reservation or public factory call. Re-enablement requires the new
 public-execution plan and a reviewed source change, not configuration changes.
 Historical tests and the standalone broker proof are not acceptance.
+
+The startup path distinguishes controlled and public authorization. Once source
+readiness is approved, a public-only worker can start without enabling demo runs
+or fetching the fixture health page. It skips queued controlled jobs rather than
+spending on them, and does not pump controlled reproduction work. Deployment
+still requires explicit paid confirmation. This future-path wiring does not
+override the current source stop; existing orphan cleanup remains separate from
+authority to launch a new job.
 
 The same source stop suspends automatic and manual public/native reconciliation,
 including restored native-resource or discovery-event rows attached to a launch.
@@ -39,7 +47,7 @@ The #8 [native-policy probe](EXECUTION.md#native-browser-policy-candidate-offlin
 has both offline conformance tests and a production adapter used by the gated
 public factory. Running offline probes uploads no extension and allocates no
 provider browser/model work. A provider proof requires
-fresh coordinator approval and a separately reviewed bounded harness; existing
+fresh explicit user approval and a separately reviewed bounded harness; existing
 API credentials do not grant that approval.
 
 Public sessions are fresh only, with no context save/reuse or takeover. Native
@@ -58,6 +66,14 @@ through remote release. `COMPLETED` is required for clean live acceptance;
 operational retirement of `ERROR`/`TIMED_OUT` requires two independently matched
 identity/status/start/end readbacks and remains a failed outcome. Exact-ID
 authenticated not-found is required to confirm extension deletion.
+
+The native factory uses an exclusive SDK worker thread and the real Browserbase
+session identity; only the parent owns provider release. It never calls branded
+SDK browser close methods. After remote readback, actual thread termination
+settles outstanding SDK RPCs/sockets/retries before recycling the metadata port
+or detaching native/network/Playwright control. A termination failure retains
+attachments and quarantines the extension. Local WSS and synthetic Gateway
+regressions prove these mechanics, not hosted public execution.
 
 The maintained worker/reconciliation commands and deployment supervisor supply
 `--conditions=react-server` before imports. This resolves the server-only broker
@@ -106,7 +122,8 @@ credits once an explicitly confirmed worker is running.
 
 Bootstrap an owner, then submit `/api/v1/demo-runs` as documented in API.md.
 The twelve predefined personas and owned custom profiles share immutable
-goal/criteria snapshots. The legacy demo route accepts only `fixed` and `second-coupon` scenarios and the
+goal/criteria snapshots; a new run may select at most eight of them.
+The legacy demo route accepts only `fixed` and `second-coupon` scenarios and the
 two listed deterministic criteria. The separate `/api/v1/controlled-runs` route
 accepts registered sites and custom criteria; see the canonical examples in
 [API.md](API.md). Other fixture flags and loopback transport ports are not
@@ -121,10 +138,37 @@ or delete the ledger to reset spending. External/manual harnesses do not share
 this ledger; stop them during worker operation and include their usage in the
 external baseline.
 
+The product dispatch ceiling is **eight occupied Browserbase agents globally**
+across every worker sharing this database, never eight per process. Defaults
+remain three; smaller global/owner limits still win. Count all non-settled launch
+intents, active launches, recovery and quarantine against capacity. Recovery may
+reclaim an occupied slot but must never allocate a replacement browser.
+
+Historical worker policies may record concurrency values from nine through
+twelve. They remain readable and must match verbatim when reopening; do not
+silently rewrite their JSON, reservations, refunds or consumed usage. Dispatch
+clamps those recorded values to eight without changing the stored policy. If an
+older deployment already has more than eight occupied slots, stop new dispatch
+until confirmed retirement drops it below eight; do not mark sessions settled
+merely to fit the new cap. Stop all older worker binaries before upgrading so an
+old dispatcher cannot bypass the new ceiling. New policy configurations use
+one through eight; retaining an old value is compatibility, not permission for
+additional sessions.
+
+The new-run admission ceiling is also eight (website, controlled, demo and
+reruns). Historical runs/results and exact-idempotent requests with up to twelve
+assignments are preserved; only a genuinely new submission is rejected above
+eight, after the old exact-key lookup.
+
+This ceiling does not authorize paid execution. The separately bounded hosted
+proof remains concurrency one, at most two new sessions, with its existing
+1800-second lifetime reservation ceiling. Neither public source readiness nor
+the requirement for fresh explicit digest-bound hosted approval changes.
+
 | Environment variable | Worker default | Bound / meaning |
 | --- | --- | --- |
-| `MAX_CONCURRENT_SESSIONS` | 3 | Shared global occupied slots, 1..12; does not increase provider quota |
-| `MAX_OWNER_SESSIONS` | 3 | Shared per-owner occupied slots, 1..12 |
+| `MAX_CONCURRENT_SESSIONS` | 3 | Shared global occupied slots, 1..8 for new policy; historical 9..12 are dispatch-clamped, never increased provider quota |
+| `MAX_OWNER_SESSIONS` | 3 | Shared per-owner occupied slots, 1..8 for new policy; never above global dispatch capacity |
 | `DEVELOPMENT_BUDGET_SECONDS` | 324000 | At most 90 hours of the project's 100-hour allowance; protects at least 10 hours for final rehearsal |
 | `EXTERNAL_BASELINE_SECONDS` | 363 | At least 363; rounds prior foundation + layer03 actual 362.640 seconds upward |
 | `OWNER_BUDGET_SECONDS` | 3600 | Lifetime owner budget, at most development maximum |

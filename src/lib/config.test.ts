@@ -17,6 +17,17 @@ describe("server configuration", () => {
     expect(readConfig({ ...env, BROWSERBASE_PROJECT_ID: "" }).BROWSERBASE_PROJECT_ID).toBeUndefined();
   });
 
+  it("accepts eight concurrent Browserbase sessions without increasing defaults", () => {
+    expect(readConfig({ ...env, MAX_CONCURRENT_SESSIONS: "8" }).MAX_CONCURRENT_SESSIONS).toBe(8);
+    expect(readConfig(env).MAX_CONCURRENT_SESSIONS).toBe(3);
+  });
+
+  it.each(["9", "12"])("clamps historical concurrency %s without rewriting the environment or worker policy", (value) => {
+    const historical = { ...env, MAX_CONCURRENT_SESSIONS: value };
+    expect(readConfig(historical).MAX_CONCURRENT_SESSIONS).toBe(8);
+    expect(historical.MAX_CONCURRENT_SESSIONS).toBe(value);
+  });
+
   it.each([
     ["MAX_CONCURRENT_SESSIONS", "0"],
     ["MAX_CONCURRENT_SESSIONS", "13"],

@@ -1,15 +1,19 @@
 import { z } from "zod";
 import { idSchema, runSchema } from "./contracts";
 import { findingCategorySchema, reportCriterionSchema, runReportSchema } from "./report-contracts";
+import { hasRunCapacity, HISTORICAL_MAX_ASSIGNMENTS_PER_RUN, MAX_ASSIGNMENTS_PER_RUN } from "./execution-capacity";
 
 export const rerunRequestSchema = z.strictObject({
   authorizationAcknowledged: z.literal(true),
-  attemptIds: z.array(idSchema).min(1).max(12).refine(
+  attemptIds: z.array(idSchema).min(1).max(HISTORICAL_MAX_ASSIGNMENTS_PER_RUN).refine(
     (ids) => new Set(ids).size === ids.length, "Select each parent attempt only once",
   ),
   scenario: z.enum(["fixed", "second-coupon"]).optional(),
 });
 export type RerunRequest = z.infer<typeof rerunRequestSchema>;
+export const newRerunRequestSchema = rerunRequestSchema.refine((request) => hasRunCapacity(request.attemptIds), {
+  path: ["attemptIds"], message: `Select at most ${MAX_ASSIGNMENTS_PER_RUN} attempts per rerun`,
+});
 export const rerunResponseSchema = z.strictObject({ run: runSchema, created: z.boolean() });
 export const rerunPairSchema = z.strictObject({ parentAttemptId: idSchema, childAttemptId: idSchema });
 export type RerunPair = z.infer<typeof rerunPairSchema>;

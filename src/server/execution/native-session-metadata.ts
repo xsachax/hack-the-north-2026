@@ -4,7 +4,10 @@ import { z } from "zod";
 
 const sessionSchema = z.strictObject({
   id: z.uuid(),
-  connectUrl: z.string().max(4096).url().refine((value) => new URL(value).protocol === "wss:"),
+  connectUrl: z.string().max(4096).url().refine((value) => {
+    const url = new URL(value);
+    return url.protocol === "wss:" && !url.username && !url.password && !url.hash;
+  }),
   region: z.enum(["us-west-2", "us-east-1", "eu-central-1", "ap-southeast-1"]).optional(),
 });
 
