@@ -1,3 +1,4 @@
+import { APIConnectionTimeoutError } from "@browserbasehq/sdk/error";
 import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
 import { resolve } from "node:path";
@@ -7,6 +8,7 @@ import { personas } from "../../lib/personas";
 import { WorkerRepository } from "../worker/repository";
 import { ManagedWorker } from "./worker";
 import type { ManagedOutcome } from "./types";
+import type { ManagedProvider } from "./provider";
 
 const options = {
   apiKey: "offline-only-provider-key", projectId: randomUUID(), agentId: "offline-agent",
@@ -80,5 +82,30 @@ describe("managed worker owns durable lifecycle", () => {
     expect(attempt.reservedSeconds).toBe(repository.policy.sessionSeconds);
     expect(attempt.actualBrowserSeconds).toBeNull();
     expect(log).toHaveBeenCalledWith("managed_worker_attempt_recovery_required");
+  });
+
+  it("wires real runner create diagnostics to durable storage before finishing unknown allocation", async () => {
+    const run = create();
+    const claim = repository.managed.claim("worker", repository.policy)!;
+    const provider: ManagedProvider = {
+      createRun: vi.fn().mockRejectedValue(new APIConnectionTimeoutError()),
+      retrieveRun: vi.fn(), listRuns: vi.fn(), listMessages: vi.fn(), stopRun: vi.fn(),
+      retrieveSession: vi.fn(), debugSession: vi.fn(), releaseSession: vi.fn(),
+    };
+    const record = vi.spyOn(repository.managed, "createFailure");
+    const finish = vi.spyOn(repository.managed, "finish");
+    await new ManagedWorker(repository, repository.policy, { ...options, provider })
+      .executeClaim(claim, new AbortController().signal);
+    expect(record).toHaveBeenCalledExactlyOnceWith(claim, {
+      category: "timeout", httpStatus: null, requestId: null, requestIdHeader: null,
+    });
+    expect(record.mock.invocationCallOrder[0]).toBeLessThan(finish.mock.invocationCallOrder[0]);
+    expect(repository.managed.get(owner, run.id).attempts[0]).toMatchObject({
+      status: "cleanup_required", cleanup: "unconfirmed", error: "managed_allocation_unknown", actualBrowserSeconds: null,
+    });
+    expect(repository.accounting(owner)).toMatchObject({
+      reservedSeconds: repository.policy.sessionSeconds, consumedSeconds: 0, releasedSeconds: 0,
+    });
+    expect(provider.createRun).toHaveBeenCalledOnce();
   });
 });

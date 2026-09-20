@@ -12,6 +12,11 @@ import { Repository } from "../repository";
 import { workerPolicySchema, type WorkerPolicy } from "../worker/config";
 import { WorkerRepository } from "../worker/repository";
 import type { ManagedClaim, ManagedOutcome } from "./types";
+import type { ManagedCreateFailure } from "./create-failure";
+
+const createFailure: ManagedCreateFailure = {
+  category: "http", httpStatus: 429, requestId: "original-post-id", requestIdHeader: "x-request-id",
+};
 
 const request = (ids: string[] = [personas[0].id]): ManagedCreate => ({
   executionPolicy: MANAGED_EXECUTION_POLICY,
@@ -338,6 +343,8 @@ describe("managed durable store (offline)", () => {
     const run = create();
     const first = claim();
     dispatch(first);
+    repository.managed.createFailure(first, createFailure);
+    const recorded = JSON.stringify({ ...createFailure, recordedAt: new Date(time).toISOString() });
     repository.managed.finish(first, outcome({
       status: "failed", providerStatus: null, cleanup: "unconfirmed", actualBrowserSeconds: null,
       error: "lost create response",
@@ -360,9 +367,17 @@ describe("managed durable store (offline)", () => {
       });
       expect(recovered.providerRunId).toBeUndefined();
       expect(() => dispatch(recovered)).toThrow("managed_recovery_cannot_dispatch");
+      expect(() => repository.managed.createFailure(recovered, { ...createFailure, httpStatus: 503 }))
+        .toThrow("managed_recovery_cannot_record_create_failure");
       repository.managed.finish(recovered, outcome({
         status: "failed", providerStatus: null, cleanup: "unconfirmed", actualBrowserSeconds: null,
+        error: "managed_recovery_unconfirmed",
       }));
+      expect(inspect().prepare("SELECT first_create_failure FROM managed_attempts WHERE id=?").get(first.id)?.first_create_failure)
+        .toBe(recorded);
+      expect(repository.accounting(owner)).toMatchObject({
+        reservedSeconds: 240, consumedSeconds: 0, releasedSeconds: 0, committedSeconds: 240,
+      });
     }
     time += 600_000;
     expect(repository.managed.claim("exhausted", repository.policy)).toBeNull();
@@ -370,6 +385,51 @@ describe("managed durable store (offline)", () => {
     expect(repository.accounting(owner).reservedSeconds).toBe(240);
     expect(inspect().prepare("SELECT recovery_count,state FROM managed_attempts WHERE id=?").get(first.id))
       .toEqual({ recovery_count: 2, state: "quarantined" });
+    expect(repository.managed.get(owner, run.id).attempts[0]).toMatchObject({
+      error: "managed_recovery_unconfirmed", actualBrowserSeconds: null,
+    });
+  });
+
+  it("persists create diagnostics once under the original lease, even after cancellation, and keeps them private", () => {
+    const run = create();
+    const first = claim();
+    expect(() => repository.managed.createFailure(first, createFailure)).toThrow("managed_dispatch_not_started");
+    dispatch(first);
+    repository.managed.cancel(owner, run.id);
+    repository.managed.createFailure(first, createFailure);
+    const db = inspect();
+    const read = () => db.prepare("SELECT first_create_failure FROM managed_attempts WHERE id=?").get(first.id)?.first_create_failure;
+    const recorded = JSON.stringify({ ...createFailure, recordedAt: new Date(time).toISOString() });
+    expect(read()).toBe(recorded);
+    expect(() => repository.managed.createFailure(first, { ...createFailure, httpStatus: 500 }))
+      .toThrow("managed_create_failure_already_recorded");
+    for (const value of [null, JSON.stringify({ ...createFailure, httpStatus: 500 })]) {
+      expect(() => db.prepare("UPDATE managed_attempts SET first_create_failure=? WHERE id=?").run(value, first.id))
+        .toThrow("immutable_managed_create_failure");
+    }
+    repository.managed.finish(first, outcome({ cleanup: "unconfirmed", actualBrowserSeconds: null }));
+    expect(read()).toBe(recorded);
+    const visible = JSON.stringify(open().managed.get(owner, run.id));
+    expect(visible).not.toContain("first_create_failure");
+    expect(visible).not.toContain(createFailure.requestId);
+    expect(repository.accounting(owner)).toMatchObject({ reservedSeconds: 300, consumedSeconds: 0, releasedSeconds: 0 });
+    time += 60_000;
+    const recovered = claim();
+    repository.managed.finish(recovered, outcome());
+    expect(read()).toBe(recorded);
+  });
+
+  it("rejects invalid diagnostic fields and removes private identity values from request IDs", () => {
+    create();
+    const first = claim();
+    dispatch(first);
+    expect(() => repository.managed.createFailure(first, { ...createFailure, requestId: "unsafe\nid" }))
+      .toThrow("managed_create_failure_invalid");
+    repository.managed.createFailure(first, { ...createFailure, requestId: first.correlationToken });
+    const saved = inspect().prepare("SELECT first_create_failure FROM managed_attempts WHERE id=?").get(first.id)?.first_create_failure;
+    expect(saved).toBe(JSON.stringify({
+      ...createFailure, requestId: null, requestIdHeader: null, recordedAt: new Date(time).toISOString(),
+    }));
   });
 
   it("fences every stale journal write, including same-worker lease-generation reuse", () => {
@@ -383,6 +443,7 @@ describe("managed durable store (offline)", () => {
       () => repository.managed.assertLease(first, true),
       () => repository.managed.heartbeat(first, repository.policy.leaseMs),
       () => dispatch(first),
+      () => repository.managed.createFailure(first, createFailure),
       () => repository.managed.identity(first, { providerRunId: "stable-run" }),
       () => repository.managed.progress(first, { id: "stale", kind: "text", text: "stale" }),
       () => repository.managed.sessionView(first, views),
@@ -666,6 +727,46 @@ describe("managed durable store (offline)", () => {
     expect(db.prepare("SELECT configuration FROM worker_policy").get()?.configuration).toBe(JSON.stringify(policy));
     expect(() => api.managed.claim("mismatched-worker", { ...policy, sessionSeconds: 300 })).toThrow("worker_policy_mismatch");
     expect(open(policy).policy).toEqual(policy);
+  });
+
+  it("leaves four historical unknown creates untouched when adding diagnostics, without inventing original evidence", () => {
+    const policy = repository.policy;
+    for (const connection of connections) connection.close();
+    connections = [];
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { mode: 0o700 });
+    const db = inspect();
+    db.exec(migrations.slice(0, -1).join("\n"));
+    db.exec(`PRAGMA user_version=${migrations.length - 1}`);
+    db.prepare("INSERT INTO worker_policy VALUES(1,?,?)").run(JSON.stringify(policy), policy.baselineSeconds);
+    db.prepare("INSERT INTO owners VALUES(?,?,?,?)").run(owner, "legacy-hash", "legacy-csrf", time + 60_000);
+    const runId = randomUUID();
+    const now = new Date(time).toISOString();
+    db.prepare(`INSERT INTO managed_runs(id,owner_id,idempotency_key,request_hash,execution_policy,scope,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?)`).run(runId, owner, randomUUID(), "legacy-request", MANAGED_EXECUTION_POLICY,
+        JSON.stringify(request().scope), now, now);
+    for (let index = 0; index < 4; index++) {
+      db.prepare(`INSERT INTO managed_attempts(id,run_id,persona,goal,criteria,correlation_token,status,state,cleanup,
+        dispatch_started,reserved_seconds,started_at,recovery_count,error,provider_agent_id,provider_task)
+        VALUES(?,?,?,?,?,?,'cleanup_required','quarantined','unconfirmed',1,60,?,6,'managed_recovery_unconfirmed',?,?)`)
+        .run(randomUUID(), runId, JSON.stringify(personas[index]), "Find help", JSON.stringify(["Help is visible"]),
+          randomUUID(), time - 60_000, "old-agent", "original task");
+    }
+    const rows = db.prepare("SELECT * FROM managed_attempts ORDER BY id").all();
+    const originalPolicy = db.prepare("SELECT * FROM worker_policy").get();
+    repository = open(policy);
+    const upgraded = inspect();
+    expect(upgraded.prepare("PRAGMA user_version").get()?.user_version).toBe(migrations.length);
+    expect(upgraded.prepare("SELECT * FROM managed_attempts ORDER BY id").all())
+      .toEqual(rows.map((row) => ({ ...row, first_create_failure: null })));
+    expect(upgraded.prepare("SELECT * FROM worker_policy").get()).toEqual(originalPolicy);
+    expect(repository.managed.claim("no-counter-reset", policy)).toBeNull();
+    expect(repository.accounting(owner)).toMatchObject({
+      reservedSeconds: 240, consumedSeconds: 0, releasedSeconds: 0, committedSeconds: 240,
+    });
+    for (const attempt of repository.managed.get(owner, runId).attempts) {
+      expect(attempt).toMatchObject({ status: "cleanup_required", cleanup: "unconfirmed", actualBrowserSeconds: null });
+    }
   });
 
   it("adds dispatch snapshot columns to an existing preview ledger without guessing legacy task or agent values", () => {

@@ -1,6 +1,7 @@
 import type { Persona } from "../../lib/contracts";
 import type { ManagedResult } from "../../lib/managed-contracts";
 import type { TargetScope } from "../../lib/target-scope";
+import type { ManagedCreateFailure } from "./create-failure";
 
 export type ManagedClaim = {
   id: string;
@@ -34,6 +35,7 @@ export type ManagedOutcome = {
 export type ManagedJournal = {
   assertActive(allowCancelled?: boolean): void;
   dispatch(reference: { agentId: string; task: string }): void;
+  createFailure(diagnostic: ManagedCreateFailure): void;
   identity(reference: { providerRunId: string; providerSessionId?: string }): void;
   progress(event: { id: string; kind: "status" | "text" | "tool" | "error"; text: string }): void;
   sessionView(value: { liveViewUrl: string; replayUrl: string }): void;

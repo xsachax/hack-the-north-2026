@@ -1,3 +1,4 @@
+import { APIConnectionError, APIConnectionTimeoutError, APIError } from "@browserbasehq/sdk/error";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { executeManagedAgent } from "./runner";
 import type { ManagedProvider, ManagedProviderRun, ManagedProviderSession } from "./provider";
@@ -41,6 +42,7 @@ function fixture() {
       events.push("dispatch");
       dispatchReference = { ...reference };
     }),
+    createFailure: vi.fn(),
     identity: vi.fn((value) => events.push(value.providerSessionId ? "session-identity" : "run-identity")),
     progress: vi.fn(),
     sessionView: vi.fn(),
@@ -212,7 +214,97 @@ describe("managed Agents runner", () => {
       status: "cancelled", cleanup: "closed", allocationAttempted: false, error: "managed_cancelled",
     });
     expect(f.journal.dispatch).not.toHaveBeenCalled();
+    expect(f.journal.createFailure).not.toHaveBeenCalled();
     expect(f.provider.createRun).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { caught: new APIConnectionError({ cause: new Error(SECRET) }), category: "connection", httpStatus: null },
+    { caught: new APIConnectionTimeoutError({ message: SECRET }), category: "timeout", httpStatus: null },
+    ...[400, 401, 403, 404, 409, 422, 429, 500, 503].map((status) => ({
+      caught: new APIError(status, { message: SECRET }, SECRET, { "x-request-id": "original-post-id" }),
+      category: "http", httpStatus: status,
+    })),
+  ])("preserves $category/$httpStatus create evidence without proving nonallocation", async ({ caught, category, httpStatus }) => {
+    const f = fixture();
+    f.provider.createRun.mockRejectedValue(caught);
+    const first = await executeManagedAgent(f.claim, f.journal, f.options);
+    expect(first).toMatchObject({
+      error: "managed_allocation_unknown", cleanup: "unconfirmed", allocationAttempted: true, actualBrowserSeconds: null,
+    });
+    expect(f.journal.createFailure).toHaveBeenCalledExactlyOnceWith({
+      category, httpStatus, requestId: httpStatus === null ? null : "original-post-id",
+      requestIdHeader: httpStatus === null ? null : "x-request-id",
+    });
+    f.provider.listRuns.mockResolvedValue({ data: [], nextCursor: null });
+    const second = await executeManagedAgent(f.recoveredClaim(), f.journal, f.options);
+    expect(second).toMatchObject({ error: "managed_recovery_unconfirmed", cleanup: "unconfirmed", actualBrowserSeconds: null });
+    expect(f.journal.createFailure).toHaveBeenCalledOnce();
+    expect(f.provider.createRun).toHaveBeenCalledOnce();
+    expect(f.provider.stopRun).not.toHaveBeenCalled();
+    expect(f.provider.releaseSession).not.toHaveBeenCalled();
+    expect(f.journal.progress).not.toHaveBeenCalled();
+  });
+
+  it.each(["cancelled", "deadline_elapsed"])("captures the original response before %s replaces the current error", async (reason) => {
+    const f = fixture();
+    f.provider.createRun.mockImplementation(async () => {
+      if (reason === "cancelled") f.controller.abort();
+      else vi.spyOn(Date, "now").mockReturnValue(f.claim.startedAt + 60_001);
+      throw new APIError(503, {}, SECRET, { "x-request-id": "original-post-id" });
+    });
+    const outcome = await executeManagedAgent(f.claim, f.journal, f.options);
+    expect(outcome).toMatchObject({ error: `managed_${reason}`, cleanup: "unconfirmed", actualBrowserSeconds: null });
+    expect(f.journal.createFailure).toHaveBeenCalledExactlyOnceWith({
+      category: "http", httpStatus: 503, requestId: "original-post-id", requestIdHeader: "x-request-id",
+    });
+  });
+
+  it.each([SECRET, PROJECT, AGENT, `prefix-${SECRET}-suffix`, `%62%62${SECRET.slice(2)}`, "bb_live_unknown_credential"])(
+    "does not retain credential-like request IDs or provider error contents", async (requestId) => {
+      const f = fixture();
+      f.provider.createRun.mockRejectedValue(new APIError(500, {
+        message: SECRET, task: "private task", url: "https://private.invalid",
+      }, SECRET, { "x-request-id": requestId, authorization: SECRET }));
+      const outcome = await executeManagedAgent(f.claim, f.journal, f.options);
+      expect(f.journal.createFailure).toHaveBeenCalledExactlyOnceWith({
+        category: "http", httpStatus: 500, requestId: null, requestIdHeader: null,
+      });
+      expect(JSON.stringify({ outcome, progress: vi.mocked(f.journal.progress).mock.calls })).not.toContain(SECRET);
+    },
+  );
+
+  it("does not mislabel response validation or later polling errors as a create rejection", async () => {
+    const f = fixture();
+    f.provider.retrieveRun.mockRejectedValue(new APIError(503, {}, "", { "x-request-id": "later-get-id" }));
+    await executeManagedAgent(f.claim, f.journal, f.options);
+    expect(f.journal.createFailure).not.toHaveBeenCalled();
+    f.provider.createRun.mockResolvedValue(f.run({ agentId: "wrong-agent" }));
+    await executeManagedAgent(f.claim, f.journal, f.options);
+    expect(f.journal.createFailure).not.toHaveBeenCalled();
+  });
+
+  it("fences a late create rejection after lease loss without writing diagnostics", async () => {
+    const f = fixture();
+    f.provider.createRun.mockImplementation(async () => {
+      vi.mocked(f.journal.assertActive).mockImplementation(() => { throw new Error("stale"); });
+      throw new APIConnectionTimeoutError();
+    });
+    expect(await executeManagedAgent(f.claim, f.journal, f.options)).toMatchObject({
+      error: "managed_lease_lost", cleanup: "unconfirmed", actualBrowserSeconds: null,
+    });
+    expect(f.journal.createFailure).not.toHaveBeenCalled();
+    expect(f.provider.createRun).toHaveBeenCalledOnce();
+  });
+
+  it("surfaces failed diagnostic persistence without releasing or retrying the allocation", async () => {
+    const f = fixture();
+    f.provider.createRun.mockRejectedValue(new APIConnectionTimeoutError());
+    vi.mocked(f.journal.createFailure).mockImplementation(() => { throw new Error("private database failure"); });
+    expect(await executeManagedAgent(f.claim, f.journal, f.options)).toMatchObject({
+      error: "managed_create_failure_not_recorded", cleanup: "unconfirmed", actualBrowserSeconds: null,
+    });
+    expect(f.provider.createRun).toHaveBeenCalledOnce();
   });
 
   it("journals a create response despite concurrent cancellation, then stops and verifies remotely", async () => {

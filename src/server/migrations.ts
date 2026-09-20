@@ -275,4 +275,12 @@ export const migrations = [
   ALTER TABLE managed_attempts ADD COLUMN finished_at INTEGER
     CHECK(finished_at IS NULL OR finished_at>=0);
   `,
+  `
+  ALTER TABLE managed_attempts ADD COLUMN first_create_failure TEXT
+    CHECK(first_create_failure IS NULL OR (json_valid(first_create_failure) AND length(first_create_failure)<=1024));
+  CREATE TRIGGER managed_first_create_failure_immutable
+    BEFORE UPDATE OF first_create_failure ON managed_attempts
+    WHEN OLD.first_create_failure IS NOT NULL AND NEW.first_create_failure IS NOT OLD.first_create_failure
+    BEGIN SELECT RAISE(ABORT,'immutable_managed_create_failure'); END;
+  `,
 ] as const;
