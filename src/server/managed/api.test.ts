@@ -6,6 +6,7 @@ import { createApi, type ApiConfiguration } from "../api";
 import { Repository } from "../repository";
 import { managedCreateSchema, managedRunSchema, MANAGED_EXECUTION_POLICY } from "../../lib/managed-contracts";
 import { managedAllowedOrigins, managedCapabilities, requireManagedWorker } from "./config";
+import { managedSpecialists } from "../../lib/managed-specialists";
 
 const origin = "http://127.0.0.1:3000";
 const input = () => managedCreateSchema.parse({
@@ -48,6 +49,18 @@ describe("managed owner API with no provider operations", () => {
     expect(run.attempts[0]).toMatchObject({ reservedSeconds: 0, modelCalls: null, cleanup: "not_started" });
     expect(repository.listRuns(owner.ownerId, { after: 0, limit: 100 }).items).toEqual([]);
     expect(validateScope).toHaveBeenCalledOnce();
+  });
+  it("snapshots every demo specialist's concrete mission through the existing assignment API", async () => {
+    const assignments = managedSpecialists.map(({ personaId, goal, criteria }) => ({ personaId, goal, criteria }));
+    const body = { ...input(), assignments };
+    const response = await handle()(request("managed-runs", "POST", body));
+    expect(response.status).toBe(201);
+    const run = managedRunSchema.parse((await response.json()).data);
+    expect(run.attempts.map((attempt) => ({
+      personaId: attempt.persona.id, goal: attempt.goal, criteria: attempt.criteria,
+    }))).toEqual(assignments);
+    expect(run.attempts.map((attempt) => attempt.persona.name)).toEqual(["Alex", "Ash", "Sam", "Lee"]);
+    expect(run.attempts.every((attempt) => attempt.status === "queued" && attempt.cleanup === "not_started")).toBe(true);
   });
   it.each([
     { managedEnabled: false }, { managedAgentConfigured: false }, { managedAllowedOrigins: [] },
