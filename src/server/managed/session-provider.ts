@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   browserbase, Stagehand, type BrowserbaseLaunchOptions, type ModelName, type StagehandBrowser,
+  type StagehandClientExtractOptions,
 } from "@browserbasehq/stagehand";
 import { z } from "zod";
 import { personaSchema } from "../../lib/contracts";
@@ -17,6 +18,8 @@ export type SessionEnginePage = {
   evaluate?<R>(expression: string): Promise<R>;
   title?(): Promise<string>;
   close?(): Promise<void>;
+  /** An opaque element handle that is only ever handed back to extract as locator or ignoreLocators. */
+  locator?(selector: string): unknown;
 };
 export type SessionEngineBrowser = {
   readonly sessionId?: string;
@@ -28,7 +31,8 @@ export type SessionEngineBrowser = {
 };
 export type SessionEngineStagehand = {
   extract<Schema extends z.ZodType>(
-    instruction: string, schema: Schema, options?: { timeout?: number },
+    instruction: string, schema: Schema,
+    options?: { timeout?: number; locator?: unknown; ignoreLocators?: unknown[] },
   ): Promise<{ data: z.output<Schema> }>;
   act(instruction: string, options?: { timeout?: number }): Promise<{ data: { success: boolean } }>;
   close(): Promise<void>;
@@ -41,6 +45,8 @@ export type SessionEngineDeps = {
   id(): string;
   /** Receives fixed diagnostic codes only: stage, error class name and numeric status. */
   log(line: string): void;
+  /** The pause before the single report retry. */
+  wait(ms: number): Promise<void>;
 };
 export type SessionEngineOptions = {
   apiKey: string; projectId: string; modelName: ModelName; runSeconds: number; maxSteps?: number;
@@ -58,6 +64,11 @@ const MAX_FACTS = 16;
 const CLOSE_MS = 5_000;
 const LAUNCH_MS = 30_000;
 const STARTUP_MS = 45_000;
+const REPORT_RETRY_MS = 1_500;
+const BACK_MS = 10_000;
+const LARGE_ELEMENTS = 3_000;
+const LARGE_TEXT = 60_000;
+const MAX_SUMMARY = 4_000;
 const SCOPE_LIMITATION = "Scope and read-only behaviour were instructions to a model-driven browser loop, not enforced restrictions.";
 const REPORT_LIMITATION = "Model-authored report, not independently verified.";
 const forbidden = new RegExp(`\\b(${[
@@ -111,6 +122,28 @@ const FOCUS_PROBE = `(() => { try {
     outlineStyle: String(style.outlineStyle).slice(0, 40), outlineWidth: String(style.outlineWidth).slice(0, 40),
     boxShadowSet: Boolean(style.boxShadow) && style.boxShadow !== "none",
   };
+} catch { return null; } })()`;
+// Size only: how many elements and how much rendered text the document has.
+const sizeSchema = z.object({
+  elements: z.number().finite().min(0), text: z.number().finite().min(0), tables: z.number().finite().min(0).catch(0),
+});
+const SIZE_PROBE = `(() => { try {
+  return { elements: document.getElementsByTagName("*").length,
+    text: String((document.body && document.body.innerText) || "").length,
+    tables: document.getElementsByTagName("table").length };
+} catch { return null; } })()`;
+// Stagehand reads the WHOLE page when a locator matches nothing it can use, so the report is only scoped to small
+// elements whose first match is actually rendered. Returns at most two selectors.
+const SCOPES = ["h1", "h2", "h3", "p", "a"] as const;
+const scopeSchema = z.object({ selectors: z.array(z.enum(SCOPES)).max(2) });
+const SCOPE_PROBE = `(() => { try {
+  const found = [];
+  for (const s of ${JSON.stringify(SCOPES)}) {
+    const el = document.querySelector(s);
+    if (el && el.getClientRects().length && !el.closest("[aria-hidden=true]")) found.push(s);
+    if (found.length === 2) break;
+  }
+  return { selectors: found };
 } catch { return null; } })()`;
 const reportSchema = z.object({
   summary: z.string(),
@@ -217,6 +250,7 @@ const FACTS = [
   "or click took includes harness and model overhead and is never a page's speed. A focus fact that detected no",
   "outline or box-shadow does not prove there is no focus indicator, because other styles were not checked.",
 ].join(" ");
+const DURATION = /\d\s*(ms|s|secs?|seconds?)\b/i;
 const TIMING_LIMITATION = "Timings were measured by the harness from an unthrottled cloud browser, not a real user's device or network.";
 
 export function createSessionManagedProvider(
@@ -228,6 +262,7 @@ export function createSessionManagedProvider(
   const id = deps.id ?? randomUUID;
   const log = deps.log ?? ((line: string) => console.error(line));
   const base = deps.base ?? createManagedProvider(options.apiKey);
+  const wait = deps.wait ?? ((ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); }));
   const launch: SessionEngineDeps["launch"] = deps.launch ?? ((params) => browserbase.launch(params));
   const createStagehand = deps.createStagehand ?? (async (browser) => {
     const stagehand = await Stagehand.create({
@@ -238,7 +273,9 @@ export function createSessionManagedProvider(
       cache: false, selfHeal: false, logging: { level: "off" },
     });
     return {
-      extract: (instruction, schema, extractOptions) => stagehand.extract(instruction, schema, extractOptions),
+      // Locators only ever come from this browser's own page.locator(), so they pass straight through.
+      extract: (instruction, schema, extractOptions) => stagehand.extract(
+        instruction, schema, extractOptions as StagehandClientExtractOptions | undefined),
       act: (instruction, actOptions) => stagehand.act(instruction, actOptions),
       close: () => stagehand.close(),
     };
@@ -273,14 +310,41 @@ export function createSessionManagedProvider(
     }
   }
 
-  function fallbackResult(input: SessionTask, finalUrl: string, limitations: readonly string[]): ManagedResult {
+  /** Without a model report no criterion gets a verdict, but what the agent noted while browsing is still returned. */
+  function fallbackResult(
+    input: SessionTask, finalUrl: string, limitations: readonly string[],
+    observations: readonly string[] = [], facts: readonly string[] = [],
+  ): ManagedResult {
+    let summary = observations.length
+      ? "No model report was produced, so no criterion has a verdict. Observations recorded while browsing:"
+      : "The browser loop finished without a usable model report.";
+    // Whole items only, so the clamp never cuts an observation or a fact in half.
+    const add = (piece: string) => {
+      if (summary.length + piece.length >= MAX_SUMMARY) return false;
+      summary += piece;
+      return true;
+    };
+    let cited = false;
+    if (observations.length && observations.every((entry, index) => add(` (${index + 1}) ${entry}`))) {
+      for (const entry of facts) {
+        if (!add(`${cited ? "; " : " Harness facts: "}${entry.replace(/\.$/, "")}`)) break;
+        cited = true;
+      }
+      if (cited) summary += ".";
+    }
     return {
-      summary: "The browser loop finished without a usable model report.",
+      summary,
       finalUrl,
       criteria: input.criteria.map((criterion) => ({
-        criterion, status: "inconclusive" as const, observation: "Not observed.",
+        criterion, status: "inconclusive" as const,
+        observation: observations.length
+          ? "No model verdict was produced for this criterion; see the recorded observations in the summary."
+          : "Not observed.",
       })),
-      limitations: [...limitations.slice(0, 9), "The final report could not be generated.", SCOPE_LIMITATION, REPORT_LIMITATION],
+      limitations: [
+        ...[...(cited && DURATION.test(summary) ? [TIMING_LIMITATION] : []), ...limitations].slice(0, 9),
+        "The final report could not be generated.", SCOPE_LIMITATION, REPORT_LIMITATION,
+      ],
     };
   }
 
@@ -409,8 +473,19 @@ export function createSessionManagedProvider(
         limit(finding);
         if (target) shun(target);
       };
+      // A handle is only asked for when the page offers one; without it every extract stays unscoped.
+      const locate = (selector: string): unknown => {
+        try { return page.locator?.(selector) ?? undefined; } catch { return undefined; }
+      };
+      const sameDocument = (a: string, b: string) => a.split("#")[0] === b.split("#")[0];
       const keyboard = /keyboard|focus|\btab\b/i.test([input.goal, ...input.criteria].join(" "));
       let lastInScopeUrl = input.targetUrl;
+      // The last page a step could read, the label that opened the current page, and what the agent noted so far.
+      let lastReadUrl = "";
+      let ledBy = "";
+      let failedReads = 0;
+      const large = new Set<string>();
+      const observations: string[] = [];
       let explore = true;
       let actions = 0;
       let failedActs = 0;
@@ -433,6 +508,20 @@ export function createSessionManagedProvider(
       // A step is only started when a whole model call still fits before the loop cutoff.
       for (let index = 0; explore && index < maxSteps && loopUntil - now() >= MIN_CALL_MS; index++) {
         let step: z.infer<typeof stepSchema>;
+        const where = pathOf(lastInScopeUrl, 40);
+        // A huge document is read without its tables: they are what made such pages unreadable in practice.
+        const size = await probe(SIZE_PROBE, sizeSchema);
+        const huge = size !== undefined && (size.elements > LARGE_ELEMENTS || size.text > LARGE_TEXT);
+        // Nothing is said about tables unless the page has some and the harness could ask for them to be left out.
+        const tables = huge && size.tables > 0 ? locate("table") : undefined;
+        if (size && huge && !large.has(where)) {
+          large.add(where);
+          fact(`The page ${where} is very large (${size.elements > LARGE_ELEMENTS
+            ? `${Math.round(size.elements).toLocaleString("en-US")} elements`
+            : `${Math.round(size.text).toLocaleString("en-US")} characters of text`})${
+            tables ? `; the harness asked for its ${Math.round(size.tables).toLocaleString("en-US")} table${
+              size.tables === 1 ? "" : "s"} to be left out when reading it` : ""}.`);
+        }
         try {
           step = stepSchema.parse((await guard(stagehand.extract([
             "You are evaluating the current page as the persona below. In one or two sentences, in the persona's voice,",
@@ -451,20 +540,55 @@ export function createSessionManagedProvider(
             "Set done to true when the criteria can be judged or nothing useful remains, but not before you have looked",
             "at at least three different views of the site.",
             RULES, context(input, steps, memory),
-          ].join(" "), stepSchema, { timeout: budget(loopUntil) }), budget(loopUntil) + 5_000)).data);
+          ].join(" "), stepSchema, { timeout: budget(loopUntil), ...(tables ? { ignoreLocators: [tables] } : {}) }),
+          budget(loopUntil) + 5_000)).data);
         } catch (caught) {
           if (caught instanceof Stopped) throw caught;
           note(caught);
           say(state, "Could not read the page this time.");
           limit("A page observation did not complete.");
-          break;
+          const back = Boolean(lastReadUrl) && !sameDocument(lastReadUrl, lastInScopeUrl);
+          // A page that was read before is not called unreadable, and the link that opened it is not ruled out.
+          const reread = Boolean(lastReadUrl) && !back;
+          fact(reread ? `A later read of ${where} did not complete.`
+            : `The harness could not read ${where}; it may be too large or slow to analyse.`);
+          if (ledBy && back) shun(ledBy);
+          steps.push(reread ? `${index + 1}. A later read of ${where} did not complete.`
+            : `${index + 1}. The harness could not read ${where}${back ? ` and went back to ${pathOf(lastReadUrl, 40)}` : ""}.`);
+          // The report and any further step start from a page that could be read.
+          if (back) {
+            try {
+              // A short bound: a slow return must leave the report its time.
+              await guard(page.goto(lastReadUrl, { waitUntil: "domcontentloaded", timeout: BACK_MS }), BACK_MS + 5_000);
+              tool(state, `back:${pathSlug(lastReadUrl)}`);
+              lastInScopeUrl = lastReadUrl;
+              pagePresses = 0;
+              ledBy = "";
+              // The action that opened a page nobody could read showed nothing, so it does not count towards MIN_ACTIONS.
+              actions = Math.max(0, actions - 1);
+            } catch (failed) {
+              if (failed instanceof Stopped) throw failed;
+              note(failed);
+              limit("Returning to the last readable page did not complete, so browsing stopped early.");
+              break;
+            }
+          }
+          if (++failedReads >= 2) {
+            limit("Browsing ended early after two page reads in a row did not complete.");
+            break;
+          }
+          continue;
         }
+        failedReads = 0;
+        lastReadUrl = lastInScopeUrl;
         const observation = clamp(step.observation, 300, "");
         const repeated = Boolean(observation) && label(observation) === lastObservation;
         // The wall only gets what is new; a verbatim repeat is recorded for the model but not shown again.
         if (observation && !repeated) say(state, observation);
         if (observation) lastObservation = label(observation);
-        steps.push(`${index + 1}. ${repeated ? "Repeated the previous observation." : observation || "No observation."}`);
+        // The report is written from these notes, not from the page, so each one names the page it was made on.
+        if (observation && !repeated) observations.push(`On ${where}: ${observation}`);
+        steps.push(`${index + 1}. On ${where}: ${repeated ? "Repeated the previous observation." : observation || "No observation."}`);
         const target = clamp(step.nextAction.target, 120, "");
         let kind = step.nextAction.kind;
         if (now() >= loopUntil) break;
@@ -543,7 +667,6 @@ export function createSessionManagedProvider(
             ...(focus.boxShadowSet ? ["a box-shadow"] : []),
           ].join(" and ")
             || "no outline or box-shadow detected (other styles not checked, so an indicator may still exist)";
-          const where = pathOf(lastInScopeUrl, 40);
           const count = `${pagePresses} Tab presses on ${where} since it opened or was last clicked`;
           say(state, fact(!focus
             ? `Made ${count}; the focused element could not be read.`
@@ -580,7 +703,10 @@ export function createSessionManagedProvider(
             if (kind === "click" && sameTab && url.split("#")[0] !== lastInScopeUrl.split("#")[0]) {
               await measured(pathOf(url, 40));
             }
-            if (url.split("#")[0] !== lastInScopeUrl.split("#")[0]) pagePresses = 0;
+            if (!sameDocument(url, lastInScopeUrl)) {
+              pagePresses = 0;
+              ledBy = kind === "click" ? target : "";
+            }
             lastInScopeUrl = url;
             visit(url);
           } else {
@@ -620,23 +746,47 @@ export function createSessionManagedProvider(
           throw new Error("session_report_skipped");
         }
         if (now() >= startedAt + 0.9 * runSeconds * 1000) throw new Error("session_report_skipped");
-        const report = reportSchema.parse((await guard(stagehand.extract([
-          "Write the final evaluation report as the persona below, using only what was observed in the steps so far,",
-          "in engineFacts and on the current page. summary: two to four sentences that lead with the concrete problems",
-          "found, or say plainly that none were observed on the pages visited, rather than general praise. criteria:",
-          "exactly one entry per supplied criterion, in the supplied order, each with status met, not_met or inconclusive",
-          "and a one- or two-sentence observation that names the page (its path) and quotes the visible text or the",
-          "engineFact it rests on. Use met only with specific evidence, not_met when the evidence shows a problem (state",
-          "it concretely), and inconclusive for anything not actually observed: keyboard or focus behaviour without a Tab",
-          "fact in engineFacts, and speed without a Measured fact, are inconclusive. limitations: short notes about",
-          "anything you could not check.",
+        const instruction = [
+          "Write the final evaluation report as the persona below. Base the report ONLY on stepsSoFar and engineFacts",
+          "in the JSON below: they are the notes taken while browsing. The visible page content supplied with this",
+          "request is at most a small fragment of the current page and must not be used as new evidence.",
+          "summary: two to four sentences",
+          "that lead with the concrete problems found, or say plainly that none were observed on the pages visited,",
+          "rather than general praise. criteria: exactly one entry per supplied criterion, in the supplied order, each",
+          "with status met, not_met or inconclusive and a one- or two-sentence observation that names the page (its",
+          "path) and quotes the note in stepsSoFar or the engineFact it rests on. Use met only with specific evidence,",
+          "not_met when the evidence shows a problem (state it concretely), and inconclusive for anything not actually",
+          "observed: keyboard or focus behaviour without a Tab fact in engineFacts, and speed without a Measured fact,",
+          "are inconclusive. limitations: short notes about anything you could not check.",
           FACTS, RULES, context(input, steps, memory),
-        ].join(" "), reportSchema, { timeout: budget(reportUntil) }), budget(reportUntil) + 5_000)).data);
+        ].join(" ");
+        // The report is written from the notes, so Stagehand is asked to scope the page down to one small rendered
+        // element, and once only to another. Scoping is best effort: on a miss Stagehand reads the whole page.
+        let report: z.infer<typeof reportSchema> | undefined;
+        const scopes = page.locator ? (await probe(SCOPE_PROBE, scopeSchema))?.selectors ?? [] : [];
+        const attempts = [scopes[0] ?? "h1", scopes[1] ?? "body > *:first-child"];
+        for (const [attempt, selector] of attempts.entries()) {
+          if (attempt > 0) {
+            if (reportUntil - now() < MIN_CALL_MS) break;
+            await guard(wait(REPORT_RETRY_MS), REPORT_RETRY_MS + PROBE_MS);
+          }
+          const locator = locate(selector);
+          try {
+            report = reportSchema.parse((await guard(stagehand.extract(instruction, reportSchema, {
+              timeout: budget(reportUntil), ...(locator ? { locator } : {}),
+            }), budget(reportUntil) + 5_000)).data);
+            break;
+          } catch (caught) {
+            if (caught instanceof Stopped) throw caught;
+            note(caught);
+          }
+        }
+        if (!report) throw new Error("session_report_failed");
         const extra = [
           ...(report.criteria.length !== input.criteria.length
             ? ["The model report did not match the supplied criteria one-to-one; unmatched entries are inconclusive."] : []),
           // Any duration the report cites came from the harness, so its measuring conditions travel with it.
-          ...(/\d\s*(ms|s|secs?|seconds?)\b/i.test(JSON.stringify([report.summary, report.criteria])) ? [TIMING_LIMITATION] : []),
+          ...(DURATION.test(JSON.stringify([report.summary, report.criteria])) ? [TIMING_LIMITATION] : []),
         ];
         result = managedResultSchema.parse({
           summary: clamp(report.summary, 4000, "The model returned no summary."),
@@ -655,8 +805,8 @@ export function createSessionManagedProvider(
         });
       } catch (caught) {
         if (caught instanceof Stopped) throw caught;
-        if (!(caught instanceof Error && caught.message === "session_report_skipped")) note(caught);
-        result = managedResultSchema.parse(fallbackResult(input, finalUrl, limitations));
+        if (!(caught instanceof Error && ["session_report_skipped", "session_report_failed"].includes(caught.message))) note(caught);
+        result = managedResultSchema.parse(fallbackResult(input, finalUrl, limitations, observations, facts));
       }
       tool(state, "report");
       state.result = result;

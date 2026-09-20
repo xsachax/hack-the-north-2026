@@ -40,6 +40,8 @@ const goodReport: Report = {
 function harness(setup: {
   steps?: (Step | Error | Promise<Step> | (() => Step))[]; report?: Report | Error; afterAct?: string[];
   maxSteps?: number; start?: number; newTab?: string; keys?: boolean; evaluate?: (expression: string) => unknown;
+  /** One entry per report attempt, in order; the last one repeats. */
+  reports?: (Report | Error | (() => Report))[]; locator?: boolean;
 } = {}) {
   const steps = [...(setup.steps ?? [
     { observation: "I see a pricing link in the header.", done: false, nextAction: { kind: "click" as const, target: "Pricing" } },
@@ -52,6 +54,8 @@ function harness(setup: {
   let counter = 0;
   const keyPress = vi.fn(async (key: string) => { void key; });
   const evaluate = vi.fn(async (expression: string) => setup.evaluate?.(expression));
+  const locator = vi.fn((selector: string) => ({ selector }));
+  const reports = [...(setup.reports ?? [])];
   const page = {
     pageId: "page-1",
     goto: vi.fn(async (url: string) => { current = url; }),
@@ -60,6 +64,7 @@ function harness(setup: {
     // Optional engine members are only present when a test asks for them.
     ...(setup.keys ? { keyPress } : {}),
     ...(setup.evaluate ? { evaluate } : {}),
+    ...(setup.locator ? { locator } : {}),
   };
   const opened = {
     pageId: "page-2",
@@ -77,12 +82,13 @@ function harness(setup: {
     close: vi.fn(async () => { closed = true; }),
   };
   const instructions: string[] = [];
-  const extract = vi.fn(async (instruction: string) => {
+  const extract = vi.fn(async (instruction: string, _schema?: unknown, options?: Record<string, unknown>) => {
+    void options;
     instructions.push(instruction);
     if (instruction.startsWith("Write the final evaluation report")) {
-      const report = setup.report ?? goodReport;
+      const report = (reports.length > 1 ? reports.shift() : reports[0]) ?? setup.report ?? goodReport;
       if (report instanceof Error) throw report;
-      return { data: report };
+      return { data: typeof report === "function" ? report() : report };
     }
     const step = steps.shift() ?? { observation: "Nothing new.", done: true, nextAction: { kind: "none", target: "" } };
     if (step instanceof Error) throw step;
@@ -112,6 +118,7 @@ function harness(setup: {
     now: () => clock,
     id: () => `00000000-0000-4000-8000-${String(++counter).padStart(12, "0")}`,
     log: vi.fn<SessionEngineDeps["log"]>(),
+    wait: vi.fn<SessionEngineDeps["wait"]>(async () => {}),
   };
   const provider = createSessionManagedProvider({
     apiKey: SECRET, projectId: PROJECT, modelName: "google/gemini-2.5-flash", runSeconds: 60,
@@ -136,8 +143,12 @@ function harness(setup: {
     };
   }
   return {
-    provider, deps, browser, page, opened, stagehand, extract, instructions, keyPress, evaluate, settle, parts,
+    provider, deps, browser, page, opened, stagehand, extract, instructions, keyPress, evaluate, locator, settle, parts,
     advance: (ms: number) => { clock += ms; },
+    /** The options each extract received, split into report attempts and step reads. */
+    options: (report: boolean) => extract.mock.calls
+      .filter(([instruction]) => instruction.startsWith("Write the final evaluation report") === report)
+      .map(([, , options]) => options ?? {}),
     reportInstruction: () => instructions.find((entry) => entry.startsWith("Write the final evaluation report")) ?? "",
   };
 }
@@ -575,7 +586,9 @@ describe("session-backed managed provider", () => {
     expect(h.extract).not.toHaveBeenCalled();
     const result = managedResultSchema.parse(done.result);
     expect(result.finalUrl).toBe("");
-    expect(result.criteria.every((entry) => entry.status === "inconclusive")).toBe(true);
+    // With nothing observed there is nothing to hand back, so the bare wording stays.
+    expect(result.summary).toBe("The browser loop finished without a usable model report.");
+    expect(result.criteria.map((entry) => [entry.status, entry.observation])).toEqual(criteria.map(() => ["inconclusive", "Not observed."]));
     expect(result.limitations.join(" ")).toContain("redirected outside the declared scope");
   });
 
@@ -591,16 +604,237 @@ describe("session-backed managed provider", () => {
     expect((await h.parts(runId)).texts).not.toContain("Could not read the page this time.");
   });
 
-  it("falls back to an all-inconclusive result when the report fails", async () => {
-    const h = harness({ report: new Error("report failed") });
+  it("keeps the recorded observations and harness facts when both report attempts fail, with no verdict and no third attempt", async () => {
+    const h = harness({ report: new Error(`report failed ${SECRET}`), locator: true });
+    const { runId } = await h.provider.createRun({ agentId: AGENT, task: taskText(), resultSchema: {} });
+    const done = await h.settle(runId);
+    expect(done.status).toBe("COMPLETED");
+    const result = managedResultSchema.parse(done.result);
+    expect(result.summary).toBe("No model report was produced, so no criterion has a verdict. Observations recorded while browsing:"
+      + " (1) On /: I see a pricing link in the header. (2) On /pricing: The pricing table is clear. (3) On /pricing: Nothing new."
+      + " Harness facts: Measured: / opened in 0.0 s wall-clock (harness navigation until the DOM was ready);"
+      + " Load time for /pricing after a click is unmeasured: the harness could not read a page timing for it.");
+    expect(result.criteria).toEqual(criteria.map((criterion) => ({
+      criterion, status: "inconclusive",
+      observation: "No model verdict was produced for this criterion; see the recorded observations in the summary.",
+    })));
+    // The cited harness timing brings its measuring conditions along.
+    expect(result.limitations).toEqual([
+      "Timings were measured by the harness from an unthrottled cloud browser, not a real user's device or network.",
+      "The final report could not be generated.", SCOPE_NOTE, REPORT_NOTE,
+    ]);
+    expect(result.finalUrl).toBe("https://approved.example/pricing?plan=1");
+    expect(h.options(true).map((entry) => entry.locator)).toEqual([{ selector: "h1" }, { selector: "body > *:first-child" }]);
+    expect(h.deps.wait).toHaveBeenCalledExactlyOnceWith(1_500);
+    expect(h.deps.log.mock.calls).toEqual([["managed_session_engine_error:report:Error:0"], ["managed_session_engine_error:report:Error:0"]]);
+    expect((await h.parts(runId)).tools.at(-1)).toBe("report");
+    expect(JSON.stringify([done, h.deps.log.mock.calls])).not.toContain(SECRET);
+  });
+
+  it("clamps the notes fallback at a whole item and never past the summary limit", async () => {
+    const h = harness({
+      maxSteps: 12, report: new Error("report failed"),
+      steps: Array.from({ length: 12 }, (_, index) => ({
+        observation: `${index} ${"o".repeat(296)}.`, done: false, nextAction: { kind: "scroll" as const, target: "" },
+      })),
+    });
     const { runId } = await h.provider.createRun({ agentId: AGENT, task: taskText(), resultSchema: {} });
     const result = managedResultSchema.parse((await h.settle(runId)).result);
-    expect(result.criteria).toEqual(criteria.map((criterion) => ({
-      criterion, status: "inconclusive", observation: "Not observed.",
-    })));
+    expect(result.summary.length).toBeLessThanOrEqual(4000);
+    expect(result.summary).toContain("(12) On /: 11 ");
+    expect(result.summary).toMatch(/o\.$|\)\.$/);
+    expect(result.criteria.every((entry) => entry.status === "inconclusive")).toBe(true);
+  });
+
+  it("scopes the report to the page heading and tells the model to use only its notes", async () => {
+    const h = harness({ locator: true });
+    const { runId } = await h.provider.createRun({ agentId: AGENT, task: taskText(), resultSchema: {} });
+    expect(managedResultSchema.parse((await h.settle(runId)).result).summary).toBe("Pricing was easy to find.");
+    expect(h.options(true)).toEqual([{ timeout: expect.any(Number), locator: { selector: "h1" } }]);
+    expect(h.locator.mock.calls).toEqual([["h1"]]);
+    const report = h.reportInstruction();
+    expect(report).toContain("Base the report ONLY on stepsSoFar and engineFacts");
+    expect(report).toContain("must not be used as new evidence");
+    expect(report).not.toContain("on the current page");
+    // The notes name the page each observation was made on, because the report no longer sees the page.
+    expect(report).toContain("2. On /pricing: The pricing table is clear.");
+    // Ordinary step reads stay unscoped.
+    for (const entry of h.options(false)) expect(Object.keys(entry)).toEqual(["timeout"]);
+    expect(h.deps.wait).not.toHaveBeenCalled();
+  });
+
+  it("retries a failed report exactly once and completes with the model report", async () => {
+    const h = harness({ locator: true, reports: [new Error("no h1"), goodReport] });
+    const { runId } = await h.provider.createRun({ agentId: AGENT, task: taskText(), resultSchema: {} });
+    const done = await h.settle(runId);
+    expect(done.status).toBe("COMPLETED");
+    const result = managedResultSchema.parse(done.result);
+    expect(result.summary).toBe("Pricing was easy to find.");
+    expect(result.limitations).toEqual(["Only two pages were read.", SCOPE_NOTE, REPORT_NOTE]);
+    expect(h.options(true).map((entry) => entry.locator)).toEqual([{ selector: "h1" }, { selector: "body > *:first-child" }]);
+    expect(h.deps.wait).toHaveBeenCalledExactlyOnceWith(1_500);
+    expect(h.deps.log).toHaveBeenCalledExactlyOnceWith("managed_session_engine_error:report:Error:0");
+  });
+
+  it("does not retry the report when too little time remains before the report cutoff", async () => {
+    const h = harness({ locator: true, reports: [() => { h.advance(40_000); throw new Error("timed out"); }] });
+    const { runId } = await h.provider.createRun({ agentId: AGENT, task: taskText(), resultSchema: {} });
+    const result = managedResultSchema.parse((await h.settle(runId)).result);
+    expect(h.options(true)).toHaveLength(1);
+    expect(h.deps.wait).not.toHaveBeenCalled();
+    expect(result.summary).toContain("(1) On /: I see a pricing link in the header.");
+    expect(result.criteria.every((entry) => entry.status === "inconclusive")).toBe(true);
+  });
+
+  it("reads a very large page without its tables and records that once per page", async () => {
+    const scroll = (observation: string): Step => ({ observation, done: false, nextAction: { kind: "scroll", target: "" } });
+    const h = harness({
+      locator: true, steps: [scroll("A very long table."), scroll("More rows."), scroll("Still rows.")],
+      evaluate: (expression) => expression.includes("getElementsByTagName") ? { elements: 5000, text: 1200, tables: 3 } : null,
+    });
+    const { runId } = await h.provider.createRun({ agentId: AGENT, task: taskText(), resultSchema: {} });
+    expect((await h.settle(runId)).status).toBe("COMPLETED");
+    const steps = h.options(false);
+    expect(steps.length).toBeGreaterThanOrEqual(3);
+    for (const entry of steps) expect(entry.ignoreLocators).toEqual([{ selector: "table" }]);
+    const fact = "The page / is very large (5,000 elements); the harness asked for its 3 tables to be left out when reading it.";
+    expect(h.instructions[1]).toContain(fact);
+    expect(h.reportInstruction().split("is very large")).toHaveLength(2);
+    expect(h.options(true)[0]).not.toHaveProperty("ignoreLocators");
+    expect((await h.parts(runId)).texts.join(" ")).not.toContain("very large");
+  });
+
+  it("goes back to the last readable page after a failed read, rules out the link that led there and keeps exploring", async () => {
+    const click = (observation: string): Step => ({ observation, done: false, nextAction: { kind: "click", target: "Pricing" } });
+    const h = harness({ steps: [click("I see a pricing link in the header."), new Error(`extract timed out ${SECRET}`),
+      click("Back on the home page, trying pricing again."),
+      { observation: "The footer lists a contact address.", done: false, nextAction: { kind: "scroll", target: "" } }] });
+    const { runId } = await h.provider.createRun({ agentId: AGENT, task: taskText(), resultSchema: {} });
+    const done = await h.settle(runId);
+    expect(done.status).toBe("COMPLETED");
+    const result = managedResultSchema.parse(done.result);
+    expect(result.summary).toBe("Pricing was easy to find.");
+    expect(result.finalUrl).toBe("https://approved.example/");
+    expect(result.limitations).toContain("A page observation did not complete.");
+    expect(h.page.goto).toHaveBeenCalledTimes(2);
+    // The return is bounded tightly so a slow one still leaves the report its time.
+    expect(h.page.goto).toHaveBeenLastCalledWith("https://approved.example/", { waitUntil: "domcontentloaded", timeout: 10_000 });
+    // The unreadable page's link is never clicked again, and exploring carries on from the readable page.
+    expect(h.stagehand.act).toHaveBeenCalledOnce();
+    expect(h.instructions[2]).toContain("\"doNotClick\":[\"pricing\"]");
+    expect(h.instructions[2]).toContain("The harness could not read /pricing; it may be too large or slow to analyse.");
+    expect(h.instructions[2]).toContain("2. The harness could not read /pricing and went back to /.");
+    expect(h.reportInstruction()).toContain("The footer lists a contact address.");
+    const messages = await h.parts(runId);
+    // The repeated "Pricing" proposal is refused and becomes a scroll; the fourth step scrolls on the readable page.
+    // The click that opened the unreadable page does not count as a view, so an early done gets one more scroll.
+    expect(messages.tools).toEqual(["session-started", "goto:home", "click:pricing", "back:home", "scroll-down", "scroll-down",
+      "scroll-down", "report"]);
+    for (const name of messages.tools) expect(name).toMatch(TOOL);
+    expect(messages.texts).toContain("Could not read the page this time.");
+    expect(h.deps.log).toHaveBeenCalledExactlyOnceWith("managed_session_engine_error:explore:Error:0");
+    expect(JSON.stringify([messages.data, done, h.deps.log.mock.calls])).not.toContain(SECRET);
+  });
+
+  it("ends exploration after two failed reads in a row and still reports", async () => {
+    const h = harness({ steps: [new Error("first"), new Error("second"),
+      { observation: "Never read.", done: false, nextAction: { kind: "scroll", target: "" } }] });
+    const { runId } = await h.provider.createRun({ agentId: AGENT, task: taskText(), resultSchema: {} });
+    const done = await h.settle(runId);
+    expect(done.status).toBe("COMPLETED");
+    expect(h.extract).toHaveBeenCalledTimes(3);
+    expect(h.page.goto).toHaveBeenCalledOnce();
+    const result = managedResultSchema.parse(done.result);
+    expect(result.summary).toBe("Pricing was easy to find.");
     expect(result.limitations).toEqual(expect.arrayContaining([
-      "The final report could not be generated.", SCOPE_NOTE, REPORT_NOTE,
+      "A page observation did not complete.", "Browsing ended early after two page reads in a row did not complete.",
     ]));
+    const messages = await h.parts(runId);
+    expect(messages.texts).not.toContain("Never read.");
+    // The unreadable-page fact is recorded once per path, however often the read failed.
+    expect(h.reportInstruction().split("The harness could not read /; it may be").length).toBe(2);
+  });
+
+  it("works unscoped when the page offers neither locator() nor evaluate()", async () => {
+    const h = harness({ reports: [new Error("first attempt"), goodReport], steps: [
+      { observation: "I see a pricing link in the header.", done: false, nextAction: { kind: "click", target: "Pricing" } },
+      new Error("unreadable"),
+      { observation: "Home again.", done: true, nextAction: { kind: "none", target: "" } }] });
+    const { runId } = await h.provider.createRun({ agentId: AGENT, task: taskText(), resultSchema: {} });
+    const done = await h.settle(runId);
+    expect(done.status).toBe("COMPLETED");
+    expect(managedResultSchema.parse(done.result).summary).toBe("Pricing was easy to find.");
+    expect(h.extract.mock.calls.length).toBeGreaterThanOrEqual(5);
+    for (const [, , options] of h.extract.mock.calls) expect(Object.keys(options ?? {})).toEqual(["timeout"]);
+    expect(h.options(true)).toHaveLength(2);
+    expect(h.locator).not.toHaveBeenCalled();
+    expect(h.evaluate).not.toHaveBeenCalled();
+    expect(h.reportInstruction()).not.toContain("very large");
+  });
+
+  it("claims nothing about tables when a very large page cannot be scoped", async () => {
+    const h = harness({ evaluate: (expression) => expression.includes("getElementsByTagName") ? { elements: 12, text: 70_000 } : null });
+    const { runId } = await h.provider.createRun({ agentId: AGENT, task: taskText(), resultSchema: {} });
+    expect((await h.settle(runId)).status).toBe("COMPLETED");
+    expect(h.reportInstruction()).toContain("The page / is very large (70,000 characters of text).");
+    expect(h.reportInstruction()).not.toContain("to be left out");
+    for (const entry of h.options(false)) expect(entry).not.toHaveProperty("ignoreLocators");
+  });
+
+  it("claims nothing about tables, and excludes nothing, when a very large page has no table", async () => {
+    const h = harness({
+      locator: true,
+      evaluate: (expression) => expression.includes("getElementsByTagName") ? { elements: 9000, text: 10, tables: 0 } : null,
+    });
+    const { runId } = await h.provider.createRun({ agentId: AGENT, task: taskText(), resultSchema: {} });
+    expect((await h.settle(runId)).status).toBe("COMPLETED");
+    expect(h.reportInstruction()).toContain("The page / is very large (9,000 elements).");
+    expect(h.reportInstruction()).not.toContain("to be left out");
+    for (const entry of h.options(false)) expect(entry).not.toHaveProperty("ignoreLocators");
+    expect(h.locator.mock.calls).toEqual([["h1"]]);
+  });
+
+  it("scopes the report to elements the page really renders, because Stagehand reads the whole page on a locator miss", async () => {
+    const h = harness({
+      locator: true, reports: [new Error("gateway busy"), goodReport],
+      evaluate: (expression) => expression.includes("querySelector(s)") ? { selectors: ["h2", "a"] } : null,
+    });
+    const { runId } = await h.provider.createRun({ agentId: AGENT, task: taskText(), resultSchema: {} });
+    expect(managedResultSchema.parse((await h.settle(runId)).result).summary).toBe("Pricing was easy to find.");
+    expect(h.options(true).map((entry) => entry.locator)).toEqual([{ selector: "h2" }, { selector: "a" }]);
+    expect(h.evaluate.mock.calls.filter(([expression]) => expression.includes("querySelector(s)"))).toHaveLength(1);
+    // The model is not told it sees a heading: scoping is best effort.
+    expect(h.reportInstruction()).toContain("at most a small fragment of the current page");
+    expect(h.reportInstruction()).not.toContain("just the current heading");
+  });
+
+  it("falls back to the fixed selectors when the scope probe returns anything unexpected", async () => {
+    const h = harness({
+      locator: true, reports: [new Error("first"), goodReport],
+      evaluate: (expression) => expression.includes("querySelector(s)") ? { selectors: ["body", "script"] } : null,
+    });
+    const { runId } = await h.provider.createRun({ agentId: AGENT, task: taskText(), resultSchema: {} });
+    expect((await h.settle(runId)).status).toBe("COMPLETED");
+    expect(h.options(true).map((entry) => entry.locator)).toEqual([{ selector: "h1" }, { selector: "body > *:first-child" }]);
+  });
+
+  it("does not rule out a link or call a page unreadable when a later read of an already-read page fails", async () => {
+    const h = harness({ steps: [
+      { observation: "I see a pricing link in the header.", done: false, nextAction: { kind: "click", target: "Pricing" } },
+      { observation: "The pricing table is clear.", done: false, nextAction: { kind: "scroll", target: "" } },
+      new Error("gateway busy"),
+      { observation: "Plans are listed below the fold.", done: false, nextAction: { kind: "scroll", target: "" } }] });
+    const { runId } = await h.provider.createRun({ agentId: AGENT, task: taskText(), resultSchema: {} });
+    const done = await h.settle(runId);
+    expect(done.status).toBe("COMPLETED");
+    expect(h.page.goto).toHaveBeenCalledOnce();
+    expect(h.instructions[3]).toContain("\"doNotClick\":[]");
+    expect(h.instructions[3]).toContain("A later read of /pricing did not complete.");
+    expect(h.instructions[3]).toContain("3. A later read of /pricing did not complete.");
+    expect(h.reportInstruction()).not.toContain("could not read /pricing");
+    expect(h.reportInstruction()).toContain("Plans are listed below the fold.");
+    expect((await h.parts(runId)).tools).not.toContain("back:pricing");
+    expect(managedResultSchema.parse(done.result).finalUrl).toBe("https://approved.example/pricing?plan=1");
   });
 
   it("rebuilds criteria by index and clamps an oversized or mismatched report", async () => {

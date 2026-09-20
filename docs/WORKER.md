@@ -87,12 +87,24 @@ store, wall and live windows, but replaces the Agents-API run with
 Browserbase session per attempt (`keepAlive: false`, no proxies, provider
 timeout `max(60, min(300, SESSION_TIMEOUT_SECONDS))`) and drives it with a short
 Stagehand `extract`/`act` loop (default six steps, fewer when time runs out)
-plus one report extraction through Browserbase's model gateway. The loop may
+plus one report extraction (two when the first fails and time remains) through
+Browserbase's model gateway. The loop may
 also press the Tab key (three presses per tab step; no other key is ever
-pressed) and run two fixed read-only `page.evaluate` expressions in the target
+pressed) and run fixed read-only `page.evaluate` expressions in the target
 page (Navigation Timing, and the focused element's tag, text, outline and
 box-shadow); their output reaches the model as `engineFacts`. A wall-clock time
-is reported only for the initial page open, never for a click. It is expected to consume browser time
+is reported only for the initial page open, never for a click. A third fixed
+expression reads only the document's element and text counts: above 3,000
+elements or 60,000 characters Stagehand is asked to leave the page's `<table>`
+subtrees (when it has any) out of a step read, and a failed read of a page that
+was never read sends the loop back to the last readable page (bounded to 10 s;
+two failed reads in a row end browsing). The report is written from the loop's
+notes (`stepsSoFar` and `engineFacts`); a fourth fixed expression picks a small
+rendered element (`h1`, `h2`, `h3`, `p` or `a`) and Stagehand is asked to scope
+the page down to it, best effort only: Stagehand reads the whole page when it
+cannot resolve that element. The report is retried at most once; when no model report exists the result returns the
+recorded observations and harness facts in the summary while every criterion
+stays `inconclusive`. It is expected to consume browser time
 plus model-gateway inference instead of Agents-API runs; gateway billing/quota
 for this account is unverified until a paid run. Only the Browserbase key is
 used.
