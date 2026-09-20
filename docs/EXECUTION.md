@@ -130,6 +130,26 @@ Lost submission responses are resolved by the original owner/idempotency key
 after settling the submitting server; the committed run is cancelled without
 resending a creation request. A durably proven pre-start non-allocation may have
 no native-resource row, but its recorded lifetime reservation is never reset.
+
+### First hosted attempt after #26
+
+After explicit approval, merged #26 (`83017fba`) was exercised through the
+clean packaged owner API and public-only worker. The real Browserbase API
+uploaded one composed extension and allocated one fresh session for a scoped
+IANA documentation-link goal. Startup failed before the execution loop produced
+observations, model calls or actions; **this is not public-site acceptance**.
+Independent readback confirmed the session `COMPLETED` and the extension's
+exact-ID authenticated 404. Actual browser time was 1.522 seconds, rounded up to
+2 consumed seconds; all 300 reserved seconds still count against the initial
+1,800-second lifetime cap. No retry was dispatched.
+
+The persisted failure was only `Worker execution failed`: the worker discarded
+the factory's startup phase, and provider log readback returned no entries.
+The precise startup cause therefore remains unproved; do not infer a browser
+version or weaken native attestation from this result. Subsequent failures retain
+an allowlisted `startupPhase` in private usage and the stored execution result's
+reason, without exception messages, credentials or connection URLs. A new attempt
+requires a new digest-bound plan and fresh approval, retaining the same ledger.
 Additional recovered session identities block further proof until explicitly
 reconciled; they are included in the approval fingerprint, not silently omitted.
 Unit tests of that sequence use explicitly synthetic adapters, never hosted

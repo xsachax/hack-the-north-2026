@@ -3,7 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fixedFixtures } from "../../lib/demo";
 import type { AppConfig } from "../../lib/config";
 import { ArtifactWriter, sanitizeEvidence, type ArtifactReference, type ArtifactSinks } from "../execution/artifacts";
-import { CloudStartupError, createFixtureExecution, type CloudUsage, type FixtureExecutionOptions } from "../execution/cloud";
+import { CloudStartupError, createFixtureExecution, type CloudStartupPhase, type CloudUsage, type FixtureExecutionOptions } from "../execution/cloud";
 import { executePersona } from "../execution/loop";
 import type { Brain, BrowserDriver, ExecutionEvent, ExecutionResult } from "../execution/types";
 import { LeaseLostError, WorkerRepository, type Claim } from "./repository";
@@ -36,9 +36,10 @@ export type WorkerDependencies = {
   knownSecrets?: readonly string[];
   contextProvider?: ContextProvider;
 };
-function failedResult(cancelled: boolean, cleanup: ExecutionResult["cleanup"]): ExecutionResult {
+function failedResult(cancelled: boolean, cleanup: ExecutionResult["cleanup"], phase?: CloudStartupPhase): ExecutionResult {
   const status = cancelled && cleanup.status === "closed" ? "cancelled" : "infrastructure_failed";
-  const reason = status === "cancelled" ? "Execution cancelled during startup" : "Worker execution failed";
+  const reason = status === "cancelled" ? "Execution cancelled during startup" :
+    phase && phase !== "unknown" ? `Browser startup failed during ${phase}` : "Worker execution failed";
   return {
     status, reason, originalTerminal: { status, reason }, cleanup,
     checks: [], steps: 0, modelCalls: 0,
@@ -390,8 +391,8 @@ export class DurableWorker {
       }
       diagnostic("worker_attempt_failed");
       if (error instanceof CloudStartupError) {
-        usage = error.usage;
-        result = failedResult(controller.signal.aborted && !nativeInterrupted && !nativeDeadlineExpired, error.cleanup);
+        usage = { ...error.usage, startupPhase: error.safePhase };
+        result = failedResult(controller.signal.aborted && !nativeInterrupted && !nativeDeadlineExpired, error.cleanup, error.safePhase);
       } else {
         if (!launchInvoked) {
           usage.allocationAttempted = false;
