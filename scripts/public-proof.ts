@@ -3,12 +3,13 @@ import { lstat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
+import { isDeepStrictEqual } from "node:util";
 import { createRunSchema } from "../src/lib/contracts";
 import { isLegacyCriterion } from "../src/lib/criteria";
 import { PUBLIC_ASSET_POLICY, PUBLIC_EXECUTION_POLICY } from "../src/lib/public-execution";
 import { nativeResourceSchema } from "../src/server/execution/native-resources";
 import { publicExecutionPolicy } from "../src/server/execution/public-policy";
-import { workerPolicySchema } from "../src/server/worker/config";
+import { workerPolicySchema, type WorkerPolicy } from "../src/server/worker/config";
 import { assertPaidDataNotRestored } from "../src/server/deployment/database";
 import { assertReleaseBuild, releaseSourceDigest } from "../src/server/deployment/build";
 import { buildComposedExtension } from "../src/server/execution/composed-extension";
@@ -42,11 +43,15 @@ const launchSchema = z.strictObject({
 export type PublicProofLaunch = z.infer<typeof launchSchema>;
 
 /** This reader never creates, migrates, resets or refunds the authoritative ledger. */
-export function readPublicProofLedger(db: DatabaseSync) {
+export function readPublicProofLedger(db: DatabaseSync, approvedManagedPolicy?: WorkerPolicy) {
   db.exec("SAVEPOINT public_proof_snapshot");
   try {
-    const policy = publicProofPolicySchema.parse(parseJson(db.prepare(
+    const policy = workerPolicySchema.parse(parseJson(db.prepare(
       "SELECT configuration FROM worker_policy WHERE singleton=1").get()?.configuration));
+    if (approvedManagedPolicy) {
+      if (!isDeepStrictEqual(policy, workerPolicySchema.parse(approvedManagedPolicy))) throw new Error("public_proof_lifetime_policy_mismatch");
+    } else publicProofPolicySchema.parse(policy);
+    const lifetimeLimit = policy.lifetimeReservationLimitSeconds;
     const launches = db.prepare(`SELECT j.id jobId,j.run_id runId,l.correlation_token correlationToken,
       l.session_reference reference,l.state,u.reserved_seconds reservedSeconds,
       u.consumed_seconds consumedSeconds,u.released_seconds releasedSeconds,n.resource,r.execution_mode mode,l.usage
@@ -68,7 +73,7 @@ export function readPublicProofLedger(db: DatabaseSync) {
     const committedSeconds = reservations.reduce((sum, row) => sum + Math.max(
       z.int().nonnegative().parse(row.reserved_seconds) - z.int().nonnegative().parse(row.released_seconds),
       z.int().nonnegative().parse(row.consumed_seconds)), 0);
-    if (reservedSeconds > PUBLIC_PROOF_LIFETIME_SECONDS || reservedSeconds !== launches.reduce((sum, row) => sum + row.reservedSeconds, 0)) {
+    if (reservedSeconds > lifetimeLimit || reservedSeconds !== launches.reduce((sum, row) => sum + row.reservedSeconds, 0)) {
       throw new Error("public_proof_reservation_mismatch");
     }
     const unfinished = z.int().parse(db.prepare("SELECT count(*) n FROM jobs WHERE status IN ('queued','leased')").get()?.n);

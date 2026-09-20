@@ -10,9 +10,11 @@ import {
 import { assertReleaseBuild, releaseSourceDigest } from "../src/server/deployment/build";
 import { assertPrivateDirectory, readPrivateJson, writePrivateJson } from "./advanced-proof";
 import { publicHarnessDigest } from "./public-proof-source";
+import { workerPolicySchema } from "../src/server/worker/config";
+import { MANAGED_AMENDED_LIFETIME_SECONDS, readManagedBudgetPolicy } from "./managed-budget";
 import {
   assertPublicProofSettled, openPublicProofLedger, publicProofHash, publicProofPolicySchema,
-  readPublicProofLedger, PUBLIC_PROOF_LIFETIME_SECONDS,
+  readPublicProofLedger,
 } from "./public-proof";
 
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -28,6 +30,7 @@ export const MANAGED_PROOF_OPERATIONS = [
   "agents.runs.list", "agents.runs.listMessages", "agents.runs.stop", "sessions.retrieve",
   "sessions.update:REQUEST_RELEASE", "sessions.logs.list", "sessions.replays.retrieve",
   "extensions.retrieve",
+  "cdp.connect-existing-session", "cdp.Runtime.evaluate:location-and-readiness", "cdp.Page.captureScreenshot",
 ] as const;
 export const MANAGED_PROOF_PROMPT = [
   "Use actual browser navigation and inspect rendered pages, not Search/Fetch-only answers.",
@@ -68,7 +71,9 @@ const attemptSchema = z.object({
 export function readManagedProofLedger(db: DatabaseSync) {
   db.exec("SAVEPOINT managed_proof_snapshot");
   try {
-    const native = readPublicProofLedger(db);
+    const { budgetAmendment, demoAmendments, policy } = readManagedBudgetPolicy(db);
+    const native = readPublicProofLedger(db, policy);
+    const lifetimeLimit = native.policy.lifetimeReservationLimitSeconds;
     const runs = db.prepare("SELECT * FROM managed_runs ORDER BY id").all();
     const rawAttempts = db.prepare("SELECT * FROM managed_attempts ORDER BY id").all();
     const progress = db.prepare("SELECT * FROM managed_progress ORDER BY attempt_id,sequence,provider_event_hash").all();
@@ -96,7 +101,9 @@ export function readManagedProofLedger(db: DatabaseSync) {
       attempts.reduce((sum, row) => sum + (row.actual_browser_seconds ?? 0), 0);
     const unknownActualAttempts = native.launches.filter((row) => row.actualBrowserSeconds === null).length +
       attempts.filter((row) => row.actual_browser_seconds === null).length;
-    if (reservedSeconds > PUBLIC_PROOF_LIFETIME_SECONDS || attempts.some((row) =>
+    if (reservedSeconds > lifetimeLimit || budgetAmendment && reservedSeconds < budgetAmendment.reservedAtAmendment ||
+      demoAmendments.some((amendment) => reservedSeconds < amendment.reservedAtAmendment) ||
+      attempts.some((row) =>
       row.released_seconds > row.reserved_seconds ||
       row.actual_browser_seconds !== null && row.consumed_seconds < Math.ceil(row.actual_browser_seconds) ||
       (row.provider_run_id || row.provider_session_id) && (!row.dispatch_started || !row.reserved_seconds) ||
@@ -106,8 +113,8 @@ export function readManagedProofLedger(db: DatabaseSync) {
     }
     return {
       native, runs, attempts, progress, reservedSeconds, consumedSeconds, committedSeconds,
-      actualBrowserSeconds, unknownActualAttempts,
-      fingerprint: publicProofHash({ nativeFingerprint: native.fingerprint, runs, attempts: rawAttempts, progress }),
+      actualBrowserSeconds, unknownActualAttempts, budgetAmendment, demoAmendments,
+      fingerprint: publicProofHash({ nativeFingerprint: native.fingerprint, runs, attempts: rawAttempts, progress, budgetAmendment, demoAmendments }),
     };
   } finally { db.exec("RELEASE managed_proof_snapshot"); }
 }
@@ -128,7 +135,9 @@ export const managedProofPlanSchema = z.strictObject({
   version: z.literal(1), dataDir: z.string().min(1), packageDir: z.string().min(1), projectId: z.uuid(),
   request: managedProofRequestSchema, allowedOrigins: z.tuple([z.literal("https://www.iana.org")]),
   localUiBrowser: z.enum(["chromium", "webkit"]).default("chromium"),
-  policy: publicProofPolicySchema, policyNotice: z.literal(MANAGED_PROOF_NOTICE),
+  policy: z.union([publicProofPolicySchema, workerPolicySchema.refine((value) =>
+    value.lifetimeReservationLimitSeconds === MANAGED_AMENDED_LIFETIME_SECONDS)]),
+  policyNotice: z.literal(MANAGED_PROOF_NOTICE),
   providerOperations: z.tuple(MANAGED_PROOF_OPERATIONS.map((operation) => z.literal(operation)) as
     [z.ZodLiteral<(typeof MANAGED_PROOF_OPERATIONS)[number]>, ...z.ZodLiteral<(typeof MANAGED_PROOF_OPERATIONS)[number]>[]]),
   agent: z.strictObject({
@@ -138,10 +147,10 @@ export const managedProofPlanSchema = z.strictObject({
   }),
   sourceDigest: digest, packageDigest: digest, harnessPackageDigest: digest, harnessDigest: digest,
   ledgerDigest: digest, invocationDigest: digest,
-  reservedBefore: z.int().min(900).max(1800), plannedReservations: z.int().min(81).max(300),
+  reservedBefore: z.int().min(900).max(MANAGED_AMENDED_LIFETIME_SECONDS), plannedReservations: z.int().min(81).max(300),
   createdAt: z.int().nonnegative(),
 }).refine((plan) => plan.plannedReservations === plan.policy.sessionSeconds &&
-  plan.reservedBefore + plan.plannedReservations <= PUBLIC_PROOF_LIFETIME_SECONDS &&
+  plan.reservedBefore + plan.plannedReservations <= plan.policy.lifetimeReservationLimitSeconds &&
   plan.policy.baselineSeconds === 3780 && plan.policy.globalConcurrency === 1 && plan.policy.ownerConcurrency === 1 &&
   JSON.stringify(plan.providerOperations) === JSON.stringify(MANAGED_PROOF_OPERATIONS) &&
   plan.agent.resultSchemaDigest === publicProofHash(z.toJSONSchema(managedResultSchema)),
@@ -153,7 +162,7 @@ export function assertManagedProofLedgerBinding(plan: ManagedProofPlan, ledger: 
   if (ledger.fingerprint !== plan.ledgerDigest || ledger.reservedSeconds !== plan.reservedBefore ||
     publicProofHash(ledger.native.policy) !== publicProofHash(plan.policy) ||
     ledger.native.launches.length !== 3 || ledger.native.reservedSeconds !== 900 ||
-    ledger.reservedSeconds + plan.plannedReservations > PUBLIC_PROOF_LIFETIME_SECONDS ||
+    ledger.reservedSeconds + plan.plannedReservations > ledger.native.policy.lifetimeReservationLimitSeconds ||
     ledger.committedSeconds + plan.policy.baselineSeconds + plan.plannedReservations > plan.policy.developmentBudgetSeconds ||
     plan.plannedReservations > plan.policy.ownerBudgetSeconds) throw new Error("managed_approved_ledger_changed");
 }
@@ -291,7 +300,7 @@ export async function prepareManagedProof(inputPath: string, outputPath: string)
     await writePrivateJson(resolve(outputPath), plan);
     return { phase: "managed-plan", planDigest: publicProofHash(plan), providerCalls: 0, modelCalls: 0,
       reservedBefore: plan.reservedBefore, plannedReservations: plan.plannedReservations,
-      remainingAfterPlan: PUBLIC_PROOF_LIFETIME_SECONDS - plan.reservedBefore - plan.plannedReservations };
+      remainingAfterPlan: plan.policy.lifetimeReservationLimitSeconds - plan.reservedBefore - plan.plannedReservations };
   } finally { db.close(); }
 }
 

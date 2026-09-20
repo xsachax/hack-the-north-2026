@@ -59,12 +59,15 @@ complete the original public-website release.
 
 ## Launch and watch
 
-For the compact demo, open `/managed`: enter an approved URL, select **UI/UX**,
-**Security & privacy**, **Accessibility**, or **Loading & performance**, confirm
-authorization and the separate managed policy, then use the prominent **Launch**
-button. Each card has concrete checks and a preset read-only mission; no written
-specification is needed. **Advanced** holds custom personas, mission overrides
-and requested path prefixes. The same eight-assignment limit applies across both
+For the compact demo, open `/managed`. Three centered screens lead from
+**Website** to **Specialists** to **Launch**: enter an approved URL, select
+**UI/UX**, **Security & privacy**, **Accessibility**, or **Loading & performance**,
+then use the prominent **Launch** button. Back preserves the draft; Continue
+never creates a run. Final launch accepts authorization and the managed policy,
+without separate checkboxes. Each card has concrete checks and a preset read-only
+mission; no written specification is needed. **Advanced** holds custom personas
+and mission overrides; requested path prefixes are optional in the website step.
+The same eight-assignment limit applies across both
 pickers. Cards remain explorable when the default-off service is disabled, but
 launch stays unavailable. A lost reply locks the exact saved body and key until
 explicit reconciliation; refresh never automatically launches again.
@@ -81,8 +84,9 @@ throttling or a calibrated performance benchmark. Saved profiles are owner-only;
 existing attempts keep their original persona snapshots.
 
 Open `/`, unlock with the deployment access code if required, then choose **Your
-website** or **Controlled demo** explicitly. Expand scope and criteria to narrow
-navigation and add structural assertions or heuristic semantic checks. Each
+website** or **Controlled demo** explicitly. The classic flow uses centered
+Target, Mission, Criteria, Personas and Review steps. Set scope and criteria to
+narrow navigation and add structural assertions or heuristic semantic checks. Each
 selected persona can override the shared objective, criteria and bounded execution
 limits. Custom profiles can be created, edited, deleted and selected; existing
 attempts retain immutable snapshots. No provider key is entered in the browser.

@@ -46,6 +46,8 @@ export const managedAttemptSchema = z.strictObject({
   result: managedResultSchema.nullable(),
   error: z.string().max(2000).nullable(),
   reservedSeconds: z.number().nonnegative(),
+  startedAt: z.iso.datetime().nullable().optional(),
+  finishedAt: z.iso.datetime().nullable().optional(),
   actualBrowserSeconds: z.number().nonnegative().nullable(),
   modelCalls: z.null(),
 });

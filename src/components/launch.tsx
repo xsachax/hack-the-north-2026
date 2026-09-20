@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { z } from "zod";
 import { api, ApiError, errorMessage } from "@/lib/client-api";
-import { newCreateRunSchema, personaSchema, runSchema, type Persona, type Run } from "@/lib/contracts";
+import { assignmentSchema, newCreateRunSchema, personaSchema, runSchema, type Persona, type Run } from "@/lib/contracts";
 import { newControlledRunSchema, resolveControlledScope } from "@/lib/controlled-run";
 import { controlledSites, type ControlledSiteId } from "@/lib/controlled-sites";
 import { criterionSchema, type Criterion } from "@/lib/criteria";
@@ -18,6 +18,8 @@ import { PersonaAvatar } from "./persona-avatar";
 import { PersonaEditor } from "./persona-editor";
 import { CriterionEditor } from "./criterion-editor";
 import { ContextPicker } from "./context-picker";
+import { OnboardingFrame } from "./onboarding-frame";
+import { targetScopeSchema } from "@/lib/target-scope";
 import type { BrowserState } from "@/lib/context-contracts";
 import { PUBLIC_ASSET_POLICY, PUBLIC_EXECUTION_POLICY, PUBLIC_EXECUTION_LIMITS, publicExecutionReason } from "@/lib/public-execution";
 
@@ -27,6 +29,15 @@ const initialCriterion: Exclude<Criterion, string> = {
   semantics: "current", paths: ["/project-board/projects"], text: "Garden planning", match: "contains",
 };
 const isPreset = (id: string) => presets.some((persona) => persona.id === id);
+const steps = ["Target", "Mission", "Criteria", "Personas", "Review"] as const;
+const titles = ["Choose your target", "Set the mission", "Define success", "Pick your people", "Review your run"];
+const descriptions = [
+  "Choose where the crowd will go and the scope it must stay inside.",
+  "Give your personas one clear, non-destructive task.",
+  "Decide what observable evidence will count as success.",
+  "Choose up to eight personas, with optional individual objectives and limits.",
+  "Check the details. Nothing is submitted until you choose the final action.",
+];
 
 export function Launch() {
   const { ownerId, csrfToken, retry: retrySession } = useOwnerSession();
@@ -49,7 +60,7 @@ export function Launch() {
   }]);
   const [selected, setSelected] = useState(["careful-first-timer"]);
   const [drafts, setDrafts] = useState<Record<string, AssignmentDraft>>({});
-  const [acknowledged, setAcknowledged] = useState(false);
+  const [step, setStep] = useState(0);
   const [publicOptIn, setPublicOptIn] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<PendingLaunch | null>(null);
@@ -102,6 +113,47 @@ export function Launch() {
   function updateDraft(id: string, field: keyof AssignmentDraft, value: string | number) {
     setDrafts((current) => ({ ...current, [id]: { ...current[id], [field]: value } }));
   }
+  function assignments() {
+    return selected.map((personaId) => {
+      const draft = drafts[personaId];
+      return {
+        personaId, goal: draft?.goal || goal,
+        ...(mode === "controlled" && draft?.browserState ? { browserState: draft.browserState } : {}),
+        criteria: draft?.criteria ? z.array(criterionSchema).parse(JSON.parse(draft.criteria)) : criteria,
+        limits: {
+          maxSteps: draft?.maxSteps ?? capabilities?.executionLimits.maxSteps,
+          maxModelCalls: draft?.maxModelCalls ?? capabilities?.executionLimits.maxModelCalls,
+          maxDurationMs: draft?.maxDurationMs ?? capabilities?.executionLimits.maxDurationMs,
+        },
+      };
+    });
+  }
+  function validationError(failure: unknown) {
+    setError(failure instanceof z.ZodError
+      ? failure.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")
+      : "Check the scope and criteria JSON. Controlled paths must remain inside the selected registered site.");
+  }
+  function goToStep(next: number) {
+    setError("");
+    setStep(next);
+  }
+  function advance() {
+    try {
+      if (step === 0) {
+        if (mode === "controlled") resolveControlledScope(site, { targetPath, pathPrefixes: prefixes.split("\n") });
+        else {
+          z.url({ protocol: /^https?$/ }).parse(url);
+          targetScopeSchema.parse({
+            targetUrl: url, allowedSubdomains: subdomains ? subdomains.split("\n") : [],
+            pathPrefixes: websitePrefixes.split("\n"),
+          });
+        }
+      } else if (step === 1) assignmentSchema.shape.goal.parse(goal);
+      else if (step === 2) assignmentSchema.shape.criteria.parse(criteria);
+      else if (step === 3) z.array(assignmentSchema).min(1).max(MAX_ASSIGNMENTS_PER_RUN).parse(assignments());
+      goToStep(step + 1);
+    } catch (failure) { validationError(failure); }
+  }
   async function send(request: PendingLaunch, reconciling = false) {
     if (inFlight.current || !csrfToken) return;
     inFlight.current = true;
@@ -134,43 +186,27 @@ export function Launch() {
   function submit(event: React.FormEvent) {
     event.preventDefault();
     if (pending || busy || !ownerId || !capabilities || storageError) return;
+    if (step < steps.length - 1) { advance(); return; }
     if (mode === "website" && publicOptIn && !capabilities.publicExecutionEnabled) return;
     try {
-      const assignments = selected.map((personaId) => {
-        const draft = drafts[personaId];
-        return {
-          personaId, goal: draft?.goal || goal,
-          ...(mode === "controlled" && draft?.browserState ? { browserState: draft.browserState } : {}),
-          criteria: draft?.criteria ? z.array(criterionSchema).parse(JSON.parse(draft.criteria)) : criteria,
-          limits: {
-            maxSteps: draft?.maxSteps ?? capabilities.executionLimits.maxSteps,
-            maxModelCalls: draft?.maxModelCalls ?? capabilities.executionLimits.maxModelCalls,
-            maxDurationMs: draft?.maxDurationMs ?? capabilities.executionLimits.maxDurationMs,
-          },
-        };
-      });
       if (mode === "controlled") {
         const body = newControlledRunSchema.parse({
-          authorizationAcknowledged: acknowledged, controlledSiteId: site,
-          scope: { targetPath, pathPrefixes: prefixes.split("\n") }, assignments,
+          authorizationAcknowledged: true, controlledSiteId: site,
+          scope: { targetPath, pathPrefixes: prefixes.split("\n") }, assignments: assignments(),
         });
         resolveControlledScope(site, body.scope);
         void send({ ownerId, key: crypto.randomUUID(), path: "/controlled-runs", body });
       } else {
         const body = newCreateRunSchema.parse({
           ...(publicOptIn ? { executionPolicy: PUBLIC_EXECUTION_POLICY, assetPolicy: PUBLIC_ASSET_POLICY } : {}),
-          authorizationAcknowledged: acknowledged, scope: {
+          authorizationAcknowledged: true, scope: {
             targetUrl: url, allowedSubdomains: subdomains ? subdomains.split("\n") : [],
             pathPrefixes: websitePrefixes.split("\n"),
-          }, assignments,
+          }, assignments: assignments(),
         });
         void send({ ownerId, key: crypto.randomUUID(), path: "/runs", body });
       }
-    } catch (failure) {
-      setError(failure instanceof z.ZodError
-        ? failure.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")
-        : "Check the scope and criteria JSON. Controlled paths must remain inside the selected registered site.");
-    }
+    } catch (failure) { validationError(failure); }
   }
   async function deletePersona(persona: Persona) {
     if (!csrfToken || deleting) return;
@@ -182,26 +218,50 @@ export function Launch() {
       setError("");
     } catch (failure) { setError(errorMessage(failure)); } finally { setDeleting(null); }
   }
-  return <section className="launch-workspace" aria-label="Launch workspace">
-    {storageError && <p className="error" role="alert">{storageError}</p>}
-    {pending && <div className="notice" role="status">
-      <strong>An unresolved launch is saved in this tab.</strong>
-      <p>The reply may have been lost. Reconcile the exact saved request; it cannot create another run with the same owner and key. New launches are blocked until this is resolved.</p>
-      <button type="button" className="primary" disabled={busy} onClick={() => void send(pending, true)}>{busy ? "Reconciling..." : "Reconcile saved launch"}</button>
-    </div>}
-    <form className="launch-form" onSubmit={submit} noValidate>
-      <fieldset disabled={busy || !!pending || !!storageError}>
+  const locked = busy || !!pending || !!storageError;
+  const launchDisabled = locked || !capabilities || !selected.length || selected.length > MAX_ASSIGNMENTS_PER_RUN
+    || (mode === "controlled" && !capabilities.controlledRunsEnabled)
+    || (mode === "website" && publicOptIn && !capabilities.publicExecutionEnabled);
+  if (editor) return <section className="launch-workspace onboarding-stage" aria-label="Launch workspace">
+    <OnboardingFrame steps={steps} step={step} title="Shape your persona"
+      description="Save a profile or close the editor to return to your draft." onStep={goToStep} navigationLocked>
+      <PersonaEditor key={editor === "new" ? "new" : editor.id} persona={editor === "new" ? undefined : editor} onClose={() => setEditor(null)} onSaved={(persona) => {
+        setProfiles((current) => [...current.filter((value) => value.id !== persona.id), persona]);
+        setSelected((current) => selectRunAssignment(current, persona.id));
+        setEditor(null);
+      }} />
+    </OnboardingFrame>
+  </section>;
+  return <section className="launch-workspace onboarding-stage" aria-label="Launch workspace">
+    <form className="onboarding-form" onSubmit={submit} noValidate>
+      <OnboardingFrame steps={steps} step={step} title={titles[step]} description={descriptions[step]}
+        onStep={goToStep} navigationLocked={locked} actions={<>
+          {step > 0 && <button type="button" disabled={locked} onClick={() => goToStep(step - 1)}>Back</button>}
+          {step < steps.length - 1
+            ? <button className="primary" type="submit" disabled={locked || !capabilities || (step === 3 && !profiles.length)}>Continue</button>
+            : <button className="primary launch-button" type="submit" disabled={launchDisabled}>
+              {busy ? "Submitting..." : mode === "controlled" ? `Launch ${selected.length} ${selected.length === 1 ? "persona" : "personas"}` : publicOptIn ? "Launch public read-only run" : "Save website request (execution blocked)"}
+            </button>}
+        </>}>
+      {storageError && <p className="error" role="alert">{storageError}</p>}
+      {pending && <div className="notice" role="status">
+        <strong>An unresolved launch is saved in this tab.</strong>
+        <p>The reply may have been lost. Reconcile the exact saved request; it cannot create another run with the same owner and key. New launches are blocked until this is resolved.</p>
+        <button type="button" className="primary" disabled={busy} onClick={() => void send(pending, true)}>{busy ? "Reconciling..." : "Reconcile saved launch"}</button>
+      </div>}
+      {error && <div className="error" role="alert"><p>{error}</p><div className="button-row"><button type="button" onClick={() => void load()}>Reload workspace data</button><button type="button" onClick={retrySession}>Refresh owner session</button></div></div>}
+      <fieldset disabled={locked}>
+        {step === 0 && <section aria-label="Target setup">
         <div className="mode-switch" role="group" aria-label="Target mode">
           <button type="button" aria-pressed={mode === "website"} onClick={() => chooseMode("website")}>Your website</button>
           <button type="button" aria-pressed={mode === "controlled"} onClick={() => chooseMode("controlled")}>Controlled demo</button>
         </div>
-        <label className="goal-label">What should the crowd try?
-          <textarea className="goal-input" required maxLength={2000} rows={3} placeholder="Find a gift under $30 and check whether the delivery cost is clear." value={goal} onChange={(event) => setGoal(event.target.value)} />
-        </label>
         {mode === "website" ? <>
           <label>Website URL<input type="url" required placeholder="https://your-site.com/shop" value={url} onChange={(event) => setUrl(event.target.value)} /></label>
           {!publicOptIn && <p className="notice"><strong>Website execution is not enabled.</strong> Without explicit public opt-in, this intended scoped request stays blocked without opening a browser, even if public execution is later enabled. Controlled demos are separate.</p>}
-          <label className="acknowledgement"><input type="checkbox" checked={publicOptIn} onChange={(event) => setPublicOptIn(event.target.checked)} /><span>Opt in to public read-only execution and the separate public HTTP asset policy.</span></label>
+          <label>Website execution<select value={publicOptIn ? "public" : "save"} onChange={(event) => setPublicOptIn(event.target.value === "public")}>
+            <option value="save">Save request only</option><option value="public">Public read-only run</option>
+          </select></label>
           <p role="status">{capabilities ? publicExecutionReason[capabilities.publicExecutionReason] : "Checking public execution readiness…"}</p>
           <p>Read-only navigation, scoped link following (captured URL navigation; no physical click handlers), back, scroll and wait. Fresh profiles only; no typing, forms, saved state or human takeover.</p>
           <p>Navigation and child documents stay within authorized origins and path prefixes. Third-party/CDN assets may load separately over public HTTP(S), through bodyless GET/HEAD/OPTIONS. Assets never create an exception for navigation or child documents.</p>
@@ -217,9 +277,8 @@ export function Launch() {
           <p className="muted">Queues work for a separate worker. Configuration readiness is not a worker heartbeat.</p>
           {capabilities && !capabilities.controlledRunsEnabled && <p className="notice">Controlled runs are disabled by this deployment. Ask the operator to enable admission and start the separate worker.</p>}
         </>}
-        <details className="configuration" open={mode === "website"}>
-          <summary>Configure scope & success criteria <span>{criteria.length} criteria</span></summary>
-          <p className="muted">A small, authorized task, not an entire-site crawl. These defaults apply to every selected persona; individual overrides are below.</p>
+        <div className="configuration">
+          <p className="muted">A small, authorized task, not an entire-site crawl. This scope applies to every selected persona.</p>
           {mode === "controlled" ? <div className="field-row">
             <label>Starting path<select value={targetPath} onChange={(event) => setTargetPath(event.target.value)}>{controlledSites[site].navigationPaths.map((path) => <option key={path}>{path}</option>)}</select></label>
             <label>Allowed path prefixes (one per line)<textarea required value={prefixes} onChange={(event) => setPrefixes(event.target.value)} /></label>
@@ -227,13 +286,22 @@ export function Launch() {
             <label>Allowed path prefixes (one per line)<textarea required value={websitePrefixes} onChange={(event) => setWebsitePrefixes(event.target.value)} /></label>
             <label>Allowed subdomains (optional, one per line)<textarea value={subdomains} onChange={(event) => setSubdomains(event.target.value)} /></label>
           </div>}
+        </div>
+        </section>}
+        {step === 1 && <section aria-label="Mission setup">
+          <label className="goal-label">What should the crowd try?
+            <textarea className="goal-input" required maxLength={2000} rows={4} placeholder="Find a gift under $30 and check whether the delivery cost is clear." value={goal} onChange={(event) => setGoal(event.target.value)} />
+          </label>
+          <p className="muted">This objective applies to every selected persona unless you add an individual override later.</p>
+        </section>}
+        {step === 2 && <section aria-label="Criteria setup">
           <p className="muted">Current conditions must hold now. Milestones retain observed achievement on unrelated pages, but later contradictory evidence can invalidate them.</p>
           {criteria.map((criterion, index) => <CriterionEditor key={criterion.id} criterion={criterion} onChange={(next) => setCriteria((current) => current.map((value, i) => i === index ? next : value))} onRemove={() => setCriteria((current) => current.filter((_, i) => i !== index))} />)}
           <button type="button" disabled={criteria.length >= 12} onClick={() => setCriteria((current) => [...current, {
             id: `criterion-${crypto.randomUUID().slice(0, 8)}`, kind: "semantic", semantics: "current", description: "",
           }])}>Add success criterion</button>
-        </details>
-        <section className="people-section" aria-labelledby="people-title">
+        </section>}
+        {step === 3 && <section className="people-section" aria-label="Personas setup">
           <div className="section-heading"><h2 id="people-title">Pick your people <span className="muted">/ {selected.length}</span></h2><button type="button" className="text-button" onClick={() => setEditor("new")}>+ Create persona</button></div>
           <p className="muted" id="persona-selection-limit">Select up to {MAX_ASSIGNMENTS_PER_RUN} personas per run. Each gets an independent Browserbase session when execution is enabled; worker limits may queue them.</p>
           <div className="people-picker">
@@ -276,23 +344,37 @@ export function Launch() {
             <p>Comparisons need matching criteria and confirming tested coverage; a missing finding alone is not a fix. Reduction reports the shortest supported path found, not a globally shortest reproduction.</p>
             <p>Screenshots and recordings are private, sensitive pixels, not redacted media. Public execution requires explicit policy opt-in, deployment enablement and integrated native browser/broker readiness; configuration is not proof a worker is running.</p>
           </details>
-        </section>
-        <label className="acknowledgement"><input type="checkbox" required checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} /><span>I am authorized to test this scope and will use only non-destructive tasks.</span></label>
-        <button className="primary launch-button" type="submit" disabled={!capabilities || !selected.length || selected.length > MAX_ASSIGNMENTS_PER_RUN || (mode === "controlled" && !capabilities.controlledRunsEnabled) || (mode === "website" && publicOptIn && !capabilities.publicExecutionEnabled)}>
-          {busy ? "Submitting..." : mode === "controlled" ? `Launch ${selected.length} ${selected.length === 1 ? "persona" : "personas"}` : publicOptIn ? "Launch public read-only run" : "Save website request (execution blocked)"}
-        </button>
-        <p className="muted center">{mode === "controlled" || (publicOptIn && capabilities?.publicExecutionEnabled) ? "Uses browser and model credits when the worker starts. Up to 3 live viewers." : "No paid public-site browser will be launched."}</p>
+        </section>}
+        {step === 4 && <section aria-label="Review setup">
+          <dl>
+            <dt>Target</dt><dd>{mode === "controlled" ? `${site === "project-board" ? "Project board" : "Gift store (fixed)"} · ${targetPath}` : url}</dd>
+            <dt>Allowed paths</dt><dd>{(mode === "controlled" ? prefixes : websitePrefixes).split("\n").join(", ")}</dd>
+            {mode === "website" && subdomains && <><dt>Allowed subdomains</dt><dd>{subdomains.split("\n").join(", ")}</dd></>}
+            <dt>Execution</dt><dd>{mode === "controlled" ? "Controlled demo" : publicOptIn ? "Public read-only run" : "Save request only — execution blocked"}</dd>
+            <dt>Shared mission</dt><dd>{goal}</dd>
+            <dt>Shared success criteria</dt><dd><ul>{criteria.map((criterion) => <li key={criterion.id}>{criterion.description}</li>)}</ul></dd>
+          </dl>
+          <h2>{selected.length} {selected.length === 1 ? "persona" : "personas"}</h2>
+          <ul>{selected.map((id) => {
+            const persona = profiles.find((profile) => profile.id === id);
+            const draft = drafts[id];
+            return <li key={id}><strong>{persona?.name ?? id}</strong>
+              <p>{draft?.goal || goal}</p>
+              <p className="muted">{draft?.maxSteps ?? capabilities?.executionLimits.maxSteps} steps · {draft?.maxModelCalls ?? capabilities?.executionLimits.maxModelCalls} model calls · {(draft?.maxDurationMs ?? capabilities?.executionLimits.maxDurationMs ?? 0) / 1000} seconds · {mode === "controlled" ? draft?.browserState?.mode ?? "fresh" : "fresh"} browser state</p>
+              {draft?.criteria && <details><summary>Individual success criteria</summary><pre className="code-input">{draft.criteria}</pre></details>}
+            </li>;
+          })}</ul>
+          {mode === "website" && publicOptIn && <p role="status">{capabilities ? publicExecutionReason[capabilities.publicExecutionReason] : "Checking public execution readiness…"}</p>}
+          {mode === "controlled" && capabilities && !capabilities.controlledRunsEnabled && <p className="notice">Controlled runs are disabled by this deployment. Ask the operator to enable admission and start the separate worker.</p>}
+          <p className="muted">{mode === "controlled" || (publicOptIn && capabilities?.publicExecutionEnabled) ? "Uses browser and model credits when the worker starts. Up to 3 live viewers." : "No paid public-site browser will be launched."}</p>
+          <p className="muted">By launching or saving this request, you accept the terms, confirm you are authorized to test this scope, and agree to use only non-destructive tasks.{mode === "website" && publicOptIn ? " Your selection also accepts the public read-only execution and separate public HTTP asset policies." : ""}</p>
+        </section>}
       </fieldset>
+      <details className="recent-runs"><summary>Your saved runs</summary>
+        {recent.length ? <ul>{recent.map((run) => <li key={run.id}><Link href={`/runs/${run.id}`}>{run.controlledSiteId ?? "Website"} · {new Date(run.createdAt).toLocaleString()} · {run.status.replaceAll("_", " ")}</Link></li>)}</ul> : <p className="muted">No saved runs in this owner session.</p>}
+        {recent.length === 100 && <p className="muted">Showing the first 100 saved runs.</p>}
+      </details>
+      </OnboardingFrame>
     </form>
-    {error && <div className="error" role="alert"><p>{error}</p><div className="button-row"><button type="button" onClick={() => void load()}>Reload workspace data</button><button type="button" onClick={retrySession}>Refresh owner session</button></div></div>}
-    {editor && <PersonaEditor key={editor === "new" ? "new" : editor.id} persona={editor === "new" ? undefined : editor} onClose={() => setEditor(null)} onSaved={(persona) => {
-      setProfiles((current) => [...current.filter((value) => value.id !== persona.id), persona]);
-      setSelected((current) => selectRunAssignment(current, persona.id));
-      setEditor(null);
-    }} />}
-    <details className="recent-runs"><summary>Your saved runs</summary>
-      {recent.length ? <ul>{recent.map((run) => <li key={run.id}><Link href={`/runs/${run.id}`}>{run.controlledSiteId ?? "Website"} · {new Date(run.createdAt).toLocaleString()} · {run.status.replaceAll("_", " ")}</Link></li>)}</ul> : <p className="muted">No saved runs in this owner session.</p>}
-      {recent.length === 100 && <p className="muted">Showing the first 100 saved runs.</p>}
-    </details>
   </section>;
 }

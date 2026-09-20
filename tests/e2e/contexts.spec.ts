@@ -89,6 +89,8 @@ test("launch saves private context only after explicit selection and keeps opaqu
     await page.getByLabel("Workspace access code").fill(accessCode);
     await page.getByRole("button", { name: "Unlock workspace" }).click();
     await page.getByRole("button", { name: "Controlled demo", exact: true }).click();
+    for (let step = 0; step < 3; step++) await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await expect(page.getByRole("region", { name: "Personas setup", exact: true })).toBeVisible();
     await page.getByText("Alex: objective, limits & character", { exact: true }).click();
     await page.getByText("Browser state: fresh", { exact: true }).click();
     await expect(page.getByLabel("State for this assignment")).toHaveValue("fresh");
@@ -97,12 +99,17 @@ test("launch saves private context only after explicit selection and keeps opaqu
     await page.screenshot({ path: info.outputPath("contexts-desktop.png"), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+    expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeLessThanOrEqual(844);
     await page.screenshot({ path: info.outputPath("contexts-mobile.png"), fullPage: true });
-    await page.getByLabel("I am authorized to test this scope").check();
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await expect(page.getByRole("region", { name: "Review setup", exact: true })).toContainText("save browser state");
+    await expect(page.getByRole("checkbox", { name: /I am authorized/ })).toHaveCount(0);
+    expect(repository.contexts.list(owner)).toEqual([]);
     await page.getByRole("button", { name: "Launch 1 persona", exact: true }).click();
     await expect(page).toHaveURL(/\/runs\/[a-f0-9-]+$/);
     expect(repository.contexts.list(owner)).toEqual([expect.objectContaining({ status: "pending", persistence: "never_saved" })]);
     const attempt = repository.attempts(owner, page.url().split("/").at(-1)!)[0];
+    expect(repository.getRun(owner, page.url().split("/").at(-1)!).authorizationAcknowledged).toBe(true);
     expect(attempt.browserState).toEqual({ mode: "save", acknowledgeSensitiveStorage: true });
     expect(await page.evaluate(() => JSON.stringify({ ...sessionStorage, ...localStorage }))).not.toContain(accessCode);
   } finally {

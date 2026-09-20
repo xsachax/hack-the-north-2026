@@ -293,14 +293,17 @@ async function launchViaUi(runtime: LocalRuntime, browserState: "save" | string)
   await page.goto(origin, { waitUntil: "domcontentloaded" });
   await page.getByRole("button", { name: "Controlled demo", exact: true }).click();
   await page.getByLabel("Controlled site").selectOption("project-board");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page.getByLabel("What should the crowd try?").fill(goal);
+  for (let step = 0; step < 2; step++) await page.getByRole("button", { name: "Continue", exact: true }).click();
   const assignment = page.locator("details.persona-config").first();
   await assignment.locator("summary").first().click();
   await assignment.getByText("Override canonical criteria JSON", { exact: true }).click();
   await assignment.locator("textarea.code-input").fill(JSON.stringify(criteria));
   await assignment.getByText("Browser state: fresh", { exact: true }).click();
   await assignment.getByLabel("State for this assignment").selectOption(browserState);
-  await page.getByLabel("I am authorized to test this scope and will use only non-destructive tasks.").check();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("region", { name: "Review setup", exact: true }).waitFor();
   const [response] = await Promise.all([
     page.waitForResponse((response) => response.url() === `${origin}/api/v1/controlled-runs` && response.request().method() === "POST"),
     page.getByRole("button", { name: "Launch 1 persona", exact: true }).click(),

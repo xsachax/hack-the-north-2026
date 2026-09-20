@@ -271,4 +271,8 @@ export const migrations = [
       NEW.provider_task IS NOT OLD.provider_task OR NEW.dispatch_started IS NOT OLD.dispatch_started)
     BEGIN SELECT RAISE(ABORT,'immutable_managed_dispatch'); END;
   `,
+  `
+  ALTER TABLE managed_attempts ADD COLUMN finished_at INTEGER
+    CHECK(finished_at IS NULL OR finished_at>=0);
+  `,
 ] as const;

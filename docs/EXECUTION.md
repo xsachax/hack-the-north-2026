@@ -29,20 +29,49 @@ the original worker, in separate managed tables.
 The managed launch page lets an authenticated owner prepare objectives and save
 custom personas while execution is disabled. Only launch is operator-gated;
 editing a persona never allocates a browser.
-The four demo specialist cards reuse `careful-first-timer`, `security-minded`,
-`keyboard-only` and `slow-connection` with role-specific read-only goals and
+The five demo specialist cards reuse `careful-first-timer`, `security-minded`,
+`keyboard-only`, `slow-connection` and `non-native-reader` with role-specific read-only goals and
 criteria, not new persona records or tool permissions. Advanced controls retain
 the other profiles and optional overrides. The wall uses a role label only when
 the saved assignment exactly matches its preset; historical or edited missions
 keep their saved persona identity. Original persona snapshots are never renamed.
 Accessibility covers observed keyboard/focus/labels, not WCAG certification;
-loading covers visible behavior, not fabricated timing benchmarks.
+loading covers visible behavior, not fabricated timing benchmarks. Onboarding
+shows Website, Specialists and Launch as sequential centered panels. Optional
+advanced content scrolls inside the panel; Back preserves the draft. Continue
+never submits a run. Final Launch supplies the required authorization and
+managed-policy acceptance fields; separate acknowledgement checkboxes are not
+shown. Owner, CSRF, origin and operator-enable checks are unchanged.
+
+When IANA is operator-approved, **Prepare five-agent IANA demo** fills five
+distinct short missions on `/domains/reserved`; it does not submit a run.
+The owner reviews and launches one immutable five-assignment request. The same
+wall shows every agent's last reported action, observation, status and elapsed
+work time above the detailed logs. A worker claim appears as **Starting**, not
+as evidence of a running browser. Provider status is persisted as received.
+Elapsed time includes allocation and cleanup and freezes at settlement; it is
+separate from independently measured browser usage. Historical missing
+timestamps stay unavailable. Results and cleanup are displayed independently.
+
+The explicitly authorized local five-agent demo uses a 60-second operational
+allowance (not a provider TTL), global and owner concurrency five, and a bounded
+21,600-second lifetime reservation pool within the user's 360,000-second
+ceiling. `applyManagedDemoPolicyAmendment` appends an audited policy receipt
+after the original 1,800-to-3,600 amendment. It requires settled resources and
+unchanged accounting, preserves every prior reservation, and never refunds the
+lifetime pool. The runtime must match the effective persisted policy exactly.
+Native proof defaults and the fixed single-agent proof plan are not expanded
+by this managed-demo authorization. A genuine rehearsal additionally needs
+provider RUNNING readbacks and overlapping session timestamps, independent
+URL/pixels, exact-session closure and combined usage; five queued cards or
+decorative animation are not concurrent execution evidence.
 
 Browserbase controls the managed tool set, which includes non-browser tools.
 Using a browser is instructed, not guaranteed by dispatch alone. A Search/Fetch-only
 answer is not genuine browser acceptance. Scope and read-only instructions
 cannot be enforced by Flash Flood's native broker on this path. Initial admission
-is therefore operator-allowlisted, with a separate explicit policy acknowledgement.
+is therefore operator-allowlisted, with a distinct managed-policy acceptance
+field in the API contract and acceptance copy on the final launch step.
 The API supplies no hard per-run timeout or model-call cap; the local deadline
 requests stop and may be exceeded during failures. Model calls remain unknown
 unless independently available. Agent-reported criterion states are not native
@@ -55,6 +84,16 @@ all 900 seconds of existing native lifetime reservations. Hosted success and
 usage are recorded only after an actual approved run and independent closure;
 the presence of this implementation is not a hosted acceptance claim.
 
+The first approved managed attempt on 2026-09-20 created and independently
+deleted its temporary Agent, but stopped at configuration readback before any
+browser/run allocation. The retained provider response had identical schema
+values with reordered JSON object keys, exposing an order-sensitive comparison.
+The proof now compares schema structure and values without depending on object
+key order; changed or missing values, array order, prompt, name and identity
+still fail closed. Raw readback is retained privately before validation.
+Existing approval and ledger digest formats are unchanged. No managed browser
+goal has been accepted from that attempt.
+
 The managed proof can explicitly bind `localUiBrowser: "webkit"` for its local
 owner-wall renderer when local Chromium is unavailable. This does not replace
 the remote Browserbase agent or change its browser settings. The default remains
@@ -64,6 +103,43 @@ bytes from the independently identified Browserbase session. The private
 `browser-goal` image must be visually inspected before declaring the heading
 verified. The local wall screenshot, decorative surfers, model prose and
 recording metadata alone do not establish that criterion.
+
+The first genuine managed run reached the IANA destination and independently
+closed its session, but exposed two hosted API differences: structured results
+arrive inside an `output` envelope with task metadata, and session logs can be
+delayed or omit screenshot commands. The runner validates both the direct result
+and the exact hosted envelope without treating `stepsTaken` as model calls or
+`taskDuration` as browser usage. The proof attaches an independent observer to the
+exact run/session/project already identified by the provider. It reads the
+browser location and captures real CDP screenshot bytes without navigating or
+creating another session. That attachment is retained until worker cleanup;
+the provider's final exact-session read still determines closure and usage.
+Its protocol evidence is private and separately labelled from agent messages.
+Normal remote disconnection can race the worker's terminal-status poll. The
+observer records that lifecycle event without cancelling the worker or
+reconnecting; acceptance still requires the independent terminal run/session
+readbacks, complete report, previously captured pixels and confirmed cleanup.
+The original proof ceiling is 1,800 lifetime reserved seconds. A newer explicit
+owner approval can be recorded through a one-time, audited managed-budget
+amendment to 3,600 seconds. That transaction changes only the lifetime ceiling,
+retains every previous reservation and history row, and refuses unsettled work.
+The amendment is included in the plan's ledger digest; without that journal,
+the original ceiling still applies. Preparing or running a plan never raises
+the budget automatically. Concurrency remains one and reservations remain
+300 seconds, with no automatic allocation retry.
+
+Genuine managed execution was verified on 2026-09-20: the single IANA persona
+followed the requested Further Reading link, the owner report completed with both
+criteria met, and an independent CDP observer recorded the exact destination URL
+and real screenshot bytes. Visual inspection confirmed the
+**IANA-managed Reserved Domains** heading. The exact provider session was
+independently `COMPLETED`; the temporary Agent was deleted and its absence
+confirmed by an exact-ID 404. The successful session used 23.231 browser-seconds.
+The preserved lifetime ledger totals 2,100 reserved seconds, 88 rounded consumed
+seconds and 84.837 measured browser-seconds, including earlier attempts. Model
+calls remain unknown. Private receipts, browser pixels and owner-wall evidence
+are retained in the authoritative ledger directory, not committed or published.
+This verifies the managed goal, **not native confinement or issue #8 acceptance**.
 
 ## Offline integration and deferred public acceptance
 

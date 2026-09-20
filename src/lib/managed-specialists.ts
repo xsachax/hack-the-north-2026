@@ -49,7 +49,39 @@ export const managedSpecialists: readonly Specialist[] = [
       "Any observed loading or connection error gives clear recovery guidance; absent error states and timing evidence are reported as untested.",
     ],
   },
+  {
+    personaId: "non-native-reader", label: "Content clarity",
+    purpose: "Check whether the words and examples explain the purpose.",
+    checks: ["Plain language", "Useful examples", "Clear explanations"],
+    goal: "Read the approved public pages as a non-native reader. Observe whether wording, examples and explanations make the purpose understandable. Use read-only browsing; do not submit forms, authenticate or change data. Distinguish observed confusing wording from personal preferences.",
+    criteria: [
+      "The visible page explains its purpose in understandable language.",
+      "Important terms have helpful explanations or concrete examples.",
+      "Visible instructions make the next step understandable without unexplained jargon.",
+    ],
+  },
 ];
+
+export const managedIanaDemoScope = {
+  targetUrl: "https://www.iana.org/domains/reserved", pathPrefixes: ["/domains/reserved"], allowedSubdomains: [],
+};
+const demoMissions = [
+  { goal: "Observe the page hierarchy and section labels as a first-time visitor.",
+    criteria: ["The IANA-managed Reserved Domains heading is visible.", "Section labels distinguish example domains from other reserved names."] },
+  { goal: "Passively read the visible IANA identity and published standards references. Do not perform security probing.",
+    criteria: ["The page identifies IANA and its administrative purpose.", "Published standards references are visible without signing in or entering personal data."] },
+  { goal: "Read the page heading and visible link names. Report keyboard behavior as untested unless actually observed; do not claim WCAG certification.",
+    criteria: ["The main heading has meaningful visible text.", "Observed navigation links have descriptive text; any untested keyboard behavior is reported as a limitation."] },
+  { goal: "Observe one page load reaching readable content. Do not reload, benchmark or claim unmeasured timings.",
+    criteria: ["The page reaches readable content rather than remaining blank.", "Performance claims use observed evidence, with unmeasured timings explicitly reported as unavailable."] },
+  { goal: "Read the explanation of example domains and describe whether the concrete examples clarify their purpose.",
+    criteria: ["The page explains why example domains exist.", "The names example.com and example.org are recognizable as examples."] },
+];
+export const managedIanaDemoAssignments: readonly Assignment[] = managedSpecialists.map((specialist, index) => ({
+  personaId: specialist.personaId,
+  goal: `Use the actual browser to open the initial IANA Reserved Domains page. ${demoMissions[index].goal} Read this one page, take a screenshot and promptly return your observations. Stay on this page; do not follow external links, submit forms, authenticate or change data. Do not wait artificially. Keep this a short read-only visit.`,
+  criteria: demoMissions[index].criteria,
+}));
 
 export const managedDefaultGoal = "Review the approved public pages from this persona's perspective using read-only browsing. Do not submit forms, authenticate, enter sensitive data, purchase or change data. Report observed friction and limitations, not untested claims.";
 export const managedDefaultCriteria = [
@@ -59,8 +91,9 @@ export const managedDefaultCriteria = [
 ];
 
 export function managedSpecialistForAssignment(assignment: Assignment) {
-  return managedSpecialists.find((specialist) => specialist.personaId === assignment.personaId
-    && specialist.goal === assignment.goal
-    && specialist.criteria.length === assignment.criteria.length
-    && specialist.criteria.every((criterion, index) => criterion === assignment.criteria[index]));
+  const same = (preset: Assignment) => preset.personaId === assignment.personaId && preset.goal === assignment.goal
+    && preset.criteria.length === assignment.criteria.length
+    && preset.criteria.every((criterion, index) => criterion === assignment.criteria[index]);
+  return managedSpecialists.find((specialist) => same(specialist)
+    || managedIanaDemoAssignments.some((preset) => preset.personaId === specialist.personaId && same(preset)));
 }

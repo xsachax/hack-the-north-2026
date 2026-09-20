@@ -235,8 +235,8 @@ async function main() {
     if (!cookies.some((cookie) => cookie.secure && cookie.httpOnly)) throw new Error("secure_owner_cookie_missing");
     await page.getByRole("button", { name: "Controlled demo", exact: true }).click();
     await page.getByRole("combobox", { name: "Controlled site" }).selectOption("project-board");
-    await page.locator("summary").filter({ hasText: "Configure scope & success criteria" }).click();
     await page.getByRole("combobox", { name: "Starting path", exact: true }).selectOption("/project-board/projects");
+    for (let step = 0; step < 3; step++) await page.getByRole("button", { name: "Continue", exact: true }).click();
     await page.getByRole("button", { name: "+ Create persona", exact: true }).click();
     await page.getByRole("textbox", { name: "Name", exact: true }).fill("Garden organizer");
     await page.getByRole("textbox", { name: "Character" }).fill(
@@ -248,7 +248,8 @@ async function main() {
     ]);
     if (!personaResponse.ok()) throw new Error("custom_persona_save_failed");
     const customId = z.object({ data: z.object({ id: z.uuid() }) }).parse(await personaResponse.json()).data.id;
-    await page.getByRole("checkbox", { name: "I am authorized to test this scope and will use only non-destructive tasks." }).check();
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page.getByRole("region", { name: "Review setup", exact: true }).waitFor();
     await page.getByRole("button", { name: "Launch 2 personas", exact: true }).waitFor();
     await screenshot("launch-desktop");
     await page.setViewportSize({ width: 390, height: 844 });
