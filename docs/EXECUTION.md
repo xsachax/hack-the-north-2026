@@ -37,13 +37,17 @@ the saved assignment exactly matches its preset; historical or edited missions
 keep their saved persona identity. Original persona snapshots are never renamed.
 Accessibility covers observed keyboard/focus/labels, not WCAG certification;
 loading covers visible behavior, not fabricated timing benchmarks. Onboarding
-shows Website, Specialists and Launch as sequential centered panels. Optional
-advanced content scrolls inside the panel; Back preserves the draft. Continue
-never submits a run. Final Launch supplies the required authorization and
+shows the approved website picker, editable URL and specialist cards in one
+wave-backed panel, with optional advanced controls and mission review. Only
+explicit Launch submits a run; Enter in the URL field does not. Final Launch supplies the required authorization and
 managed-policy acceptance fields; separate acknowledgement checkboxes are not
 shown. Owner, CSRF, origin and operator-enable checks are unchanged.
 
-When IANA is operator-approved, **Prepare five-agent IANA demo** fills five
+The Browserbase landing-page demo approves `https://www.browserbase.com` and
+`https://browserbase.com` through `MANAGED_AGENT_ALLOWED_ORIGINS`, not client
+code. These are initial-target approvals, not enforced browser confinement.
+The selector uses the service's actual configured list. When IANA is
+operator-approved, **Prepare five-agent IANA demo** under **Advanced** fills five
 distinct short missions on `/domains/reserved`; it does not submit a run.
 The owner reviews and launches one immutable five-assignment request. The same
 wall shows every agent's last reported action, observation, status and elapsed

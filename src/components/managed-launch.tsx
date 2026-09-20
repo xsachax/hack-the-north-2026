@@ -15,15 +15,8 @@ import { managedDefaultCriteria, managedDefaultGoal, managedIanaDemoAssignments,
 import { useOwnerSession } from "./owner-session";
 import { PersonaAvatar } from "./persona-avatar";
 import { PersonaEditor } from "./persona-editor";
-import { OnboardingFrame } from "./onboarding-frame";
+import { WaveMark } from "./wave-mark";
 
-const steps = ["Website", "Specialists", "Launch"];
-const titles = ["Where are we surfing?", "Choose your specialists.", "Ready to make waves?"];
-const descriptions = [
-  "Start with one website and a small scope.",
-  "Pick the perspectives you want. Their missions are ready to go.",
-  "Review the mission. Your next click sends it to the worker.",
-];
 const lines = (value: string) => value.split("\n").map((line) => line.trim()).filter(Boolean);
 
 const pendingSchema = z.strictObject({
@@ -35,12 +28,12 @@ const storageKey = (owner: string) => `flash-flood:managed-pending:${owner}`;
 const peopleSchema = z.strictObject({ items: z.array(personaSchema) });
 const runsSchema = z.strictObject({ items: z.array(managedRunSchema) });
 
-function targetAllowed(value: string, origins?: string[]) {
+function targetUrl(value: string) {
   try {
-    const url = new URL(value);
-    return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password
-      && (!origins || origins.includes(url.origin));
-  } catch { return false; }
+    const trimmed = value.trim();
+    const url = new URL(/^[a-z][a-z\d+.-]*:/i.test(trimmed) ? trimmed : `https://${trimmed}`);
+    return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password ? url : null;
+  } catch { return null; }
 }
 
 export function ManagedLaunch() {
@@ -60,7 +53,6 @@ export function ManagedLaunch() {
   const [drafts, setDrafts] = useState<Record<string, AssignmentDraft>>({});
   const [editor, setEditor] = useState<Persona | "new" | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
-  const [step, setStep] = useState(0);
   const [pending, setPending] = useState<Pending | null>(null);
   const [storageOwner, setStorageOwner] = useState<string | null>(null);
   const [storageError, setStorageError] = useState("");
@@ -99,7 +91,6 @@ export function ManagedLaunch() {
           setDrafts(Object.fromEntries(saved.body.assignments.map((assignment) => [
             assignment.personaId, { goal: assignment.goal, criteria: assignment.criteria.join("\n") },
           ])));
-          setStep(2);
         }
         setStorageOwner(ownerId);
         setStorageError("");
@@ -114,6 +105,9 @@ export function ManagedLaunch() {
         ]);
         if (controller.signal.aborted) return;
         setCapabilities(readiness);
+        setTarget((current) => current || (readiness.allowedOrigins.includes("https://www.browserbase.com")
+          ? "https://www.browserbase.com/" : readiness.allowedOrigins.includes("https://browserbase.com")
+            ? "https://browserbase.com/" : ""));
         setProfiles(people.items);
         setRecent(runs.items);
         setLoaded(true);
@@ -164,15 +158,10 @@ export function ManagedLaunch() {
 
   function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (step < steps.length - 1) {
-      if (locked || !loaded || editor || deleting) return;
-      if (!stepValid) { setError("Complete this section before continuing."); return; }
-      navigate(step + 1);
-      return;
-    }
     if (!authorized || !ownerId || !capabilities?.enabled || !loaded || pending || busy || editor || deleting
       || storageError || storageOwner !== ownerId) return;
-    if (!targetAllowed(target, capabilities.allowedOrigins)) {
+    const normalizedTarget = targetUrl(target);
+    if (!normalizedTarget || !capabilities.allowedOrigins.includes(normalizedTarget.origin)) {
       setError("Choose an initial URL on an exact operator-approved origin. Other hosts are not supported.");
       return;
     }
@@ -185,7 +174,7 @@ export function ManagedLaunch() {
       const body = managedCreateSchema.parse({
         executionPolicy: MANAGED_EXECUTION_POLICY,
         authorizationAcknowledged: true, managedPolicyAcknowledged: true,
-        scope: { targetUrl: new URL(target).href, pathPrefixes, allowedSubdomains: [] },
+        scope: { targetUrl: normalizedTarget.href, pathPrefixes, allowedSubdomains: [] },
         assignments: selected.map(assignmentFor),
       });
       void send({ ownerId, key: crypto.randomUUID(), body });
@@ -203,7 +192,6 @@ export function ManagedLaunch() {
       setPending(null);
       setStorageOwner(ownerId);
       setStorageError("");
-      setStep(0);
       setError("");
     } catch { setStorageError("Storage is still unavailable. Launches remain locked; no request was sent."); }
   }
@@ -212,9 +200,15 @@ export function ManagedLaunch() {
     setDrafts((current) => ({ ...current, [id]: { ...current[id], [field]: value } }));
   }
 
-  function navigate(next: number) {
-    setStep(next);
+  function chooseTarget(value: string) {
+    setTarget(value);
     setError("");
+    if (targetUrl(value)?.href !== managedIanaDemoScope.targetUrl) {
+      setDrafts((current) => Object.fromEntries(Object.entries(current).filter(([id, draft]) =>
+        !managedIanaDemoAssignments.some((assignment) => assignment.personaId === id
+          && assignment.goal === draft.goal && assignment.criteria.join("\n") === draft.criteria))));
+      if (prefixes === managedIanaDemoScope.pathPrefixes.join("\n")) setPrefixes("/");
+    }
   }
 
   async function deletePersona(persona: Persona) {
@@ -238,20 +232,19 @@ export function ManagedLaunch() {
     } finally { setDeleting(null); }
   }
 
-  const validTarget = !!capabilities && targetAllowed(target, capabilities.allowedOrigins);
+  const normalizedTarget = targetUrl(target);
+  const validTarget = !!normalizedTarget && !!capabilities?.allowedOrigins.includes(normalizedTarget.origin);
   const enabled = loaded && !!capabilities?.enabled && !!capabilities.allowedOrigins.length;
   const locked = !!pending || !!storageError || storageOwner !== ownerId || busy || !authorized;
   const assignmentsReady = selected.length > 0 && selected.length <= 8
     && selected.every((id) => managedAssignmentSchema.safeParse(assignmentFor(id)).success);
-  const scopeReady = targetAllowed(target)
+  const scopeReady = !!normalizedTarget
     && managedCreateSchema.shape.scope.safeParse({
-    targetUrl: target, pathPrefixes: lines(prefixes), allowedSubdomains: [],
+    targetUrl: normalizedTarget.href, pathPrefixes: lines(prefixes), allowedSubdomains: [],
   }).success && lines(prefixes).every((prefix) => prefix.startsWith("/") && !prefix.startsWith("//") && !/[?#]/.test(prefix));
-  const stepValid = step === 0 ? scopeReady && (!capabilities?.enabled || validTarget)
-    : assignmentsReady;
-  const editorPanel = editor && !locked ? <section className="managed-launch onboarding-stage" aria-label="Managed persona editor">
-    <OnboardingFrame steps={steps} step={step} title="Make a persona your own."
-      description="Choose a specialty or create a completely custom perspective." onStep={navigate} navigationLocked>
+  const editorPanel = editor && !locked ? <section className="managed-launch managed-composer managed-editor" aria-label="Managed persona editor">
+    <header><p className="eyebrow">A FRESH PERSPECTIVE</p><h1>Make a persona your own.</h1>
+      <p className="muted">Choose a specialty or create a completely custom perspective.</p></header>
       <PersonaEditor key={editor === "new" ? "new" : editor.id}
         persona={editor === "new" ? undefined : editor} onClose={() => setEditor(null)}
         onSaved={(value) => {
@@ -263,20 +256,16 @@ export function ManagedLaunch() {
           }
           setEditor(null);
         }} />
-    </OnboardingFrame>
   </section> : null;
 
-  return <>{editorPanel}<section hidden={!!editorPanel} className="managed-launch onboarding-stage" aria-label="Managed launch workspace">
-    <form className="onboarding-form" onSubmit={submit} noValidate>
-    <OnboardingFrame steps={steps} step={step} title={titles[step]} description={descriptions[step]}
-      onStep={navigate} navigationLocked={locked || !!deleting} actions={<>
-        {step > 0 && <button type="button" disabled={locked || !!deleting} onClick={() => navigate(step - 1)}>Back</button>}
-        <span className="muted onboarding-save-hint">Nothing launches until the final step.</span>
-        {step < 2 ? <button type="submit" className="primary" disabled={locked || !loaded || !!deleting || !stepValid}>Continue</button>
-          : <button type="submit" className="primary launch-button" disabled={locked || !!deleting || !enabled || !validTarget || !scopeReady || !assignmentsReady}>
-            {busy ? "Saving managed launch…" : `Launch ${selected.length || ""}${selected.length ? " " : ""}agent${selected.length === 1 ? "" : "s"}`}
-          </button>}
-      </>}>
+  return <>{editorPanel}<section hidden={!!editorPanel} className="managed-launch" aria-label="Managed launch workspace">
+    <header className="managed-welcome">
+      <WaveMark />
+      <p className="eyebrow">A FRESH SET OF EYES. A WHOLE NEW WAVE.</p>
+      <h1>Make waves. <span>Find friction.</span></h1>
+      <p>Send a crew of AI testers surfing through your website.</p>
+    </header>
+    <form className="managed-composer" onSubmit={submit} noValidate>
     {error && <div className="error" role="alert"><p>{error}</p>
       <button type="button" disabled={busy || !!deleting || !!editor} onClick={() => setLoadVersion((value) => value + 1)}>Refresh saved runs and readiness</button>{" "}
       <button type="button" disabled={busy || !!deleting || !!editor} onClick={retry}>Refresh owner session</button>
@@ -297,40 +286,35 @@ export function ManagedLaunch() {
       </details>
     </section>}
       <fieldset disabled={locked || !loaded || !!editor || !!deleting}>
-        <div hidden={step !== 0} data-onboarding-step="Website">
-        {capabilities?.allowedOrigins.includes("https://www.iana.org") && <div className="managed-demo-preset">
-          <button type="button" onClick={() => {
-            setTarget(managedIanaDemoScope.targetUrl);
-            setPrefixes(managedIanaDemoScope.pathPrefixes.join("\n"));
-            setSelected(managedIanaDemoAssignments.map((assignment) => assignment.personaId));
-            setDrafts(Object.fromEntries(managedIanaDemoAssignments.map((assignment) => [
-              assignment.personaId, { goal: assignment.goal, criteria: assignment.criteria.join("\n") },
-            ])));
-            setStep(1);
-          }}>Prepare five-agent IANA demo</button>
-          <p className="muted">Five short, distinct read-only missions on one page. Review next; nothing launches yet.</p>
-        </div>}
-        <label>Initial target URL
-          <input type="url" maxLength={4096} placeholder="https://approved-site.example/help" value={target} onChange={(event) => setTarget(event.target.value)}
-            aria-invalid={!!target && (!scopeReady || !!capabilities?.enabled && !validTarget)} aria-describedby="managed-target-help" />
-        </label>
-        <div id="managed-target-help" className="muted">
-          <strong>Operator-approved initial origins:</strong>
-          {capabilities?.allowedOrigins.length ? <ul className="managed-origins">{capabilities.allowedOrigins.map((origin) => <li key={origin}><code>{origin}</code></li>)}</ul> : <p>No initial origins are approved.</p>}
-          {target && capabilities?.enabled && !validTarget && <p className="error">This initial target is not an exact approved HTTP(S) origin.</p>}
+        <div className="managed-target">
+          <div className="managed-target-heading">
+            <label htmlFor="managed-target-url">Where are we surfing?</label>
+            <span className="managed-target-badge">Public websites only</span>
+          </div>
+          <input id="managed-target-url" aria-label="Initial target URL" type="text" inputMode="url" autoComplete="url"
+            spellCheck={false} maxLength={4096} placeholder="browserbase.com" value={target}
+            onChange={(event) => chooseTarget(event.target.value)}
+            onBlur={() => { if (normalizedTarget) setTarget(normalizedTarget.href); }}
+            onKeyDown={(event) => { if (event.key === "Enter") event.preventDefault(); }}
+            aria-invalid={!!target && (!scopeReady || !validTarget)} aria-describedby="managed-target-help" />
+          <div className="managed-target-toolbar">
+            <label className="managed-site-picker">Approved website
+              <select value={validTarget && normalizedTarget ? normalizedTarget.origin : ""} disabled={!capabilities?.allowedOrigins.length}
+                onChange={(event) => chooseTarget(`${event.target.value}/`)}>
+                <option value="" disabled>{loaded ? "Choose a website" : "Loading websites..."}</option>
+                {capabilities?.allowedOrigins.map((origin) => <option key={origin} value={origin}>{new URL(origin).host}</option>)}
+              </select>
+            </label>
+            <span className="muted" id="managed-target-help">{!loaded ? "Checking approved websites..." : !capabilities?.allowedOrigins.length
+              ? "No websites approved yet. Ask your operator to add one."
+              : "Pick an approved site, or enter a URL on that site."}</span>
+          </div>
+          {target && loaded && !validTarget && <p className="error" role="alert">This initial target is not an exact approved HTTP(S) origin. Choose a website from the list.</p>}
+          {target && validTarget && !scopeReady && <p className="error" role="alert">Check the requested path prefixes. Use paths beginning with /, without a query or fragment.</p>}
         </div>
-        <details className="configuration">
-          <summary>Customize requested scope</summary>
-          <label>Requested path prefixes (one per line)
-            <textarea rows={2} value={prefixes} onChange={(event) => setPrefixes(event.target.value)} />
-          </label>
-          <p className="muted">Requested scope only; not enforced. No additional hosts or subdomains are added.</p>
-        </details>
-        </div>
-        <div hidden={step !== 1} data-onboarding-step="Specialists">
         <section className="managed-specialists" aria-label="Choose your specialists">
           <div className="section-heading">
-            <p className="muted">Every specialist has a read-only mission.</p>
+            <div><h2>Choose your crew</h2><p className="muted">Different perspectives. One shared destination.</p></div>
             <span className="managed-selection-count" aria-live="polite">{selected.length} / 8 selected</span>
           </div>
           <div className="managed-specialist-grid">
@@ -349,16 +333,35 @@ export function ManagedLaunch() {
                   <span className="managed-specialist-state">{!available ? "Unavailable" : checked ? "Selected" : "Select"}</span></span>
                 <strong>{specialist.label}</strong>
                 <span className="managed-specialist-purpose" id={`specialist-${specialist.personaId}`}>{specialist.purpose}</span>
-                <span className="managed-specialist-checks">{shortDemo ? <span>Short one-page IANA mission</span> : customized
+                <span className="managed-specialist-checks" data-customized={customized || shortDemo}>{shortDemo ? <span>Short one-page IANA mission</span> : customized
                   ? <span>Custom mission: review goals and checks in Advanced.</span>
                   : specialist.checks.map((check) => <span key={check}>{check}</span>)}</span>
               </label>;
             })}
           </div>
-          <p className="muted managed-role-limits">Passive trust review, not penetration testing. Observed accessibility, not WCAG certification. Visible loading, not benchmarks.</p>
         </section>
         <details className="managed-advanced">
           <summary>Advanced: missions & personas</summary>
+          <p className="muted">Optional. Your crew already has read-only missions and checks. Fine-tune them below.</p>
+        <details className="configuration">
+          <summary>Customize requested scope</summary>
+          <label>Requested path prefixes (one per line)
+            <textarea rows={2} value={prefixes} onChange={(event) => setPrefixes(event.target.value)} />
+          </label>
+          <p className="muted">Requested scope only; not enforced. No additional hosts or subdomains are added.</p>
+        </details>
+        {capabilities?.allowedOrigins.includes("https://www.iana.org") && <div className="managed-demo-preset">
+          <button type="button" onClick={() => {
+            setTarget(managedIanaDemoScope.targetUrl);
+            setPrefixes(managedIanaDemoScope.pathPrefixes.join("\n"));
+            setSelected(managedIanaDemoAssignments.map((assignment) => assignment.personaId));
+            setDrafts(Object.fromEntries(managedIanaDemoAssignments.map((assignment) => [
+              assignment.personaId, { goal: assignment.goal, criteria: assignment.criteria.join("\n") },
+            ])));
+          }}>Prepare five-agent IANA demo</button>
+          <p className="muted">IANA&apos;s Reserved Domains page is an optional, short read-only demo, not a required destination. This only prepares the crew.</p>
+        </div>}
+          <p className="muted managed-role-limits">Passive trust review, not penetration testing. Observed accessibility, not WCAG certification. Visible loading, not benchmarks.</p>
           <p className="muted">Optional. The five specialists already have goals and checks. Additional personas use the shared mission below. Every launch saves immutable persona, goal and criteria snapshots.</p>
           <label>Shared goal for additional personas
             <textarea className="goal-input" rows={3} maxLength={2000} placeholder="Find delivery information and explain whether the cost is clear." value={goal} onChange={(event) => setGoal(event.target.value)} />
@@ -403,8 +406,8 @@ export function ManagedLaunch() {
             <p className="muted">Preset customization saves a separate profile. Editing or deleting a saved persona does not change snapshots in existing runs.</p>
           </section>
         </details>
-        </div>
-        <div hidden={step !== 2} data-onboarding-step="Launch">
+        <details className="managed-mission-review">
+          <summary>Review selected missions{selected.length ? ` (${selected.length})` : ""}</summary>
           <p className="onboarding-target managed-wrap">{target}</p>
           <p className="muted">Requested paths: {lines(prefixes).join(", ")}</p>
           <ul className="onboarding-review">
@@ -423,19 +426,34 @@ export function ManagedLaunch() {
             </li>;
             })}
           </ul>
-          <p className="muted">By launching, you confirm authorization to test this scope and accept the managed execution policy. Use only non-destructive tasks, without credentials or sensitive data.</p>
-          <details className="configuration">
+        </details>
+      </fieldset>
+      <div className="managed-launch-footer">
+        <div className="managed-launch-summary">
+          <span className="managed-ready-dot" data-ready={enabled && validTarget && scopeReady && assignmentsReady} aria-hidden="true" />
+          <span>{selected.length ? `${selected.length} agent${selected.length === 1 ? "" : "s"} in your crew` : "Your next wave starts here"}
+            <small>{selected.length ? "Ready when you are. Nothing launches automatically." : "Pick a website and the perspectives you need."}</small>
+          </span>
+        </div>
+        <button type="submit" className="primary launch-button" disabled={locked || !!deleting || !enabled || !validTarget || !scopeReady || !assignmentsReady}>
+          {busy ? "Saving managed launch…" : `Launch ${selected.length || ""}${selected.length ? " " : ""}agent${selected.length === 1 ? "" : "s"}`}
+          <span aria-hidden="true">↗</span>
+        </button>
+      </div>
+      <div className="managed-launch-notes">
+        <p className="muted">By launching, you confirm authorization to test this scope and accept the managed execution policy. No credentials or sensitive data.</p>
+        <details className="managed-policy-details">
             <summary>Managed execution policy and limits</summary>
             <p className="muted">{capabilities?.notice}</p>
             <p className="muted">Browserbase tools cannot be disabled. Read-only and scope prompts are instructions, not enforced browser or network boundaries. Hard model-call and browser-time caps are unavailable. A cancellation request does not itself confirm browser cleanup.</p>
             <p className="muted">This MVP accepts only an allowlisted initial target. It is not arbitrary safe browsing.</p>
           </details>
-        </div>
-      </fieldset>
       <p className="muted center" role="status">{!loaded ? "Checking managed execution readiness…" : enabled
         ? "Browserbase-managed · up to 8 agents per run · no automatic paid retries"
         : "Managed launch is disabled by the operator or has no approved initial origins. You can prepare goals and personas, but no browser will be started."}</p>
-    <details hidden={step !== 0 && !pending} className="managed-recent recent-runs">
+      </div>
+    </form>
+    <details className="managed-recent recent-runs">
       <summary>Your saved managed runs</summary>
     <section aria-labelledby="managed-recent-heading">
       <div className="section-heading"><h2 id="managed-recent-heading">Your saved managed runs</h2>
@@ -450,7 +468,5 @@ export function ManagedLaunch() {
       </li>)}</ul>
     </section>
     </details>
-    </OnboardingFrame>
-    </form>
   </section></>;
 }

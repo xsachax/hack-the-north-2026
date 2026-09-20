@@ -7,7 +7,24 @@ managed queue with `ENABLE_MANAGED_AGENTS=true`, `BROWSERBASE_API_KEY`,
 `BROWSERBASE_PROJECT_ID`, `BROWSERBASE_MANAGED_AGENT_ID`,
 `MANAGED_AGENT_ALLOWED_ORIGINS` (comma-separated canonical origins), and a
 32-character-or-longer `FLASH_FLOOD_ACCESS_CODE`. Production additionally requires
-`DEPLOYMENT_CONFIRM_PAID=true`. All paid modes are default-off.
+`DEPLOYMENT_CONFIRM_PAID=true`. The example demo environment sets
+`ENABLE_MANAGED_AGENTS=true`; native/public and controlled modes remain off.
+Managed execution still requires all private configuration and a worker started
+with `--confirm-paid`. Set `ENABLE_MANAGED_AGENTS=false` for an offline preview.
+
+For the Browserbase landing-page demo, set
+`MANAGED_AGENT_ALLOWED_ORIGINS=https://www.browserbase.com,https://browserbase.com`
+on both the app and worker, then restart them. The bare domain redirects to
+`www`; the onboarding selector lists only configured origins. `.env.example`
+includes this demo approval and requests Managed execution, but it does not
+provision credentials, start the worker or remove the owner access-code
+requirement. Do not enter provider credentials into the
+target URL. IANA is only an optional old read-only demo, not a required target.
+The configured provider Agent's instructions must also permit the chosen target;
+an Agent pinned to IANA cannot be reused unchanged for the Browserbase demo.
+Reconfigure the Agent and worker together only after any unconfirmed resources
+are reconciled. Preserve the authoritative ledger, retained reservations and
+runtime lock; never start a fresh paid database to work around uncertain cleanup.
 
 The reusable agent is provisioned separately; the worker never creates an agent
 or retries a run-creation request. Before create it durably records the original

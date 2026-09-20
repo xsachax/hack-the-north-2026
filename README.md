@@ -8,7 +8,10 @@ User testing before you have users. A crowd of AI personas uses an authorized we
 
 The new **Managed Agents MVP** is at `/managed`. It uses Browserbase's Agents
 API, a separate owner-authorized queue and the same aggregate eight-agent
-ceiling. It is default-off and restricted to operator-approved public origins.
+ceiling. The example demo configuration enables Managed execution once provider
+credentials, a preconfigured agent, workspace access and a worker are available.
+It remains restricted to operator-approved public origins; set
+`ENABLE_MANAGED_AGENTS=false` for an offline preview.
 Unlike the native path, Browserbase controls the tools: scope/read-only prompts
 are **not network enforcement**, and there is no API-enforced model-call or
 browser-time cap. See the [managed worker setup](docs/WORKER.md#managed-agents-worker-separate-mvp).
@@ -59,18 +62,33 @@ complete the original public-website release.
 
 ## Launch and watch
 
-For the compact demo, open `/managed`. Three centered screens lead from
-**Website** to **Specialists** to **Launch**: enter an approved URL, select
-**UI/UX**, **Security & privacy**, **Accessibility**, or **Loading & performance**,
-then use the prominent **Launch** button. Back preserves the draft; Continue
-never creates a run. Final launch accepts authorization and the managed policy,
-without separate checkboxes. Each card has concrete checks and a preset read-only
-mission; no written specification is needed. **Advanced** holds custom personas
-and mission overrides; requested path prefixes are optional in the website step.
+For the compact demo, open `/managed`. One wave-backed panel contains an
+**Approved website** selector, an editable URL and five clickable specialist
+cards: **UI/UX**, **Security & privacy**, **Accessibility**, **Loading & performance**
+and **Content clarity**. Choose a website and your crew, then **Launch**; there
+are no required setup steps. Enter in the URL field does not launch. Bare
+hostnames such as `browserbase.com` become HTTPS URLs, but still must match the
+server's exact approved origins. Final launch accepts authorization and the
+managed policy, without separate checkboxes. Each card has concrete checks and
+a preset read-only mission; no written specification is needed. **Advanced**
+holds custom personas, mission overrides and optional requested path prefixes.
+**Review selected missions** is available without leaving the panel.
 The same eight-assignment limit applies across both
-pickers. Cards remain explorable when the default-off service is disabled, but
+pickers. Cards remain explorable when the service is disabled, but
 launch stays unavailable. A lost reply locks the exact saved body and key until
 explicit reconciliation; refresh never automatically launches again.
+
+The Browserbase landing-page demo uses
+`MANAGED_AGENT_ALLOWED_ORIGINS=https://www.browserbase.com,https://browserbase.com`
+in the app and worker environment. The bare domain redirects to `www`.
+`.env.example` includes these origins; an existing deployment must update its
+own configuration and restart. Origin approval alone does not configure the
+provider, start a worker or replace workspace authentication. The selector reflects the configured list, never a
+client-side approval bypass. Browserbase is prefilled only when approved.
+IANA is an optional legacy demo: its Reserved Domains page provides five short,
+read-only missions. Its shortcut appears under **Advanced** only when
+`https://www.iana.org` is approved. Switching away clears IANA-specific preset
+missions while preserving the selected crew.
 
 Surfer badges use the supplied eight-color idle/working sprites. A working loop
 reflects a persisted running attempt, not proof of goal progress; stopped and
