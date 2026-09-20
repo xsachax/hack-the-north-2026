@@ -4,6 +4,7 @@
 .managed-intro .eyebrow { margin-bottom: 12px; }
 .managed-intro > p:last-of-type { font-size: 14px; color: var(--muted); }
 .managed-readiness { margin: 0 0 16px; text-align: center; }
+.managed-launch.onboarding-stage { margin: 0 auto; }
 .managed-policy { background: #e7f3f5; border: 1px solid var(--line); border-radius: 16px; padding: 22px 26px; margin: 18px 0 26px; font-size: 13px; }
 .managed-policy h2 { margin: 0 0 10px; }
 .managed-policy .eyebrow { margin-bottom: 10px; }
@@ -15,10 +16,26 @@
 .managed-launch .launch-form { padding: 32px; }
 .managed-launch .people-picker { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .managed-launch .person-chip { min-height: 88px; padding-right: 20px; }
+.managed-launch .onboarding-body .person-chip { min-height: 66px; }
 .managed-launch .acknowledgement { align-items: flex-start; }
 .managed-launch .section-heading { flex-wrap: wrap; }
 .managed-step { display: inline-grid; place-items: center; width: 28px; height: 28px; margin-right: 7px; border-radius: 50%; background: var(--ink); color: var(--foam); font-size: 13px; vertical-align: middle; }
 .managed-specialists { margin-top: 26px; }
+.onboarding-body .managed-specialists { margin-top: 0; }
+.onboarding-body .managed-specialist-grid { gap: 10px; margin-top: 6px; }
+.onboarding-body .managed-specialist { padding: 12px; gap: 6px; }
+.onboarding-body .managed-specialist-top { min-height: 34px; }
+.onboarding-body .managed-specialist .persona-avatar { width: 38px; height: 38px; }
+.onboarding-body .managed-specialist > strong { font-size: 16px; }
+.onboarding-body .managed-specialist-purpose { font-size: 12px; }
+.onboarding-body .managed-specialist-checks > span { padding: 2px 5px; }
+.onboarding-body .managed-advanced { margin-top: 10px; }
+.onboarding-body .managed-role-limits { margin-bottom: 0; font-size: 11px; }
+.managed-launch .onboarding-review > li { padding: 8px 0; gap: 10px; }
+.managed-launch .onboarding-review .persona-avatar { flex-shrink: 0; width: 36px; height: 36px; }
+.managed-launch .onboarding-review p { margin: 4px 0; font-size: 12px; }
+.managed-launch .onboarding-review summary { padding: 4px 0; font-size: 11px; }
+.onboarding-actions .launch-button { width: auto; min-width: 200px; background: var(--teal); font-size: 18px; }
 .managed-specialists .section-heading h2 { font-size: 23px; }
 .managed-selection-count { border-radius: 999px; padding: 7px 11px; background: #e8f7f4; font-size: 12px; font-weight: 600; white-space: nowrap; }
 .managed-specialist-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 18px; }
@@ -96,3 +113,13 @@
 .managed-viewer .button-row p { width: 100%; margin: 0; }
 @media (max-width: 960px) { .managed-attempt-grid { grid-template-columns: 1fr; }.managed-attempt-header { padding: 18px; } }
 @media (max-width: 600px) { .managed-launch .people-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); }.managed-launch .launch-form, .managed-policy, .managed-pending { padding: 20px; }.managed-wall-heading { align-items: flex-start; }.managed-wall-heading h1 { letter-spacing: -1px; }.managed-attempt-header { flex-wrap: wrap; }.managed-run-list > li { align-items: flex-start; }.managed-metrics { gap: 14px; }.managed-launch-dock { margin: 8px -20px -20px; padding: 22px 20px; }.managed-specialist-grid { grid-template-columns: 1fr; }.managed-specialists .section-heading h2, .managed-form-title { font-size: 20px; }.managed-specialist { gap: 10px; }.managed-specialist-top { min-height: 50px; }.managed-specialist .persona-avatar { width: 54px; height: 54px; }.managed-intro { padding: 26px 16px 46px; }.managed-selection-count { margin-left: 35px; } }
+@media (max-width: 600px) {
+  .onboarding-body .managed-specialist-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .onboarding-body .managed-specialist { padding: 10px; }
+  .onboarding-body .managed-specialist > strong { font-size: 14px; line-height: 1.2; }
+  .onboarding-body .managed-specialist-purpose { font-size: 11px; line-height: 1.4; }
+  .onboarding-body .managed-specialist-checks, .onboarding-body .managed-specialist-state { display: none; }
+  .onboarding-body .managed-specialist > input { right: 10px; top: 16px; }
+  .onboarding-body .managed-selection-count { margin-left: 0; }
+  .onboarding-body .managed-specialists .section-heading > p { font-size: 11px; }
+}

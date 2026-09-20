@@ -1,22 +1,14 @@
 import Link from "next/link";
 import { Launch } from "@/components/launch";
 import { OwnerSession } from "@/components/owner-session";
-import { WaveDivider } from "@/components/wave-divider";
 
 export default function Home() {
-  return <main>
+  return <main className="onboarding-page">
     <header className="topbar">
       <Link className="wordmark" href="/"><span className="brand-icon">ff</span>flash flood</Link>
-      <span className="muted">Small tasks. Fresh eyes.</span>
+      <Link href="/managed">Browserbase Managed Agents</Link>
     </header>
-    <section className="intro">
-      <p className="eyebrow">USER TESTING BEFORE YOU HAVE USERS</p>
-      <h1>A little crowd.<br /><span>A different perspective.</span></h1>
-      <p>Give real browsers a small mission. Watch different personas find their way.</p>
-      <p><Link href="/managed">Try Browserbase Managed Agents →</Link></p>
-      <WaveDivider />
-    </section>
-    <OwnerSession><Launch /></OwnerSession>
+    <div className="onboarding-entry"><OwnerSession><Launch /></OwnerSession></div>
     <footer><span>Evidence over anecdotes.</span><span>Authorized, non-destructive testing only.</span></footer>
   </main>;
 }

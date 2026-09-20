@@ -36,13 +36,19 @@ the other profiles and optional overrides. The wall uses a role label only when
 the saved assignment exactly matches its preset; historical or edited missions
 keep their saved persona identity. Original persona snapshots are never renamed.
 Accessibility covers observed keyboard/focus/labels, not WCAG certification;
-loading covers visible behavior, not fabricated timing benchmarks.
+loading covers visible behavior, not fabricated timing benchmarks. Onboarding
+shows Website, Specialists and Launch as sequential centered panels. Optional
+advanced content scrolls inside the panel; Back preserves the draft. Continue
+never submits a run. Final Launch supplies the required authorization and
+managed-policy acceptance fields; separate acknowledgement checkboxes are not
+shown. Owner, CSRF, origin and operator-enable checks are unchanged.
 
 Browserbase controls the managed tool set, which includes non-browser tools.
 Using a browser is instructed, not guaranteed by dispatch alone. A Search/Fetch-only
 answer is not genuine browser acceptance. Scope and read-only instructions
 cannot be enforced by Flash Flood's native broker on this path. Initial admission
-is therefore operator-allowlisted, with a separate explicit policy acknowledgement.
+is therefore operator-allowlisted, with a distinct managed-policy acceptance
+field in the API contract and acceptance copy on the final launch step.
 The API supplies no hard per-run timeout or model-call cap; the local deadline
 requests stop and may be exceeded during failures. Model calls remain unknown
 unless independently available. Agent-reported criterion states are not native
