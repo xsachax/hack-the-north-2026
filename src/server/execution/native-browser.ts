@@ -44,6 +44,7 @@ export type NativeCloudUsage = CloudUsage & {
     browserVersion?: string;
   };
   gatewayDispatches?: number;
+  blockedNativeTelemetryRequests?: number;
 };
 
 async function bounded<T>(work: PromiseLike<T>, milliseconds = 10000): Promise<T> {

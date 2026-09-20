@@ -179,6 +179,28 @@ acceptance evidence. Browserbase limits, inaccessible sites and unsupported
 channels may still prevent a goal from completing; “public URL” does not mean
 every website feature is supported.
 
+### Background SDK export denial
+
+The repeated offline probe exposed a separate timing-dependent observation
+failure: the pinned SDK exports OTLP traces every second, even without inference.
+Waiting across that interval reproduced `gateway_control_failed` before the
+first observation. This is distinct from the two hosted startup failures.
+
+The native SDK now explicitly targets a reserved `.invalid` trace destination.
+Only its exact POST from the currently verified extension service worker receives
+a local **403 denial** after native-policy/lease checks. No trace body, headers or
+credentials are forwarded, and no successful export is fabricated. Page and
+offscreen initiators, endpoint variants and other methods retain failure behavior.
+The denial is capped at 128 requests; overflow fails closed. Private usage records
+`blockedNativeTelemetryRequests` separately from paid Gateway dispatches. SDK
+trace export is unsupported, not necessary evidence for the browsing objective.
+The exact Gateway inference endpoint remains the only outbound control exception.
+
+The credential-free probe now requires an actual denied SDK export before it
+observes the synthetic page, and checks network failures through SDK shutdown.
+This removes the race in the probe instead of retrying a failure or weakening
+native enforcement. It is still not hosted public-site acceptance.
+
 ## Public HTTP transport library (offline, not enabled)
 
 `src/server/execution/public-transport.ts` is a **server-only** component used by

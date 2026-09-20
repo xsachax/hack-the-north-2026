@@ -23,6 +23,7 @@ import { connectNativeWorkerControl, type NativeWorkerControl } from "../../src/
 import { browserbase, Stagehand } from "@browserbasehq/stagehand";
 import { createNativeSdkTransportMonitor } from "../../src/server/execution/native-sdk-transport";
 import { establishNativePolicy } from "../../src/server/execution/native-policy-session";
+import { NATIVE_TELEMETRY_ENDPOINT } from "../../src/server/execution/native-telemetry";
 
 const mock = vi.hoisted(() => ({
   requests: new Array<PublicTransportRequest>(),
@@ -190,10 +191,10 @@ function respond(path: string, body: string, headers: [string, string][] = [], s
     status, body, headers: [["content-type", "text/html"], ...headers],
   });
 }
-async function trustedWorkerExpression(expression: string) {
+async function trustedWorkerExpression(expression: string, targetUrl = worker.url(), targetType = "service_worker") {
   const root = await context.browser()!.newBrowserCDPSession();
   const infos = (await root.send("Target.getTargets")).targetInfos.filter((entry) =>
-    entry.type === "service_worker" && entry.url === worker.url());
+    entry.type === targetType && entry.url === targetUrl);
   expect(infos).toHaveLength(1);
   const target = await attachCdpTarget(root, infos[0].targetId, () => {});
   try {
@@ -220,6 +221,79 @@ async function ownedGateway(owned: string) {
 }
 
 describe("actual CDP routing with synthetic broker responses, not public-site acceptance", () => {
+  it("rejects SDK telemetry locally with 403 without exporting, spending model budget or failing the goal", async () => {
+    await install();
+    const result = await trustedWorkerExpression(`fetch(${JSON.stringify(NATIVE_TELEMETRY_ENDPOINT)}, {
+      method: "POST", body: "private trace bytes"
+    }).then(async response => ({ status: response.status, body: await response.text() }))`);
+    expect(result).toEqual({ status: 403, body: "Native SDK telemetry export is disabled by policy." });
+    expect(network!.blockedTelemetryRequests).toBe(1);
+    expect(network!.errors).toEqual([]);
+    expect(mock.requests).toEqual([]);
+    expect(mock.gatewayCalls).not.toHaveBeenCalled();
+  });
+
+  it("does not apply the nonfatal export denial to page or offscreen initiators", async () => {
+    const page = await install();
+    expect(await page.evaluate((url) => fetch(url, { method: "POST", body: "not a trusted exporter" })
+      .then(() => "unexpected", () => "denied"), NATIVE_TELEMETRY_ENDPOINT)).toBe("denied");
+    expect(await trustedWorkerExpression(
+      `fetch(${JSON.stringify(NATIVE_TELEMETRY_ENDPOINT)}, { method: "POST", body: "not the exporter" })
+        .then(() => "unexpected", () => "denied")`,
+      `${worker.url().slice(0, -"/service-worker.js".length)}/offscreen/service-worker-heartbeat.html`, "background_page",
+    )).toBe("denied");
+    expect(network!.blockedTelemetryRequests).toBe(0);
+    expect(network!.errors).toContain("gateway_control_failed");
+    expect(mock.requests).toEqual([]);
+    expect(mock.gatewayCalls).not.toHaveBeenCalled();
+  });
+
+  it("requires the exact telemetry destination and POST method", async () => {
+    await install();
+    for (const [url, method] of [
+      [`${NATIVE_TELEMETRY_ENDPOINT}?redirect=other`, "POST"],
+      [`${NATIVE_TELEMETRY_ENDPOINT}/`, "POST"],
+      [NATIVE_TELEMETRY_ENDPOINT.replace("https:", "http:"), "POST"],
+      [NATIVE_TELEMETRY_ENDPOINT, "GET"],
+    ]) {
+      expect(await trustedWorkerExpression(`fetch(${JSON.stringify(url)}, { method: ${JSON.stringify(method)} })
+        .then(() => "unexpected", () => "denied")`)).toBe("denied");
+    }
+    expect(network!.blockedTelemetryRequests).toBe(0);
+    expect(network!.errors).toEqual(Array(4).fill("gateway_control_failed"));
+    expect(mock.requests).toEqual([]);
+    expect(mock.gatewayCalls).not.toHaveBeenCalled();
+  });
+
+  it("fences export denial on native verification failure", async () => {
+    const verify = vi.fn(async () => {});
+    await install(() => {}, verify);
+    verify.mockRejectedValueOnce(new Error("native policy no longer active"));
+    expect(await trustedWorkerExpression(`fetch(${JSON.stringify(NATIVE_TELEMETRY_ENDPOINT)}, { method: "POST" })
+      .then(() => "unexpected", () => "denied")`)).toBe("denied");
+    expect(network!.blockedTelemetryRequests).toBe(0);
+    expect(network!.errors).toEqual(["gateway_control_failed"]);
+    expect(mock.gatewayCalls).not.toHaveBeenCalled();
+  });
+
+  it("caps even locally denied telemetry requests instead of permitting an unbounded extension loop", async () => {
+    const fatal = vi.fn();
+    await install(fatal);
+    const statuses = await trustedWorkerExpression(`(async () => {
+      const statuses = [];
+      for (let count = 0; count < 129; count++) {
+        statuses.push(await fetch(${JSON.stringify(NATIVE_TELEMETRY_ENDPOINT)}, { method: "POST" })
+          .then(response => response.status, () => "denied"));
+      }
+      return statuses;
+    })()`);
+    expect(statuses).toEqual([...Array(128).fill(403), "denied"]);
+    expect(fatal).toHaveBeenCalledOnce();
+    expect(network!.errors).toContain("native_telemetry_limit");
+    expect(mock.requests).toEqual([]);
+    expect(mock.gatewayCalls).not.toHaveBeenCalled();
+  });
+
   it("composes the production isolated WSS SDK, native attestation and exact one-key Gateway without provider traffic", async () => {
     const [cdpPort, cdpPath] = (await readFile(join(directory, "profile", "DevToolsActivePort"), "utf8")).trim().split("\n");
     const tunnel = tlsServer({ key: await readFile(join(directory, "key.pem")), cert: await readFile(join(directory, "cert.pem")) });
@@ -337,6 +411,7 @@ describe("actual CDP routing with synthetic broker responses, not public-site ac
       }));
       stagehand = await monitor.run(() => Stagehand.create({
         browser, apiKey, model: { modelName: "openai/gpt-4.1-mini" },
+        telemetry: { traces: { endpoint: NATIVE_TELEMETRY_ENDPOINT } },
         cache: false, selfHeal: false, logging: { level: "off" },
       }));
       await new Promise<void>((resolve, reject) => metadata.close((error) => error ? reject(error) : resolve()));

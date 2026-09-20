@@ -16,6 +16,7 @@ import { PUBLIC_ASSET_POLICY, PUBLIC_EXECUTION_POLICY } from "../src/lib/public-
 import { ScopedBrowserDriver } from "../src/server/execution/driver";
 import { ExecutionError } from "../src/server/execution/types";
 import type { ArtifactSinks } from "../src/server/execution/artifacts";
+import { NATIVE_TELEMETRY_ENDPOINT } from "../src/server/execution/native-telemetry";
 
 let networkGuardInstalled = false;
 
@@ -30,6 +31,7 @@ const offlineFailureCodes = [
   "offline_native_routing_failed", "offline_native_inference_forbidden", "offline_native_outbound_forbidden",
   "offline_native_page_not_visible", "fixture_network_failed", "public_transport_failed",
   "page_out_of_scope", "subframes_unsupported", "telemetry_limit", "page_screenshot_failed", "page_evaluation_failed",
+  "offline_native_telemetry_not_denied",
 ] as const;
 
 export class OfflineNativeProbeError extends Error {
@@ -205,7 +207,7 @@ async function runOfflineNativeProbe(
     stagehand = await Stagehand.create({
       browser, apiKey: "offline-native-no-provider", apiUrl: apiOrigin,
       model: { generate: async () => { modelCalls++; throw new Error("offline_native_inference_forbidden"); } },
-      telemetry: { traces: { endpoint: `${apiOrigin}/v1/traces` } },
+      telemetry: { traces: { endpoint: NATIVE_TELEMETRY_ENDPOINT } },
       cache: false, selfHeal: false, logging: { level: "off" },
     });
     phase("native-attestation");
@@ -245,6 +247,13 @@ async function runOfflineNativeProbe(
       },
       async close() {}, async drain() {},
     }));
+    // Cross the pinned SDK's one-second export interval instead of racing past background telemetry.
+    await stagehand.metrics();
+    const telemetryDeadline = Date.now() + 5000;
+    while (!network.blockedTelemetryRequests && Date.now() < telemetryDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    if (!network.blockedTelemetryRequests) throw new Error("offline_native_telemetry_not_denied");
     phase("navigation");
     await page.goto(`${origin}/category/start`, { waitUntil: "domcontentloaded", timeout: 10000 });
     phase("page-activation");
@@ -297,10 +306,14 @@ async function runOfflineNativeProbe(
       phase: "offline-native-probe", providerCalls: 0, modelCalls: 0,
       browserVersion: policy.version, archiveDigest: bundle.sha256, remotePolicyProved: false,
       broker: "synthetic-owned-fixture", publicSiteAcceptance: false, readonlyActionsVerified: true,
+      sdkTelemetry: "denied-no-egress",
     };
   } finally {
     if (verified) phase("cleanup");
-    try { await stagehand?.close(); }
+    try {
+      await stagehand?.close();
+      if (verified && network?.errors.length) throw new Error("offline_native_routing_failed");
+    }
     finally {
       try { await network?.close(); }
       finally {

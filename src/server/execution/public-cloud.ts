@@ -50,6 +50,7 @@ export async function createPublicExecution(config: AppConfig, options: PublicEx
   }
   const native = await createNativeBrowser(config, options);
   native.usage.gatewayDispatches = 0;
+  native.usage.blockedNativeTelemetryRequests = 0;
   const networkDiagnostics: string[] = [];
   native.usage.networkDiagnostics = networkDiagnostics;
   let phase = "public_network";
@@ -62,6 +63,9 @@ export async function createPublicExecution(config: AppConfig, options: PublicEx
       signal: native.signal, onSignal: (event) => driverHolder.current?.policySignal(event.url, event.code),
       onFatal: () => { void native.close(); },
       diagnostics: networkDiagnostics,
+      onTelemetryBlocked: () => {
+        native.usage.blockedNativeTelemetryRequests = (native.usage.blockedNativeTelemetryRequests ?? 0) + 1;
+      },
       onGatewayDispatch: () => {
         if (!gatewayHolder.current) throw new Error("gateway_operation_unavailable");
         gatewayHolder.current.authorizeGatewayRequest();
