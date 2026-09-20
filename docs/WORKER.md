@@ -32,6 +32,28 @@ agent/task and dispatch marker; recovery only discovers/stops the original
 operation. It never starts a replacement. Agent creation uncertainty likewise
 must be reconciled, not retried.
 
+Rejected create calls now journal private, write-once `first_create_failure`
+metadata on the attempt before cancellation/deadline handling can replace the
+error. It records a fixed SDK failure category, HTTP status when available,
+an allowlisted/redacted provider request ID and its header name (`x-request-id`
+or `request-id`), and a local `recordedAt` timestamp. No provider message, body,
+stack, request headers or credentials are stored. This field is not exposed in
+the run API, progress feed or UI; inspect it only through authorized private
+ledger diagnostics. Recovery may replace the current `error`, never this original
+record. The original lease must still be active; process death or lease loss
+before journaling can still leave it missing.
+
+The additive migration leaves historical diagnostics `NULL`: a later
+`managed_recovery_unconfirmed` error cannot reconstruct the original create
+response. HTTP errors (including 4xx), transport failures, exhausted inventories,
+or absence of running sessions do **not** establish nonallocation or zero usage.
+These diagnostics never release a reservation, reduce occupancy, reset recovery
+counts or retry create. If no unique owned run/session can be identified, retain
+quarantine and seek provider-side traces for the original Agent, UTC dispatch
+window, exact task hash and correlation token. Keep that support handoff private
+until approved for sharing. Inspection GET request IDs are not original POST IDs.
+`worker:reconcile` is native-only, not a way to clear unidentified Managed creates.
+
 Managed and native jobs share the same SQLite worker policy, global/owner
 occupancy and conservative usage reservations. The total ceiling remains eight,
 not eight per mode. Unknown allocations retain their reservation and slot.

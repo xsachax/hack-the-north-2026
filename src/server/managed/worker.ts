@@ -47,6 +47,7 @@ export class ManagedWorker {
         if (!allowCancelled) signal.throwIfAborted();
       },
       dispatch: (reference) => store.dispatch(claim, reference),
+      createFailure: (diagnostic) => store.createFailure(claim, diagnostic),
       identity: (value) => store.identity(claim, value),
       progress: (value) => store.progress(claim, value),
       sessionView: (value) => store.sessionView(claim, value),

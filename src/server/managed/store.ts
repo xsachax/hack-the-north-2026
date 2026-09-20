@@ -14,6 +14,7 @@ import {
   newWorkerPolicySchema, workerConcurrencyLimits, workerPolicySchema, type WorkerPolicy,
 } from "../worker/config";
 import type { ManagedClaim, ManagedOutcome } from "./types";
+import { managedCreateFailureSchema, type ManagedCreateFailure } from "./create-failure";
 
 export type { ManagedClaim } from "./types";
 type Row = Record<string, SQLOutputValue>;
@@ -206,6 +207,27 @@ export class ManagedStore {
       if (row.dispatch_started || row.state !== "reserved") throw new Error("managed_dispatch_already_started");
       this.db.prepare(`UPDATE managed_attempts SET state='dispatched',dispatch_started=1,cleanup='unconfirmed',
         provider_agent_id=?,provider_task=? WHERE id=?`).run(reference.agentId, reference.task, claim.id);
+      this.touch(claim.runId);
+    });
+  }
+
+  createFailure(claim: ManagedClaim, input: ManagedCreateFailure): void {
+    const parsed = managedCreateFailureSchema.safeParse(input);
+    if (!parsed.success) throw new Error("managed_create_failure_invalid");
+    this.transaction(() => {
+      this.assertLease(claim, true);
+      const row = this.row(claim.id);
+      if (!row.dispatch_started) throw new Error("managed_dispatch_not_started");
+      if (claim.recovery || row.recovery_count !== 0) throw new Error("managed_recovery_cannot_record_create_failure");
+      if (row.first_create_failure !== null) throw new Error("managed_create_failure_already_recorded");
+      const diagnostic = parsed.data;
+      if (diagnostic.requestId !== null
+        && safeText(diagnostic.requestId, 128, this.secrets(row)) !== diagnostic.requestId) {
+        diagnostic.requestId = null;
+        diagnostic.requestIdHeader = null;
+      }
+      this.db.prepare("UPDATE managed_attempts SET first_create_failure=? WHERE id=?")
+        .run(JSON.stringify({ ...diagnostic, recordedAt: this.now() }), claim.id);
       this.touch(claim.runId);
     });
   }

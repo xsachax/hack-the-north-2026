@@ -4,6 +4,7 @@ import { managedResultSchema, type ManagedResult } from "../../lib/managed-contr
 import { sanitizeEvidence } from "../execution/artifacts";
 import { publicPageUrl } from "../public-page-url";
 import { referenceSchema } from "../worker/session-reference";
+import { describeManagedCreateFailure } from "./create-failure";
 import {
   createManagedProvider, managedOpaqueId, type ManagedProvider,
   type ManagedProviderRun, type ManagedProviderSession,
@@ -489,12 +490,24 @@ export async function executeManagedAgent(
         await call(() => provider!.retrieveRun(runId!), true, (value) => observeRun(value, true));
         if (!terminalVerified) error = options.signal.aborted ? "managed_cancelled" : "managed_recovery_stopped";
       } else {
+        const body = { agentId, task, resultSchema: z.toJSONSchema(managedResultSchema) };
         fence();
         journal.dispatch({ agentId, task });
         allocationAttempted = true;
-        await call(() => provider!.createRun({
-          agentId, task, resultSchema: z.toJSONSchema(managedResultSchema),
-        }), false, (value) => observeRun(value, false));
+        await call(async () => {
+          try { return await provider!.createRun(body); }
+          catch (caught) {
+            // Capture the original rejection before cancellation/deadline remaps it.
+            fence(true);
+            const diagnostic = describeManagedCreateFailure(caught, cleanText);
+            try { journal.createFailure(diagnostic); }
+            catch {
+              fence(true);
+              failure("managed_create_failure_not_recorded");
+            }
+            throw caught;
+          }
+        }, false, (value) => observeRun(value, false));
         while (true) {
           await call(() => provider!.retrieveRun(runId!), false, (value) => observeRun(value, true));
           await readSession(false);
