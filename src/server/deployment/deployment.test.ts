@@ -61,6 +61,18 @@ describe("deployment configuration", () => {
     expect(config.paid).toBe(true);
     expect(config.env.ENABLE_DEMO_RUNS).not.toBe("true");
   });
+  it("requires independent paid confirmation and a reviewed managed agent/origin", () => {
+    const env = { ...environment(), ENABLE_MANAGED_AGENTS: "true",
+      BROWSERBASE_API_KEY: "offline-unused", BROWSERBASE_PROJECT_ID: randomUUID(),
+      BROWSERBASE_MANAGED_AGENT_ID: "offline-agent", MANAGED_AGENT_ALLOWED_ORIGINS: "https://www.iana.org" };
+    expect(() => deploymentConfig(env)).toThrow("deployment_paid_confirmation_required");
+    const config = deploymentConfig({ ...env, DEPLOYMENT_CONFIRM_PAID: "true" });
+    expect(config.paid).toBe(true);
+    expect(config.env.ENABLE_PUBLIC_RUNS).not.toBe("true");
+    expect(config.env.ENABLE_DEMO_RUNS).not.toBe("true");
+    expect(() => deploymentConfig({ ...env, DEPLOYMENT_CONFIRM_PAID: "true", BROWSERBASE_MANAGED_AGENT_ID: "" }))
+      .toThrow("managed_worker_configuration_required");
+  });
   it.each([
     { APP_ORIGIN: "http://example.com" },
     { APP_ORIGIN: "https://example.com/path" },
@@ -70,6 +82,7 @@ describe("deployment configuration", () => {
     { DEPLOYMENT_CONFIRM_PAID: "true" },
     { ENABLE_DEMO_RUNS: "1" },
     { ENABLE_PUBLIC_RUNS: "1" },
+    { ENABLE_MANAGED_AGENTS: "1" },
     { FIXTURE_PORT: "3000" },
     { DEPLOYMENT_BIND_HOST: "localhost" },
     { WORKER_SHUTDOWN_MS: "120000" },
@@ -387,6 +400,16 @@ describe("runnable release approval", () => {
     symlinkSync(join(root, "node_modules/example/index.js"), join(root, nativeExtension, "linked.js"));
     await expect(releaseSourceDigest(root)).rejects.toThrow("deployment_source_symlink");
     await expect(releaseSourceFiles(root)).rejects.toThrow("deployment_source_symlink");
+  });
+  it("packages and source-binds local surfer assets", async () => {
+    const root = await buildFixture();
+    mkdirSync(join(root, "public/surfers/animated"), { recursive: true });
+    const file = "public/surfers/animated/avatar-blue-working.svg";
+    writeFileSync(join(root, file), "<svg/>");
+    expect(await releaseSourceFiles(root)).toContain(file);
+    await writeReleaseBuildReceipt(await releaseSourceDigest(root), root);
+    writeFileSync(join(root, file), "<svg><path/></svg>");
+    await expect(assertReleaseBuild(root)).rejects.toThrow("deployment_build_mismatch");
   });
   it("rejects compiled artifact tampering even with the same BUILD_ID", async () => {
     const root = await buildFixture();

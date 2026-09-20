@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { idSchema, personaProfileSchema, type Persona } from "@/lib/contracts";
 import { api, errorMessage } from "@/lib/client-api";
+import { personaTemplates } from "@/lib/personas";
 import { useOwnerSession } from "./owner-session";
 
 export function PersonaEditor({ persona, onSaved, onClose }: {
@@ -17,6 +18,7 @@ export function PersonaEditor({ persona, onSaved, onClose }: {
     worries: persona?.worries.join("\n") ?? "Losing progress",
   });
   const [busy, setBusy] = useState(false);
+  const [templateId, setTemplateId] = useState("");
   const [error, setError] = useState("");
   const nameInput = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -47,6 +49,20 @@ export function PersonaEditor({ persona, onSaved, onClose }: {
     <h3 id="persona-editor-title">{custom ? "Edit persona" : persona ? "Make your own version" : "Meet someone new"}</h3>
     <form onSubmit={save}>
       <fieldset disabled={busy}>
+        <label>Start from a template (replaces the fields below)
+          <select value={templateId} onChange={(event) => {
+            setTemplateId(event.target.value);
+            if (!event.target.value) return;
+            const template = personaTemplates.find((item) => item.id === event.target.value);
+            if (!template) { setError("This persona template is unavailable."); return; }
+            setProfile({ ...template.profile, quirks: template.profile.quirks.join("\n"), worries: template.profile.worries.join("\n") });
+            setError("");
+          }}>
+            <option value="">Custom profile</option>
+            {personaTemplates.map((template) => <option key={template.id} value={template.id}>{template.label}</option>)}
+          </select>
+        </label>
+        <p className="muted">A specialty changes what the persona pays attention to, not its tools or permissions. Security is a passive review, not a penetration test. Loading observations are not network benchmarks.</p>
         <div className="field-row">
           <label>Name<input ref={nameInput} required maxLength={80} value={profile.name} onChange={(event) => setProfile({ ...profile, name: event.target.value })} /></label>
           <label>Viewport<select value={profile.device} onChange={(event) => setProfile({ ...profile, device: event.target.value === "phone" ? "phone" : "desktop" })}><option value="desktop">Desktop</option><option value="phone">Phone-sized</option></select></label>

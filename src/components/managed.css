@@ -1,0 +1,69 @@
+.managed-launch { max-width: 850px; margin: 0 auto 56px; }
+.managed-intro { padding-bottom: 62px; }
+.managed-policy { background: #e7f3f5; border: 1px solid var(--line); border-radius: 16px; padding: 22px 26px; margin: 18px 0 26px; font-size: 13px; }
+.managed-policy h2 { margin: 0 0 10px; }
+.managed-policy .eyebrow { margin-bottom: 10px; }
+.managed-policy p:last-child { margin-bottom: 0; }
+.managed-policy ul { padding-left: 20px; line-height: 1.7; }
+.managed-policy li + li { margin-top: 7px; }
+.managed-wrap { overflow-wrap: anywhere; }
+.managed-form-title { font-size: 23px; font-weight: 600; letter-spacing: -.7px; }
+.managed-launch .launch-form { padding: 32px; }
+.managed-launch .people-picker { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.managed-launch .person-chip { min-height: 88px; padding-right: 20px; }
+.managed-launch .acknowledgement { align-items: flex-start; }
+.managed-launch .section-heading { flex-wrap: wrap; }
+.managed-persona-config { font-size: 13px; }
+.managed-persona-config > p { margin: 8px 0; }
+.managed-persona-config .button-row { margin-bottom: 18px; }
+.managed-origins { display: flex; flex-wrap: wrap; list-style: none; gap: 8px; padding: 0; }
+.managed-origins li { padding: 5px 9px; background: var(--foam); border-radius: 6px; overflow-wrap: anywhere; }
+.managed-pending { border: 1px solid #b59550; background: #fbf4df; padding: 24px; margin: 22px 0; border-radius: 16px; font-size: 13px; overflow-wrap: anywhere; }
+.managed-pending h2 { margin-top: 0; }
+.managed-recent { margin-top: 34px; }
+.managed-run-list { padding: 0; list-style: none; }
+.managed-run-list > li { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 18px 0; border-top: 1px solid var(--line); }
+.managed-run-list a { display: grid; gap: 7px; min-width: 0; text-decoration: none; font-size: 13px; }
+.managed-run-list a:hover strong { text-decoration: underline; }
+.managed-run-list small, .managed-run-list a > span { color: var(--muted); font-size: 12px; }
+.managed-status { display: inline-block; flex-shrink: 0; background: var(--foam); border: 1px solid var(--line); border-radius: 999px; padding: 6px 11px; font-size: 11px; font-weight: 600; text-transform: capitalize; }
+.managed-status[data-status=failed], .managed-status[data-status=cleanup_required] { background: #fff0e9; border-color: #dbb9a3; }
+.managed-status[data-status=running] { background: #ddf2f7; border-color: #83bbc9; color: #10506a; }
+.managed-wall { margin: 42px 0 60px; }
+.managed-wall-heading { position: relative; isolation: isolate; overflow: hidden; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 30px 26px 64px; border-radius: 24px; background: linear-gradient(135deg, #e7f8f6, #cbe9f1); }
+.managed-wall-heading .wave-divider { position: absolute; bottom: -1px; left: 0; z-index: -1; }
+.managed-wall-heading h1 { font-size: clamp(32px, 4vw, 48px); }
+.managed-wall-heading .eyebrow { margin-bottom: 12px; }
+.managed-wall-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 24px 0; }
+.managed-wall-actions p { flex: 1; min-width: 230px; }
+.managed-scope { border-top: 1px solid var(--line); margin-bottom: 26px; font-size: 13px; }
+.managed-attempt-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; align-items: start; }
+.managed-attempt { border: 1px solid var(--line); border-radius: 20px; background: #fff; box-shadow: 0 8px 28px #103d5008; overflow: hidden; min-width: 0; }
+.managed-attempt-header { padding: 20px; display: flex; gap: 12px; align-items: center; border-bottom: 1px solid var(--line); background: var(--foam); }
+.managed-attempt-header > div { flex: 1; min-width: 0; }
+.managed-attempt-header h2 { margin: 0 0 4px; font-size: 20px; }
+.managed-attempt-header p { margin: 0; font-size: 12px; color: var(--muted); }
+.managed-attempt-body { padding: 20px; font-size: 13px; overflow-wrap: anywhere; }
+.managed-goal { font-size: 17px; margin-top: 0; }
+.managed-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px 0; margin: 0; }
+.managed-metrics dt { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 6px; }
+.managed-metrics dd { margin: 0; font-size: 12px; line-height: 1.5; }
+.managed-progress, .managed-result, .managed-viewer { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 6px; }
+.managed-progress h3, .managed-result h3 { font-size: 16px; letter-spacing: -.3px; margin-bottom: 6px; }
+.managed-progress ol { list-style: none; max-height: 310px; overflow-y: auto; margin: 16px 0; padding: 0; scrollbar-gutter: stable; }
+.managed-progress li { border-left: 2px solid var(--surf); padding: 0 0 0 12px; margin: 0 0 18px; }
+.managed-progress li > div { display: flex; justify-content: space-between; gap: 12px; font-size: 10px; color: var(--muted); }
+.managed-progress li > div > span { text-transform: uppercase; font-weight: 600; letter-spacing: 1px; }
+.managed-progress li p { margin: 7px 0 0; white-space: pre-wrap; }
+.managed-result > ul { padding-left: 20px; line-height: 1.6; }
+.managed-result li { margin-bottom: 12px; }
+.managed-result li > strong { display: block; margin-top: 8px; }
+.managed-result li p { margin: 6px 0; }
+.managed-verdict { display: inline-block; border-radius: 6px; padding: 3px 7px; font-size: 11px; background: #e2f2ee; }
+.managed-verdict-not_met { background: #faeade; }
+.managed-verdict-inconclusive { background: #f5efdc; }
+.managed-viewer { margin-top: 24px; }
+.managed-viewer .button-row { gap: 12px 20px; font-size: 12px; }
+.managed-viewer .button-row p { width: 100%; margin: 0; }
+@media (max-width: 960px) { .managed-attempt-grid { grid-template-columns: 1fr; }.managed-attempt-header { padding: 18px; } }
+@media (max-width: 600px) { .managed-launch .people-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); }.managed-launch .launch-form, .managed-policy, .managed-pending { padding: 20px; }.managed-wall-heading { align-items: flex-start; }.managed-wall-heading h1 { letter-spacing: -1px; }.managed-attempt-header { flex-wrap: wrap; }.managed-run-list > li { align-items: flex-start; }.managed-metrics { gap: 14px; } }

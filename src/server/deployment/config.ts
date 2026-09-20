@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { readConfig } from "../../lib/config";
 import { readWorkerPolicy, workerExecutionModes } from "../worker/config";
+import { requireManagedWorker } from "../managed/config";
 
 export function deploymentBindHost(input: string | undefined): "127.0.0.1" | "0.0.0.0" {
   const host = input ?? "0.0.0.0";
@@ -23,15 +24,17 @@ export function deploymentConfig(input: NodeJS.ProcessEnv) {
   }
   if ((env.FLASH_FLOOD_ACCESS_CODE?.trim().length ?? 0) < 32) throw new Error("deployment_access_code_required");
   if (!env.DATA_DIR || !isAbsolute(env.DATA_DIR) || env.DATA_DIR === "/") throw new Error("deployment_private_data_required");
-  for (const name of ["ENABLE_DEMO_RUNS", "ENABLE_PUBLIC_RUNS", "DEPLOYMENT_CONFIRM_PAID"]) {
+  for (const name of ["ENABLE_DEMO_RUNS", "ENABLE_PUBLIC_RUNS", "ENABLE_MANAGED_AGENTS", "DEPLOYMENT_CONFIRM_PAID"]) {
     if (!["true", "false"].includes(env[name] ?? "false")) throw new Error("deployment_invalid_paid_flag");
   }
   const modes = workerExecutionModes(env);
-  const paid = modes.controlled || modes.public;
+  const managed = env.ENABLE_MANAGED_AGENTS === "true";
+  const paid = modes.controlled || modes.public || managed;
   if (paid !== (env.DEPLOYMENT_CONFIRM_PAID === "true")) throw new Error("deployment_paid_confirmation_required");
   if (paid) {
     readConfig(env);
     if (!env.BROWSERBASE_PROJECT_ID) throw new Error("deployment_explicit_project_required");
+    if (managed) requireManagedWorker(env);
   }
   if (env.FIXTURE_PORT && env.FIXTURE_PORT !== "4321") throw new Error("deployment_fixture_port_fixed");
   env.DEPLOYMENT_BIND_HOST = deploymentBindHost(env.DEPLOYMENT_BIND_HOST);

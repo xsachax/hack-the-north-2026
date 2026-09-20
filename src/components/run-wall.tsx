@@ -12,6 +12,7 @@ import {
 } from "@/lib/live-wall";
 import { useOwnerSession } from "./owner-session";
 import { PersonaAvatar } from "./persona-avatar";
+import { WaveDivider } from "./wave-divider";
 import "./run-wall.css";
 import { PUBLIC_EXECUTION_LIMITS } from "@/lib/public-execution";
 
@@ -122,11 +123,12 @@ function TakeoverViewer({ attempt, viewer, controllerId }: { attempt: Attempt; v
   </section>;
 }
 
-function AttemptCard({ attempt, events, summary, viewer, canView, atCapacity, stopping, finalizing, toggle, onEvidence, publicReadonly }: {
+function AttemptCard({ attempt, events, summary, viewer, canView, atCapacity, stopping, finalizing, toggle, onEvidence, publicReadonly, slot }: {
   attempt: Attempt; events: RunEvent[]; summary?: AttemptSummary;
   viewer: string | null; canView: boolean; atCapacity: boolean; stopping: boolean;
   finalizing: boolean; toggle: () => void; onEvidence: (id: string) => void;
   publicReadonly: boolean;
+  slot: number;
 }) {
   const { revision } = useOwnerSession();
   const [controllerId] = useState(() => crypto.randomUUID());
@@ -140,7 +142,7 @@ function AttemptCard({ attempt, events, summary, viewer, canView, atCapacity, st
   const quiet = stopping || recovering || isTerminal(attempt.status);
   return <article className="wall-card" aria-labelledby={`attempt-${attempt.id}`}>
     <header className="wall-card-header">
-      <PersonaAvatar id={attempt.persona.id} />
+      <PersonaAvatar id={attempt.persona.id} slot={slot} state={attempt.status === "running" && !quiet ? "working" : "idle"} />
       <div><h2 id={`attempt-${attempt.id}`}>{attempt.persona.name}</h2><p>{attempt.persona.device} · {attempt.persona.techComfort} tech comfort</p></div>
       <span className={`wall-badge wall-status-${attempt.status}`}>{label(attempt.status)}</span>
     </header>
@@ -277,6 +279,7 @@ export function RunWall({ runId }: { runId: string }) {
           : wall.connection === "finished" ? "Run finished · live stream closed" : "Loading persisted history"}</span>
         <button onClick={() => void controller.current?.refresh()}>Refresh persisted data</button>
       </div>
+      <WaveDivider />
     </section>
     {wall.error && <div className="wall-alert" role="alert">{wall.error} <button onClick={() => void controller.current?.refresh()}>Retry run data</button></div>}
     {wall.run?.executionMode === "public-readonly" && <div className="wall-notice">
@@ -297,9 +300,9 @@ export function RunWall({ runId }: { runId: string }) {
     {!wall.run && !wall.error && <p className="wall-placeholder">Loading the owner&apos;s run, attempts, sessions and event history…</p>}
     {wall.run && wall.attempts.length === 0 && <p className="wall-placeholder">No persisted attempts are available yet.</p>}
     <section className="wall-grid" aria-label="Persona attempts">
-      {wall.attempts.map((attempt) => {
+      {wall.attempts.map((attempt, slot) => {
         const session = wall.sessions.find((item) => item.attemptId === attempt.id);
-        return <AttemptCard key={attempt.id} attempt={attempt}
+        return <AttemptCard key={attempt.id} attempt={attempt} slot={slot}
           publicReadonly={wall.run?.executionMode === "public-readonly"}
           events={wall.events.filter((event) => event.attemptId === attempt.id && event.sequence <= wall.cursor)}
           summary={wall.summaries.find((item) => item.attemptId === attempt.id)}

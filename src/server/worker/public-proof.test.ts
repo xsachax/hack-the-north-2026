@@ -8,7 +8,7 @@ import { WorkerRepository } from "./repository";
 import { PUBLIC_ASSET_POLICY, PUBLIC_EXECUTION_POLICY } from "../../lib/public-execution";
 import { personas } from "../../lib/personas";
 import {
-  assertPublicProofApproval, assertPublicProofSettled, openPublicProofLedger, publicProofHash,
+  assertPublicProofApproval, assertPublicProofSettled, assertNativeOnlyProofInventory, openPublicProofLedger, publicProofHash,
   publicProofPlanSchema, publicProofPolicySchema, publicProofRequestSchema, readPublicProofLedger, publicLedgerPreflight,
 } from "../../../scripts/public-proof";
 import { runPublicGoal, verifyPublicProofClosure } from "../../../scripts/public-goal";
@@ -55,6 +55,17 @@ function insertSettled() {
 }
 
 describe("bounded public proof planning and existing ledger", () => {
+  it("does not let the native-only harness omit managed work from its approved inventory", async () => {
+    expect(() => assertNativeOnlyProofInventory(db)).not.toThrow();
+    const owner = repository.createSession().ownerId;
+    repository.managed.create(owner, randomUUID(), {
+      executionPolicy: "browserbase-managed-v1", authorizationAcknowledged: true, managedPolicyAcknowledged: true,
+      scope: request.scope, assignments: [{ personaId: personas[0].id, goal: "Read guide", criteria: ["Guide visible"] }],
+    }, repository.listPersonas(owner));
+    expect(() => assertNativeOnlyProofInventory(db)).toThrow("public_proof_mixed_ledger_requires_managed_harness");
+    await expect(publicLedgerPreflight(directory)).rejects.toThrow("public_proof_mixed_ledger_requires_managed_harness");
+  });
+
   it("does not create a missing authoritative ledger", async () => {
     await expect(openPublicProofLedger(join(directory, "missing"))).rejects.toThrow();
     const readOnly = await openPublicProofLedger(directory);

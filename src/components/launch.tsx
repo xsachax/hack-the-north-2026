@@ -242,7 +242,7 @@ export function Launch() {
                 disabled={!selected.includes(persona.id) && selected.length >= MAX_ASSIGNMENTS_PER_RUN}
                 aria-describedby="persona-selection-limit"
                 onChange={(event) => setSelected((current) => selectRunAssignment(current, persona.id, event.target.checked))} />
-              <PersonaAvatar id={persona.id} /><span><strong>{persona.name}</strong><small>{persona.device === "phone" ? "Phone-sized" : "Desktop"} · {persona.patienceSteps}-step patience</small></span>
+              <PersonaAvatar id={persona.id} slot={selected.includes(persona.id) ? selected.indexOf(persona.id) : undefined} /><span><strong>{persona.name}</strong><small>{persona.device === "phone" ? "Phone-sized" : "Desktop"} · {persona.patienceSteps}-step patience</small></span>
             </label>)}
           </div>
           {!profiles.length && <p className="muted">Personas have not loaded yet.</p>}

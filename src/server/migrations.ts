@@ -193,4 +193,82 @@ export const migrations = [
     created_at TEXT NOT NULL
   );
   `,
+  `
+  CREATE TABLE managed_runs (
+    cursor INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    owner_id TEXT NOT NULL REFERENCES owners(id),
+    idempotency_key TEXT NOT NULL,
+    request_hash TEXT NOT NULL,
+    execution_policy TEXT NOT NULL CHECK(execution_policy='browserbase-managed-v1'),
+    scope TEXT NOT NULL CHECK(json_valid(scope)),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    cancel_requested_at INTEGER,
+    UNIQUE(owner_id,idempotency_key)
+  );
+  CREATE INDEX managed_runs_owner ON managed_runs(owner_id,cursor);
+  CREATE TABLE managed_attempts (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES managed_runs(id),
+    persona TEXT NOT NULL CHECK(json_valid(persona)),
+    goal TEXT NOT NULL,
+    criteria TEXT NOT NULL CHECK(json_valid(criteria)),
+    status TEXT NOT NULL DEFAULT 'queued'
+      CHECK(status IN ('queued','running','completed','failed','cancelled','cleanup_required')),
+    state TEXT NOT NULL DEFAULT 'queued'
+      CHECK(state IN ('queued','reserved','dispatched','quarantined','settled')),
+    provider_status TEXT,
+    cleanup TEXT NOT NULL DEFAULT 'not_started' CHECK(cleanup IN ('not_started','unconfirmed','closed')),
+    cancel_requested_at INTEGER,
+    result TEXT CHECK(result IS NULL OR json_valid(result)),
+    error TEXT,
+    reserved_seconds INTEGER NOT NULL DEFAULT 0 CHECK(reserved_seconds>=0),
+    consumed_seconds INTEGER NOT NULL DEFAULT 0 CHECK(consumed_seconds>=0),
+    released_seconds INTEGER NOT NULL DEFAULT 0 CHECK(released_seconds>=0 AND released_seconds<=reserved_seconds),
+    actual_browser_seconds REAL CHECK(actual_browser_seconds IS NULL OR actual_browser_seconds>=0),
+    correlation_token TEXT NOT NULL UNIQUE,
+    started_at INTEGER,
+    dispatch_started INTEGER NOT NULL DEFAULT 0 CHECK(dispatch_started IN (0,1)),
+    provider_run_id TEXT UNIQUE,
+    provider_session_id TEXT UNIQUE,
+    live_view_url TEXT,
+    replay_url TEXT,
+    lease_owner TEXT,
+    lease_generation INTEGER NOT NULL DEFAULT 0 CHECK(lease_generation>=0),
+    lease_expires_at INTEGER,
+    recovery_count INTEGER NOT NULL DEFAULT 0 CHECK(recovery_count>=0),
+    recovery_after INTEGER
+  );
+  CREATE INDEX managed_attempts_run ON managed_attempts(run_id);
+  CREATE INDEX managed_attempts_queue ON managed_attempts(state,lease_expires_at,recovery_after);
+  CREATE TABLE managed_progress (
+    attempt_id TEXT NOT NULL REFERENCES managed_attempts(id),
+    provider_event_hash TEXT NOT NULL,
+    sequence INTEGER NOT NULL CHECK(sequence>0 AND sequence<=500),
+    timestamp TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('status','text','tool','error')),
+    text TEXT NOT NULL,
+    PRIMARY KEY(attempt_id,provider_event_hash),
+    UNIQUE(attempt_id,sequence)
+  );
+  `,
+  `
+  ALTER TABLE managed_attempts ADD COLUMN provider_agent_id TEXT
+    CHECK(provider_agent_id IS NULL OR (length(provider_agent_id) BETWEEN 1 AND 256 AND length(trim(provider_agent_id))>0));
+  ALTER TABLE managed_attempts ADD COLUMN provider_task TEXT
+    CHECK(provider_task IS NULL OR (length(provider_task) BETWEEN 1 AND 65536 AND length(trim(provider_task))>0))
+    CHECK((provider_agent_id IS NULL AND provider_task IS NULL) OR
+      (provider_agent_id IS NOT NULL AND provider_task IS NOT NULL));
+  CREATE TRIGGER managed_dispatch_reference_required
+    BEFORE UPDATE OF dispatch_started ON managed_attempts
+    WHEN OLD.dispatch_started=0 AND NEW.dispatch_started=1 AND
+      (NEW.provider_agent_id IS NULL OR NEW.provider_task IS NULL)
+    BEGIN SELECT RAISE(ABORT,'managed_dispatch_reference_invalid'); END;
+  CREATE TRIGGER managed_dispatch_reference_immutable
+    BEFORE UPDATE OF provider_agent_id,provider_task,dispatch_started ON managed_attempts
+    WHEN OLD.dispatch_started=1 AND (NEW.provider_agent_id IS NOT OLD.provider_agent_id OR
+      NEW.provider_task IS NOT OLD.provider_task OR NEW.dispatch_started IS NOT OLD.dispatch_started)
+    BEGIN SELECT RAISE(ABORT,'immutable_managed_dispatch'); END;
+  `,
 ] as const;

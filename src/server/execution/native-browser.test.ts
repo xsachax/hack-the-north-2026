@@ -37,7 +37,7 @@ const mocks = vi.hoisted(() => {
   };
   const browser = { close: vi.fn<() => Promise<void>>() };
   const versionSession = {
-    send: vi.fn<(method: string) => Promise<{ product: string }>>(),
+    send: vi.fn<(method: string) => Promise<{ product: string; revision?: string }>>(),
     detach: vi.fn<() => Promise<void>>(),
   };
   const playwright = {
@@ -223,6 +223,23 @@ afterEach(() => {
 });
 
 describe("offline fresh native browser admission", () => {
+  it.each([`@${"a".repeat(40)}`, "wss://private-value.invalid/?token=private-value"])(
+    "keeps bootstrap categories and only a validated revision on failure %#", async (revision) => {
+      mocks.page.url.mockReturnValue("chrome://newtab/");
+      mocks.versionSession.send.mockResolvedValue({ product: "Chrome/145.0.7632.6", revision });
+      const error = await startupError();
+      const detail = (error.usage as NativeCloudUsage).nativeStartupFailure;
+      expect(detail).toMatchObject({
+        step: "trusted_bootstrap", code: "native_untrusted_bootstrap",
+        bootstrap: { pages: { newTab: 1, trusted: 0 }, workers: { trusted: 1 } },
+      });
+      if (revision.startsWith("@")) expect(detail?.browserRevision).toBe(revision);
+      else expect(detail).not.toHaveProperty("browserRevision");
+      expect(JSON.stringify(detail)).not.toMatch(/private-value|chrome:|wss:|token/);
+      expect(mocks.sdkWorker).not.toHaveBeenCalled();
+      expect(resource(error)?.state).toBe("deleted");
+    },
+  );
   it("rejects direct native allocation without operator opt-in before preparing an archive or provider", async () => {
     const error = await startupError(options(), { ...config, ENABLE_PUBLIC_RUNS: false });
     expect(error).toMatchObject({ code: "unsupported", usage: { allocationAttempted: false },

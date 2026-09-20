@@ -12,6 +12,51 @@ native attestation are still required. Source readiness alone is not hosted
 acceptance or authorization to spend. The legacy controlled factory rejects
 public targets.
 
+## Managed Agents alternative
+
+The owner selected a distinct managed MVP after three native bootstrap failures.
+It uses Browserbase's maintained Agents API through `src/server/managed/`,
+not Stagehand CDP startup or the native extension. This avoids the native hosted
+runtime mismatch without declaring the native security checks unnecessary.
+
+The worker dispatches once to a preconfigured agent, polls run/messages for real
+progress, records run/session identities privately, and independently retrieves
+the session before claiming closure. Cancellation uses the documented run stop
+endpoint; no SDK private mutation or vendor rewrite is used. Requests retain the
+same owner isolation, immutable objectives and shared reservation ceiling as
+the original worker, in separate managed tables.
+
+The managed launch page lets an authenticated owner prepare objectives and save
+custom personas while execution is disabled. Only launch is operator-gated;
+editing a persona never allocates a browser.
+
+Browserbase controls the managed tool set, which includes non-browser tools.
+Using a browser is instructed, not guaranteed by dispatch alone. A Search/Fetch-only
+answer is not genuine browser acceptance. Scope and read-only instructions
+cannot be enforced by Flash Flood's native broker on this path. Initial admission
+is therefore operator-allowlisted, with a separate explicit policy acknowledgement.
+The API supplies no hard per-run timeout or model-call cap; the local deadline
+requests stop and may be exceeded during failures. Model calls remain unknown
+unless independently available. Agent-reported criterion states are not native
+observation-grounded citations. Native #8, returning contexts, takeover and
+reduction remain unsupported by this alternative.
+
+The maintained `managed:integration` harness prepares a new offline
+source/package/harness/shared-ledger plan before fresh approval. It must retain
+all 900 seconds of existing native lifetime reservations. Hosted success and
+usage are recorded only after an actual approved run and independent closure;
+the presence of this implementation is not a hosted acceptance claim.
+
+The managed proof can explicitly bind `localUiBrowser: "webkit"` for its local
+owner-wall renderer when local Chromium is unavailable. This does not replace
+the remote Browserbase agent or change its browser settings. The default remains
+Chromium; Linux Chromium regressions remain required. The proof also requires
+goal-specific browser-URL protocol evidence and actual `Page.captureScreenshot`
+bytes from the independently identified Browserbase session. The private
+`browser-goal` image must be visually inspected before declaring the heading
+verified. The local wall screenshot, decorative surfers, model prose and
+recording metadata alone do not establish that criterion.
+
 ## Offline integration and deferred public acceptance
 
 The integration starts from checkpoint #24 at
@@ -178,6 +223,23 @@ Unit tests of that sequence use explicitly synthetic adapters, never hosted
 acceptance evidence. Browserbase limits, inaccessible sites and unsupported
 channels may still prevent a goal from completing; “public URL” does not mean
 every website feature is supported.
+
+After #27 merged (`9d39254e`), a third freshly approved, digest-bound attempt
+allocated a genuine Browserbase session. It failed at `trusted_bootstrap` with
+`native_untrusted_bootstrap`. The independently observed browser version was
+`153.0.8010.53`, outside the locally proved `145.0.7632.6` runtime. No observation,
+action or inference occurred. The starting page/worker categories and Chromium
+revision were not recorded by that candidate; closed-session logs were empty and
+the live-debug metadata endpoint returned 410. Do not guess the rejected URL or
+whitelist an unknown provider page/extension.
+
+Independent final readback confirmed all three sessions `COMPLETED` and all
+uploaded extensions deleted. The third used 1.647 seconds, making 4.744 actual
+seconds and 6 conservatively consumed seconds in total. All 900 lifetime-reserved
+seconds remain counted, leaving 900 of the initial cap. No fourth allocation
+occurred. The subsequent diagnostic change records only fixed page/worker
+category counts and a format-validated Chromium revision on failure; it neither
+trusts additional bootstrap targets nor expands supported runtimes.
 
 ### Background SDK export denial
 

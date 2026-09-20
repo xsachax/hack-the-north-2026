@@ -1,7 +1,7 @@
 import type { BrowserContext, Worker } from "playwright-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  assertNativePolicyState, assertTrustedBootstrap, establishNativePolicy, PROVED_CHROMIUM_VERSION,
+  assertNativePolicyState, assertTrustedBootstrap, establishNativePolicy, NativeBootstrapError, PROVED_CHROMIUM_VERSION,
 } from "./native-policy-session";
 import type { NativeWorkerControl } from "./native-worker-control";
 
@@ -48,6 +48,25 @@ function harness(options: { version?: string; workerUrl?: string; pages?: readon
 beforeEach(() => { vi.resetAllMocks(); });
 
 describe("composed bootstrap trust boundary", () => {
+  it("reports only fixed bootstrap categories without granting new trust or exposing URLs", () => {
+    const fake = harness({ pages: [
+      "about:blank", "chrome://newtab/", "chrome://settings/",
+      `${origin}/unexpected.html?credential=private-value`, "https://private-value.example/path?token=private-value",
+      "http://private-value.example/", "data:text/html,private-value",
+    ], workerUrl: `chrome-extension://${"b".repeat(32)}/private-value.js` });
+    let failure: NativeBootstrapError | undefined;
+    try { assertTrustedBootstrap(fake.context, origin); }
+    catch (error) {
+      expect(error).toBeInstanceOf(NativeBootstrapError);
+      if (error instanceof NativeBootstrapError) failure = error;
+    }
+    expect(failure?.bootstrap).toEqual({
+      pages: { trusted: 1, newTab: 1, internal: 1, extension: 1, http: 1, https: 1, other: 1 },
+      workers: { trusted: 0, newTab: 0, internal: 0, extension: 1, http: 0, https: 0, other: 0 },
+    });
+    expect(JSON.stringify(failure)).not.toMatch(/private-value|chrome:|https:|credential|token/);
+    expect(() => assertTrustedBootstrap(fake.context, origin)).toThrow("native_untrusted_bootstrap");
+  });
   it("accepts only blank and the exact composed extension bootstrap documents", () => {
     const fake = harness({ pages: [
       "about:blank", `${origin}/blank.html`, `${origin}/wake-service-worker.html`,

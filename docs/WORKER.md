@@ -1,5 +1,51 @@
 # Durable worker runbook (layer 04)
 
+## Managed Agents worker (separate MVP)
+
+The same `npm run worker -- --confirm-paid` command can run the separate
+managed queue with `ENABLE_MANAGED_AGENTS=true`, `BROWSERBASE_API_KEY`,
+`BROWSERBASE_PROJECT_ID`, `BROWSERBASE_MANAGED_AGENT_ID`,
+`MANAGED_AGENT_ALLOWED_ORIGINS` (comma-separated canonical origins), and a
+32-character-or-longer `FLASH_FLOOD_ACCESS_CODE`. Production additionally requires
+`DEPLOYMENT_CONFIRM_PAID=true`. All paid modes are default-off.
+
+The reusable agent is provisioned separately; the worker never creates an agent
+or retries a run-creation request. Before create it durably records the original
+agent/task and dispatch marker; recovery only discovers/stops the original
+operation. It never starts a replacement. Agent creation uncertainty likewise
+must be reconciled, not retried.
+
+Managed and native jobs share the same SQLite worker policy, global/owner
+occupancy and conservative usage reservations. The total ceiling remains eight,
+not eight per mode. Unknown allocations retain their reservation and slot.
+Lifetime reservations are not refunded after failures or early closure.
+Lease fencing and cancellation surround provider awaits; independently retrieved
+Browserbase session `COMPLETED` is necessary for confirmed cleanup.
+
+`SESSION_TIMEOUT_SECONDS` is an **operational stop deadline**, not a provider
+hard TTL in managed mode. The Agents API exposes neither a hard model-call cap
+nor a way to disable its built-in tools. Existing `MAX_MODEL_CALLS_PER_PERSONA`
+and `MAX_STEPS_PER_PERSONA` are not managed enforcement. Provider outages or
+process death can outlive the stop deadline; retained reservations prevent
+replacement work, but cannot themselves stop a remote agent. Record missing
+usage as unknown and reconcile it. Read-only/scope prompts are not network
+confinement; only approved public sites without secrets are eligible.
+
+The source/package/ledger-bound managed proof uses the **existing** authoritative
+ledger and fresh explicit approval. Native failures already reserved 900 of the
+1,800-second initial lifetime allowance. Do not start a new paid database to
+avoid that balance. A managed success would demonstrate the restricted MVP, not
+the hardened public-egress acceptance required by #8.
+The older native-only proof harness refuses an inventory containing managed
+attempts instead of omitting their reservations or resources. The managed proof
+harness accounts for both histories; neither starts a replacement paid ledger.
+For local UI-only regressions, `UI_TEST_BROWSER=webkit` selects the maintained
+Playwright WebKit renderer after its browser dependency is installed. This
+does not select a different provider execution engine. Keep the full Chromium
+suite in CI; native/CDP tests still require Chromium.
+
+## Native and controlled workers
+
 The separate Node process preserves registered controlled-site execution and
 contains a distinct, operator-gated public read-only path. Legacy/unversioned
 website requests remain `blocked_unsupported` without allocating a browser;

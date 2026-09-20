@@ -4,6 +4,33 @@ User testing before you have users. A crowd of AI personas uses an authorized we
 
 **Current phase: functional launch, owner-only live wall and persisted evidence reports, not the full MVP.** Enter a goal, choose a scoped target and select predefined or saved custom personas. The Next.js interface uses the canonical schemas, private SQLite persistence and owner-scoped APIs. The [worker runbook](docs/WORKER.md) covers separate app/worker startup, transactional quotas, fenced leases, crash reconciliation, cancellation, spending and resumable events. The [execution reference](docs/EXECUTION.md) describes the Browserbase/Stagehand Gateway loop and the distinction between structural checks and evidence-grounded semantic judgment. **Arbitrary-target execution remains disabled pending proven browser egress enforcement (#8).** The website mode saves an explicitly blocked intended request; the separate controlled-demo mode can queue paid work. No browser is launched inside an HTTP handler or during rendering.
 
+## What works now
+
+The new **Managed Agents MVP** is at `/managed`. It uses Browserbase's Agents
+API, a separate owner-authorized queue and the same aggregate eight-agent
+ceiling. It is default-off and restricted to operator-approved public origins.
+Unlike the native path, Browserbase controls the tools: scope/read-only prompts
+are **not network enforcement**, and there is no API-enforced model-call or
+browser-time cap. See the [managed worker setup](docs/WORKER.md#managed-agents-worker-separate-mvp).
+Genuine managed hosted evidence is still pending; this alternative does not
+claim to satisfy the hardened arbitrary-target requirements of #8.
+
+Native-path status after the third genuine public attempt on 2026-09-20; **public-URL MVP
+acceptance has not passed**. PRs #25, #26 and #27 are merged.
+
+| Surface | Actual state |
+| --- | --- |
+| Launch UI, scoped goals, criteria and personas | Implemented; owner API and browser regressions pass. New admissions are capped at eight agents. |
+| Durable worker, live wall, reports and private evidence | Implemented and exercised on controlled sites; this is not proof for arbitrary public sites. |
+| Real Browserbase upload, allocation and independent cleanup | Verified for three public-path attempts. All sessions closed and extensions deleted; 4.744 actual browser-seconds, 900 lifetime-reserved seconds counted. |
+| Genuine public-site goal, model decisions and screenshot evidence | **Not working yet.** All three attempts stopped before observation, actions or inference. |
+| Current hosted blocker | Browserbase reports Chrome `153.0.8010.53`; native validation covers `145.0.7632.6`. The third session also failed the trusted blank/extension bootstrap check. Neither restriction has been bypassed. |
+
+`ENABLE_PUBLIC_RUNS` is still false by default. Enabling it selects a guarded
+validation candidate, not a demonstrated working service. Historical blocked
+requests never become paid jobs after enablement. See the [exact hosted
+results](docs/EXECUTION.md#first-hosted-attempt-after-26).
+
 The synthetic gift store at `/demo` supports browse/cart/fake checkout. Configure six independent broken/fixed variants and reset tab-local state at `/demo-fixtures`, outside the shopping flow. See the [fixture matrix and next-layer handoff](docs/DEMO.md) for deterministic setup, scoped objectives, evidence distinctions and authorized cloud reachability. No real purchases, accounts or payments.
 
 A second, structurally different controlled site at `/project-board` supports
@@ -31,6 +58,17 @@ private recording/inspection gate. Shipping hardening does not clear #8 or
 complete the original public-website release.
 
 ## Launch and watch
+
+Surfer badges use the supplied eight-color idle/working sprites. A working loop
+reflects a persisted running attempt, not proof of goal progress; stopped and
+queued sessions stay idle. Reduced-motion preferences select static artwork.
+Create a persona or customize a copy to start from **Security and privacy**,
+**UX and usability**, or **Networking and perceived latency** templates.
+Edit its character, reading style, patience, quirks and concerns, then set its
+own goal and criteria. These specialties guide attention, not tool permissions:
+security review is passive, and loading observations are not packet analysis,
+throttling or a calibrated performance benchmark. Saved profiles are owner-only;
+existing attempts keep their original persona snapshots.
 
 Open `/`, unlock with the deployment access code if required, then choose **Your
 website** or **Controlled demo** explicitly. Expand scope and criteria to narrow

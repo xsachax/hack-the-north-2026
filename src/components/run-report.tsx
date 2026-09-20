@@ -358,9 +358,9 @@ function GroupDetail({ group, runId }: { group: ReportGroup; runId: string }) {
   </section>;
 }
 
-function AgentDetail({ agent, runId }: { agent: AgentReport; runId: string }) {
+function AgentDetail({ agent, runId, slot }: { agent: AgentReport; runId: string; slot: number }) {
   return <section className="report-agent" aria-labelledby="agent-report-title">
-    <header className="report-agent-heading"><PersonaAvatar id={agent.persona.id} /><div>
+    <header className="report-agent-heading"><PersonaAvatar id={agent.persona.id} slot={slot} /><div>
       <p className="report-kicker">PER-AGENT REPORT · {agent.persona.device}</p><h2 id="agent-report-title">{agent.persona.name}</h2>
     </div></header>
     <p>{agent.goal}</p>
@@ -499,7 +499,7 @@ export function RunReportView({ runId, selection }: { runId: string; selection: 
           {item.persona.name}<small>{item.status}</small></Link>)}</nav>
         {!report.agents.length && <p className="report-panel">No agent reports persisted yet.</p>}
         {selection.attempt && !agent && <p className="report-notice">This attempt is missing from the current report.</p>}
-        {agent && <AgentDetail agent={agent} runId={runId} />}
+        {agent && <AgentDetail agent={agent} runId={runId} slot={report.agents.findIndex((item) => item.attemptId === agent.attemptId)} />}
       </section>
     </>}
     <footer className="report-footer"><span>Private by default. Screenshots are never automatically revealed.</span><span>Unknown is not success.</span></footer>

@@ -28,6 +28,7 @@ import { insertRerun, readRerunLineage } from "./workflows/rerun";
 import { ContextStore } from "./workflows/contexts";
 import { TakeoverService } from "./workflows/takeover";
 import { reproductionService as createReproductionService } from "./worker/advanced-workflows";
+import { ManagedStore } from "./managed/store";
 
 type Row = Record<string, SQLOutputValue>;
 const parseJson = (value: unknown): unknown => JSON.parse(z.string().parse(value));
@@ -66,6 +67,7 @@ export class Repository {
   protected readonly db: DatabaseSync;
   readonly contexts: ContextStore;
   readonly takeovers: TakeoverService;
+  readonly managed: ManagedStore;
   constructor(readonly dataDir: string, protected readonly clock = () => Date.now()) {
     const dir = resolve(dataDir);
     if (dir === resolve("/")) throw new Error("A dedicated private data directory is required");
@@ -87,6 +89,7 @@ export class Repository {
     }
     chmodSync(path, 0o600);
     this.db = new DatabaseSync(path);
+    this.managed = new ManagedStore(this.db, (work) => this.transaction(work), this.clock);
     this.contexts = new ContextStore(this.db, this.clock);
     this.takeovers = new TakeoverService(this.db, (work) => this.transaction(work), this.clock,
       (attemptId, phase, version) => {

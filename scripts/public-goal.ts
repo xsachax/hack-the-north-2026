@@ -16,7 +16,7 @@ import { withReleaseLock, type ReleaseRuntime } from "./release-integration";
 import { packagedPublicDeployment } from "./release-runtime";
 import { publicHarnessDigest } from "./public-proof-source";
 import {
-  assertPublicProofApproval, assertPublicProofSettled, openPublicProofLedger,
+  assertPublicProofApproval, assertPublicProofSettled, assertNativeOnlyProofInventory, openPublicProofLedger,
   publicProofPlanSchema, publicProofHash, readPublicProofLedger, type PublicProofPlan, type PublicProofLedger,
 } from "./public-proof";
 
@@ -94,6 +94,7 @@ export async function runPublicGoal(planPath: string, approvalPath: string, sign
     let phase = "prior-ledger";
     const failures: string[] = [];
     try {
+      assertNativeOnlyProofInventory(db);
       const before = readPublicProofLedger(db);
       assertPublicProofSettled(before);
       if (before.fingerprint !== plan.ledgerDigest) throw new Error("public_approved_ledger_changed");
@@ -138,6 +139,7 @@ export async function runPublicGoal(planPath: string, approvalPath: string, sign
       await verifyInputs(plan);
       signal.throwIfAborted();
       assertPublicProofApproval(approval, plan);
+      assertNativeOnlyProofInventory(db);
       if (readPublicProofLedger(db).fingerprint !== plan.ledgerDigest) throw new Error("public_ledger_changed_before_worker");
       phase = "public-worker";
       await runtime.startWorker();
