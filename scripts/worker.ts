@@ -5,16 +5,20 @@ import { readConfig } from "../src/lib/config";
 import { readWorkerPolicy, workerExecutionModes } from "../src/server/worker/config";
 import { WorkerRepository } from "../src/server/worker/repository";
 import { DurableWorker, productionDependencies } from "../src/server/worker/runtime";
+import { requireManagedWorker } from "../src/server/managed/config";
+import { ManagedWorker } from "../src/server/managed/worker";
 
 nextEnv.loadEnvConfig(process.cwd());
 
 async function main() {
   const modes = workerExecutionModes(process.env);
+  const managed = process.env.ENABLE_MANAGED_AGENTS === "true";
   if (process.argv.slice(2).join(" ") !== "--confirm-paid" ||
-    !(modes.controlled || modes.public)) {
+    !(modes.controlled || modes.public || managed)) {
     throw new Error("worker_requires_explicit_paid_confirmation");
   }
   const policy = readWorkerPolicy(process.env);
+  const managedOptions = managed ? requireManagedWorker(process.env) : undefined;
   const config = { ...readConfig(process.env), SESSION_TIMEOUT_SECONDS: policy.sessionSeconds };
   const port = z.coerce.number().int().min(1).max(65535).parse(process.env.FIXTURE_PORT ?? 4321);
   const shutdownMs = z.coerce.number().int().min(10000).max(120000).parse(process.env.WORKER_SHUTDOWN_MS ?? 60000);
@@ -39,7 +43,17 @@ async function main() {
   process.once("SIGTERM", stop);
   try {
     console.log("worker_ready");
-    await new DurableWorker(repository, productionDependencies(config, modes.controlled), port).run(controller.signal);
+    const workers = [
+      ...(modes.controlled || modes.public
+        ? [new DurableWorker(repository, productionDependencies(config, modes.controlled), port).run(controller.signal)] : []),
+      ...(managedOptions ? [new ManagedWorker(repository, policy, managedOptions).run(controller.signal)] : []),
+    ];
+    try { await Promise.all(workers); }
+    catch (error) {
+      controller.abort();
+      await Promise.allSettled(workers);
+      throw error;
+    }
   } finally {
     clearTimeout(deadline);
     process.off("SIGINT", stop);

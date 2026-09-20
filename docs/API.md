@@ -14,7 +14,48 @@ operator enablement, strong owner authentication and per-session native
 attestation remain mandatory. Passing local WSS/synthetic Gateway tests does not
 establish hosted public-site acceptance.
 
-### Explicit public opt-in (not enabled by default)
+### Managed Agents MVP: separate policy
+
+`/managed` uses the distinct `browserbase-managed-v1` policy, not `/runs` or
+`native-public-v1`. It requires `ENABLE_MANAGED_AGENTS=true`, a configured
+Browserbase project/key and reusable agent, a strong deployment access code,
+an exact operator-approved starting origin, and both
+`authorizationAcknowledged: true` and `managedPolicyAcknowledged: true`.
+The initial URL also passes the existing public-DNS/scope admission check.
+**This is not runtime network enforcement:** Browserbase controls its tools;
+read-only behavior and scope are instructions. Its API exposes no hard model-call
+or browser-time cap. Never submit credentials or sensitive data.
+
+All managed endpoints require the existing owner cookie; mutations also require
+CSRF and exact origin. `POST /managed-runs` requires `Idempotency-Key` and a
+`managedCreateSchema` body: immutable scope plus one to eight distinct persona
+assignments, each with a goal and one to six plain-language criteria.
+Replaying the same request returns the original run even after admission is
+disabled; changing its body conflicts. A lost response must be reconciled with
+the original body/key, never an automatically generated replacement.
+
+| Endpoint | Result |
+| --- | --- |
+| `GET /managed-capabilities` | Safe operator enablement, approved origins and policy notice |
+| `GET /managed-runs` | Owner's latest 30 runs |
+| `POST /managed-runs` | Queue one immutable managed run; no provider calls in API handler |
+| `GET /managed-runs/:id` | Durable progress and per-persona lifecycle |
+| `POST /managed-runs/:id/cancel` | Request stop; does not claim remote closure |
+| `GET /managed-runs/:id/report` | Same durable report, with provider-reported criteria |
+| `GET /managed-runs/:id/attempts/:attemptId/view` | Explicit owner-only Browserbase replay link after independent closure; no live control URL |
+
+Progress includes bounded provider text and tool names, never reasoning parts
+or raw tool payloads. Agent completion, criterion satisfaction, and independently
+confirmed browser closure are separate states. Model calls are `null` (unknown),
+not zero. Results are **agent-reported**, not the native criterion/citation
+engine. Managed returning contexts, takeover, reduction, comparisons and
+automatic retries are unsupported. Historical native/controlled runs retain
+their original policy, routes and reports.
+Managed live video is not exposed: a `readOnly=true` URL parameter is not a
+documented provider read-only capability. Live progress is the real provider
+event feed; replay is separate and available only after verified closure.
+
+### Native public opt-in (not enabled by default)
 
 A new authorized scoped `/runs` request must include both additional fields:
 

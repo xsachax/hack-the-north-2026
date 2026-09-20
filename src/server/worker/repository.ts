@@ -66,8 +66,13 @@ export class WorkerRepository extends Repository {
     const row = this.db.prepare(`SELECT COALESCE(sum(u.reserved_seconds),0) AS reserved,
       COALESCE(sum(u.consumed_seconds),0) AS consumed, COALESCE(sum(u.released_seconds),0) AS released,
       COALESCE(sum(max(u.reserved_seconds-u.released_seconds,u.consumed_seconds)),0) AS committed
-      FROM usage_reservations u JOIN jobs j ON j.id=u.job_id JOIN runs r ON r.id=j.run_id
-      ${ownerId ? "WHERE r.owner_id=?" : ""}`).get(...(ownerId ? [ownerId] : []))!;
+      FROM (
+        SELECT u.reserved_seconds,u.consumed_seconds,u.released_seconds,r.owner_id
+          FROM usage_reservations u JOIN jobs j ON j.id=u.job_id JOIN runs r ON r.id=j.run_id
+        UNION ALL
+        SELECT a.reserved_seconds,a.consumed_seconds,a.released_seconds,r.owner_id
+          FROM managed_attempts a JOIN managed_runs r ON r.id=a.run_id
+      ) u ${ownerId ? "WHERE u.owner_id=?" : ""}`).get(...(ownerId ? [ownerId] : []))!;
     return {
       reservedSeconds: z.number().parse(row.reserved), consumedSeconds: z.number().parse(row.consumed),
       releasedSeconds: z.number().parse(row.released), committedSeconds: z.number().parse(row.committed),
@@ -102,7 +107,9 @@ export class WorkerRepository extends Repository {
         AND (r.execution_mode!='controlled-fixture' OR
           (SELECT count(*) FROM launches occupied JOIN jobs held ON held.id=occupied.job_id
            JOIN runs owned ON owned.id=held.run_id
-           WHERE occupied.state!='settled' AND owned.owner_id=r.owner_id) < ?)
+           WHERE occupied.state!='settled' AND owned.owner_id=r.owner_id) +
+          (SELECT count(*) FROM managed_attempts occupied JOIN managed_runs owned ON owned.id=occupied.run_id
+           WHERE occupied.state NOT IN ('queued','settled') AND owned.owner_id=r.owner_id) < ?)
         ORDER BY j.rowid LIMIT 100`).all(publicAdmission?.controlledEnabled === false ? 0 : 1,
           this.clock(), this.clock(), concurrency.ownerConcurrency);
       for (const row of queued) {
@@ -135,9 +142,13 @@ export class WorkerRepository extends Repository {
           continue;
         }
 
-        const count = (owner?: string) => z.number().parse(this.db.prepare(`SELECT count(*) AS n FROM launches l
-          JOIN jobs j ON j.id=l.job_id JOIN runs r ON r.id=j.run_id WHERE l.state!='settled'
-          ${owner ? "AND r.owner_id=?" : ""}`).get(...(owner ? [owner] : []))?.n);
+        const count = (owner?: string) => z.number().parse(this.db.prepare(`SELECT count(*) AS n FROM (
+          SELECT r.owner_id FROM launches l JOIN jobs j ON j.id=l.job_id JOIN runs r ON r.id=j.run_id
+            WHERE l.state!='settled'
+          UNION ALL
+          SELECT r.owner_id FROM managed_attempts a JOIN managed_runs r ON r.id=a.run_id
+            WHERE a.state NOT IN ('queued','settled')
+          ) occupied ${owner ? "WHERE owner_id=?" : ""}`).get(...(owner ? [owner] : []))?.n);
         if (count() >= concurrency.globalConcurrency) return null;
         if (count(ownerId) >= concurrency.ownerConcurrency) continue;
         const global = this.accounting();

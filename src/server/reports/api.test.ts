@@ -90,6 +90,7 @@ describe("protected durable reports API", () => {
       db.exec("ALTER TABLE runs DROP COLUMN public_asset_policy");
       db.exec("ALTER TABLE runs DROP COLUMN public_execution_policy");
       for (const table of [
+        "managed_progress", "managed_attempts", "managed_runs",
         "native_resource_events", "native_resources",
         "reproduction_worker_jobs", "reproduction_candidates", "reproductions", "rerun_attempts", "rerun_runs",
         "takeover_commands", "takeover_intervals", "takeover_controls",

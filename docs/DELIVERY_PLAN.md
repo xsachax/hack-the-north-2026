@@ -1,6 +1,6 @@
 # Flash Flood delivery plan
 
-Owner: coordinating agent in the Browserbase project foundation session.
+Owner: current integration session, acting as the independent driver.
 Repository: `xsachax/hack-the-north-2026`. Tracking issue: #1.
 Started: 2026-09-19.
 
@@ -59,6 +59,26 @@ runner. Its source gate now permits the opt-in candidate. No hosted goal has bee
 no OpenAI key is needed by the current one-key Gateway path.
 
 ## 2. Architecture and invariants
+
+### Explicit managed MVP alternative
+
+After three native hosted startup rejections, the owner explicitly selected
+Browserbase's managed Agents API as the demonstrable MVP path. This is a
+separate `browserbase-managed-v1` product contract, not a weakening or claimed
+completion of the native #8 contract below. The native path and old results
+remain intact. Initial managed admission is limited to operator-approved public
+origins and eight selected personas; provider tools cannot be disabled and
+scope/read-only instructions are not security enforcement. No credentials or
+sensitive data are allowed in this mode. Managed hard TTL/model-call limits,
+returning contexts, takeover, comparisons and reduction are unsupported.
+
+Delivery requires a real browser goal, inspectable provider progress/results,
+truthful usage, independent session closure and explicit disclosure of these
+limits. The first live attempt still needs a fresh source/package/ledger-bound
+approval, concurrency one, no automatic retry, and the existing 1,800-second
+lifetime reservation allowance including 900 seconds already spent on native
+attempt reservations. The four-hour MVP target prioritizes this narrow
+demonstration over further native compatibility experiments or advanced polish.
 
 | Layer | Responsibility | Invariants |
 | --- | --- | --- |

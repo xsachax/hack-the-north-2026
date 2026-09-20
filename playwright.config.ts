@@ -1,4 +1,7 @@
 import { defineConfig } from "@playwright/test";
+import { z } from "zod";
+
+const browserName = z.enum(["chromium", "webkit"]).default("chromium").parse(process.env.UI_TEST_BROWSER);
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -11,7 +14,7 @@ export default defineConfig({
   reporter: "list",
   use: {
     baseURL: "http://127.0.0.1:4317",
-    browserName: "chromium",
+    browserName,
     viewport: { width: 1280, height: 900 },
     serviceWorkers: "block",
     trace: "retain-on-failure",

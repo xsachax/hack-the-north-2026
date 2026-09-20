@@ -22,6 +22,8 @@ import { ComparisonService } from "./workflows/comparison";
 import { reproductionCreateSchema } from "../lib/reproduction-contracts";
 import { NATIVE_SHUTDOWN_RESERVE_SECONDS } from "../lib/public-execution";
 import { PUBLIC_EXECUTION_IMPLEMENTATION_READY } from "./public-execution-readiness";
+import { managedCreateSchema } from "../lib/managed-contracts";
+import { assertManagedScope, managedCapabilities } from "./managed/config";
 
 export type ApiConfiguration = {
   origin: string;
@@ -34,6 +36,10 @@ export type ApiConfiguration = {
   browserbaseKeyConfigured?: boolean;
   executionLimits?: Capabilities["executionLimits"];
   policy?: PolicyOptions;
+  managedEnabled?: boolean;
+  managedAllowedOrigins?: readonly string[];
+  managedAgentConfigured?: boolean;
+  managedProjectConfigured?: boolean;
 };
 type Dependencies = {
   repository: Repository;
@@ -231,6 +237,51 @@ export function createApi({
       if (mutation && !equal(request.headers.get("x-csrf-token") ?? "", session.csrf)) fail("forbidden", 403);
       const owner = session.ownerId;
       if (mutation && url.search) fail("invalid_request", 400);
+
+      if (path.length === 1 && path[0] === "managed-capabilities" && request.method === "GET") {
+        if (url.search) fail("invalid_request", 400);
+        return respond(managedCapabilities({
+          enabled: configuration.managedEnabled, allowedOrigins: configuration.managedAllowedOrigins,
+          agentConfigured: configuration.managedAgentConfigured, accessCode: configuration.accessCode,
+          keyConfigured: configuration.browserbaseKeyConfigured,
+          projectConfigured: configuration.managedProjectConfigured,
+        }));
+      }
+      if (path[0] === "managed-runs") {
+        if (url.search) fail("invalid_request", 400);
+        if (path.length === 1 && request.method === "GET") return respond({ items: repository.managed.list(owner) });
+        if (path.length === 1 && request.method === "POST") {
+          const key = parseInput(idempotencyKeySchema, request.headers.get("idempotency-key"));
+          const input = parseInput(managedCreateSchema, await readJson(request));
+          const existing = repository.managed.existing(owner, key, input);
+          if (existing) return respond(existing);
+          if (!managedCapabilities({
+            enabled: configuration.managedEnabled, allowedOrigins: configuration.managedAllowedOrigins,
+            agentConfigured: configuration.managedAgentConfigured, accessCode: configuration.accessCode,
+            keyConfigured: configuration.browserbaseKeyConfigured,
+            projectConfigured: configuration.managedProjectConfigured,
+          }).enabled) fail("unavailable", 503);
+          try { assertManagedScope(input.scope, configuration.managedAllowedOrigins ?? []); }
+          catch { fail("invalid_request", 400); }
+          await validateScope(input.scope);
+          const result = repository.managed.create(owner, key, input, repository.listPersonas(owner));
+          return respond(result.run, result.created ? 201 : 200);
+        }
+        if (path.length >= 2) {
+          const id = parseInput(idSchema, path[1]);
+          if ((path.length === 2 || path.length === 3 && path[2] === "report") && request.method === "GET") {
+            return respond(repository.managed.get(owner, id));
+          }
+          if (path.length === 3 && path[2] === "cancel" && request.method === "POST") {
+            parseInput(z.strictObject({}), await readJson(request));
+            return respond(repository.managed.cancel(owner, id));
+          }
+          if (path.length === 5 && path[2] === "attempts" && path[4] === "view" && request.method === "GET") {
+            return respond(repository.managed.view(owner, id, parseInput(idSchema, path[3])));
+          }
+        }
+        fail("not_found", 404);
+      }
 
       if (path[0] === "reproductions" && path.length >= 2) {
         const reproductionId = parseInput(idSchema, path[1]);

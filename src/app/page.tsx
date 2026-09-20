@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Launch } from "@/components/launch";
 import { OwnerSession } from "@/components/owner-session";
+import { WaveDivider } from "@/components/wave-divider";
 
 export default function Home() {
   return <main>
@@ -12,6 +13,8 @@ export default function Home() {
       <p className="eyebrow">USER TESTING BEFORE YOU HAVE USERS</p>
       <h1>A little crowd.<br /><span>A different perspective.</span></h1>
       <p>Give real browsers a small mission. Watch different personas find their way.</p>
+      <p><Link href="/managed">Try Browserbase Managed Agents →</Link></p>
+      <WaveDivider />
     </section>
     <OwnerSession><Launch /></OwnerSession>
     <footer><span>Evidence over anecdotes.</span><span>Authorized, non-destructive testing only.</span></footer>

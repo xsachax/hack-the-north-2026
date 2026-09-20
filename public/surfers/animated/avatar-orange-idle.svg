@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024"
+     class="avatar avatar-orange" role="img" aria-labelledby="avatar-title">
+  <title id="avatar-title">Surfer avatar, orange, idle loop</title>
+  <style>
+    /* ---- Palette. Change these three to make a new color. ---- */
+    .avatar-orange {
+      --body:      #e06629;
+      --shade:     #c45923;
+      --highlight: #ff9657;
+      --ink:       #0d0c0b;
+      --ink-scale: 1;          /* raise to ~1.8 when showing the sprite small (under ~128px) */
+    }
+
+    /* Shown small as an image (img tag, CSS background, extension overlay): thicken the outline so the comic line survives.
+       Inside an image, this query measures the image's own rendered width. Inline SVG: set --ink-scale from your CSS instead. */
+    @media (max-width: 200px) { .avatar-orange { --ink-scale: 1.8; } }
+
+    .avatar .base  { fill: var(--body); }
+    .avatar .shade { fill: var(--shade); }
+    .avatar .hl    { fill: var(--highlight); }
+    .avatar .eye,
+    .avatar .inkfill { fill: var(--ink); }
+    .avatar .ink   { fill: none; stroke: var(--ink); stroke-width: calc(7.5px * var(--ink-scale)); stroke-linecap: round; stroke-linejoin: round; }
+    .avatar .ink.mid  { stroke-width: calc(5px * var(--ink-scale)); }
+    .avatar .ink.fine { stroke-width: calc(3.2px * var(--ink-scale)); }
+
+    /*PIVOTS*/
+    /* Pivot points for animation, in viewBox units.
+       arm-left pivots at the centre of the shoulder arc, so its outline slides along itself instead of tearing. */
+    #avatar    { transform-origin: 400px 770px; }  /* between the feet: rocks the whole figure */
+    #head      { transform-origin: 615px 385px; }
+    #torso     { transform-origin: 560px 520px; }
+    #arm-left  { transform-origin: 437px 333px; }
+    #arm-right { transform-origin: 720px 400px; }
+    #leg-left  { transform-origin: 500px 490px; }
+    #leg-right { transform-origin: 650px 520px; }
+    #scarf     { transform-origin: 540px 245px; }
+    /*END-PIVOTS*/
+    /* ---- idle: 4 held poses, 1160 ms per loop. step-end = snap, no tweening ---- */
+    .avatar-orange { --loop: 1160ms; }
+    @keyframes idle-avatar { 0.0% { transform: rotate(0.0deg); } 24.14% { transform: rotate(-2.0deg); } 51.72% { transform: rotate(0.0deg); } 72.41% { transform: rotate(2.5deg); } }
+    #avatar { animation: idle-avatar var(--loop) step-end infinite; }
+    @keyframes idle-head { 0.0% { transform: rotate(0deg); } 24.14% { transform: rotate(4deg); } 51.72% { transform: rotate(0deg); } 72.41% { transform: rotate(-4deg); } }
+    #head { animation: idle-head var(--loop) step-end infinite; }
+    @keyframes idle-arm-left { 0.0% { transform: rotate(0deg); } 24.14% { transform: rotate(9deg); } 51.72% { transform: rotate(3deg); } 72.41% { transform: rotate(-9deg); } }
+    #arm-left { animation: idle-arm-left var(--loop) step-end infinite; }
+    @keyframes idle-arm-right { 0.0% { transform: rotate(0deg); } 24.14% { transform: rotate(-3deg); } 51.72% { transform: rotate(2deg); } 72.41% { transform: rotate(7deg); } }
+    #arm-right { animation: idle-arm-right var(--loop) step-end infinite; }
+    /* People who ask their system for less motion get the resting pose, with the first drawn scarf / water set */
+    @media (prefers-reduced-motion: reduce) { #avatar, #avatar *, #fx-back, #fx-back *, #fx-front * { animation: none !important; } .sf0, .fxv0 { visibility: visible !important; } }
+  </style>
+
+  <defs>
+    <path id="shape-scarf" d="M 570 192 C 528 194 472 187 422 178 C 374 169 345 144 321 110 C 302 81 277 50 227 40 C 173 30 113 50 50 80 L 86 89 L 58 102 C 108 104 150 88 192 89 C 236 92 256 135 286 176 C 321 222 398 241 460 256 C 490 264 516 284 540 312 Z"/>
+    <path id="shape-leg-left" d="M 472 447 C 425 426 365 411 315 410 C 292 409 272 416 262 432 C 252 452 252 480 262 505 C 270 528 288 555 312 574 C 290 575 255 576 236 578 C 224 580 222 592 232 598 C 270 614 320 630 368 642 C 384 642 390 628 386 612 C 378 585 380 555 384 528 C 388 524 392 522 396 523 C 445 545 500 566 540 580 L 560 520 L 540 460 Z"/>
+    <path id="shape-torso" d="M 422 340 C 440 354 452 385 462 415 C 468 432 476 450 486 470 C 494 490 504 505 520 514 L 540 600 L 670 600 L 715 520 L 735 430 L 715 362 L 690 330 L 600 300 L 532 300 C 515 278 492 258 470 249 C 455 243 440 241 425 243 L 440 290 Z"/>
+    <path id="shape-arm-left" d="M 486 263 C 480 256 475 252 470 249 C 455 243 440 241 425 243 C 412 244 404 246 397 248 C 365 243 325 245 295 251 C 262 258 232 278 205 297 C 192 306 180 312 168 316 C 140 320 105 326 74 332 C 56 336 54 358 72 360 C 94 360 114 357 130 355 C 104 360 76 364 54 367 C 32 370 32 396 54 396 C 78 394 102 388 124 380 C 106 387 90 394 76 400 C 58 408 64 430 82 424 C 104 416 126 404 144 392 C 142 404 134 416 124 426 C 112 442 136 456 148 442 C 162 424 172 402 184 382 C 190 372 197 362 205 352 C 235 342 275 336 318 327 C 330 324 340 319 347 316 C 370 323 400 330 422 340 L 462 330 L 484 300 Z"/>
+    <path id="shape-thigh-right" d="M 640 490 C 656 492 670 498 680 506 C 686 511 689 517 691 524 C 698 548 693 583 674 610 C 660 630 643 641 620 645 L 560 640 L 540 560 L 600 510 Z"/>
+    <path id="shape-leg-right" d="M 510 578 C 514 548 535 520 570 513 C 605 507 645 520 662 552 C 668 572 655 590 628 600 C 622 625 615 650 604 680 C 592 712 568 742 552 772 C 545 790 540 805 538 825 C 537 845 534 864 524 876 C 512 885 494 881 476 871 C 452 858 428 850 415 838 C 408 824 418 808 432 796 C 445 782 456 772 462 760 C 472 728 482 690 490 655 C 496 625 502 600 510 578 Z"/>
+    <path id="shape-arm-right" d="M 690 350 L 668 324 C 682 322 692 328 700 335 C 722 345 742 372 750 405 C 752 432 764 458 780 490 C 795 525 812 565 826 602 C 838 640 848 675 856 706 C 868 728 892 746 916 764 C 936 780 956 792 968 804 C 984 820 960 846 942 832 C 924 816 908 798 894 780 C 902 800 912 824 918 844 C 924 868 890 878 882 854 C 876 830 866 802 854 778 C 858 804 862 832 860 854 C 858 880 822 882 816 858 C 812 830 804 802 794 778 C 780 788 760 796 736 799 C 708 802 684 786 694 766 C 702 750 730 748 752 738 C 764 733 772 730 775 726 C 770 700 755 660 740 628 C 728 595 713 552 693 514 L 688 440 L 692 380 Z"/>
+    <path id="shape-head" d="M 625 147 C 682 145 728 192 727 252 C 727 322 686 390 611 390 C 560 391 522 335 521 275 C 520 205 566 149 625 147 Z"/>
+
+    <clipPath id="clip-scarf"><use href="#shape-scarf"/></clipPath>
+    <clipPath id="clip-leg-left"><use href="#shape-leg-left"/></clipPath>
+    <clipPath id="clip-torso"><use href="#shape-torso"/></clipPath>
+    <clipPath id="clip-arm-left"><use href="#shape-arm-left"/></clipPath>
+    <clipPath id="clip-thigh-right"><use href="#shape-thigh-right"/></clipPath>
+    <clipPath id="clip-leg-right"><use href="#shape-leg-right"/></clipPath>
+    <clipPath id="clip-arm-right"><use href="#shape-arm-right"/></clipPath>
+    <clipPath id="clip-head"><use href="#shape-head"/></clipPath>
+  </defs>
+
+  <g id="avatar">
+
+    <!-- back leg (viewer's left) -->
+    <g id="leg-left" class="part leg-left">
+      <use href="#shape-leg-left" class="base"/>
+      <g clip-path="url(#clip-leg-left)">
+        <path class="hl" d="M 240 474 C 262 448 300 437 345 439 C 400 442 450 457 500 482 L 500 380 L 240 380 Z"/>
+        <path class="shade" d="M 316 486 C 360 480 420 498 470 520 C 500 534 525 546 560 556 L 560 610 C 500 580 440 548 392 524 C 365 510 340 497 316 486 Z"/>
+        <path class="shade" d="M 352 512 C 364 545 360 592 366 655 L 400 655 L 400 512 Z"/>
+        <path class="hl" d="M 220 586 C 255 574 290 572 318 572 L 332 585 C 296 586 258 590 228 599 Z"/>
+      </g>
+      <path class="ink" d="M 472 447 C 425 426 365 411 315 410 C 292 409 272 416 262 432 C 252 452 252 480 262 505 C 270 528 288 555 312 574 C 290 575 255 576 236 578 C 224 580 222 592 232 598 C 270 614 320 630 368 642 C 384 642 390 628 386 612 C 378 585 380 555 384 528 C 388 524 392 522 396 523 C 445 545 480 558 512 568"/>
+      <!-- line weight -->
+      <path class="inkfill" d="M 262 432 C 252 452 252 480 262 505 C 244 482 244 450 262 432 Z"/>
+      <path class="inkfill" d="M 232 598 C 270 614 320 630 368 642 C 318 638 266 622 232 598 Z"/>
+      <path class="inkfill" d="M 396 523 C 445 545 480 558 512 568 C 478 566 440 554 396 523 Z"/>
+      <!-- thigh / calf fold, tapered -->
+      <path class="inkfill" d="M 394 526 C 366 512 340 498 312 483 C 342 492 370 506 398 519 Z"/>
+      <path class="ink fine" d="M 300 560 C 308 566 316 570 326 572"/>
+    </g>
+
+    <g id="torso" class="part torso">
+      <use href="#shape-torso" class="base"/>
+      <g clip-path="url(#clip-torso)">
+        <path class="shade" d="M 500 290 C 505 360 548 428 606 430 C 638 431 664 404 680 362 L 640 300 Z"/>
+        <path class="shade" d="M 415 335 C 445 360 458 410 480 455 C 492 482 505 500 525 512 L 560 545 C 530 505 508 455 494 412 C 484 380 470 350 450 328 Z"/>
+      </g>
+      <path class="ink" d="M 422 340 C 440 354 452 385 462 415 C 468 432 476 450 486 470 C 494 490 506 512 530 538"/>
+      <path class="ink" d="M 532 300 C 515 278 492 258 470 249 C 455 243 440 241 425 243"/>
+      <!-- neck line, tapered -->
+      <path class="inkfill" d="M 492 266 C 498 288 500 312 506 336 C 511 356 520 371 534 384 C 518 374 507 358 502 337 C 496 313 494 288 488 267 Z"/>
+      <!-- chest and rib lines, tapered -->
+      <path class="inkfill" d="M 546 397 C 562 403 578 406 594 404 C 578 410 560 408 546 397 Z"/>
+      <path class="inkfill" d="M 638 409 C 664 404 688 392 708 380 C 690 398 664 410 638 409 Z"/>
+      <path class="inkfill" d="M 528 438 C 565 462 610 476 640 480 C 652 482 662 485 670.7 487.2 L 667.3 493.8 C 658 490 648 487 638 485.5 C 606 481 562 466 528 438 Z"/>
+    </g>
+
+    <!-- trailing arm (viewer's left) -->
+    <g id="arm-left" class="part arm-left">
+      <use href="#shape-arm-left" class="base"/>
+      <g clip-path="url(#clip-arm-left)">
+        <path class="hl" d="M 40 345 C 80 336 120 332 150 328 C 195 312 240 290 290 279 C 325 272 360 272 392 275 C 400 265 420 262 445 268 C 478 276 505 296 525 320 L 560 300 L 480 215 L 300 215 L 40 300 Z"/>
+        <path class="shade" d="M 190 348 C 230 330 280 318 318 308 C 332 303 342 299 352 297 C 380 304 412 315 445 334 L 445 380 L 190 400 Z"/>
+        <path class="shade" d="M 30 386 C 62 384 96 378 126 368 L 124 382 C 100 392 60 398 30 400 Z"/>
+        <path class="shade" d="M 60 416 C 90 410 120 398 146 384 C 144 402 136 418 126 430 L 150 446 C 164 424 174 402 186 380 L 150 372 C 120 392 90 404 62 412 Z"/>
+      </g>
+      <path class="ink" d="M 470 249 C 455 243 440 241 425 243 C 412 244 404 246 397 248 C 365 243 325 245 295 251 C 262 258 232 278 205 297 C 192 306 180 312 168 316 C 140 320 105 326 74 332 C 56 336 54 358 72 360 C 94 360 114 357 130 355 C 104 360 76 364 54 367 C 32 370 32 396 54 396 C 78 394 102 388 124 380 C 106 387 90 394 76 400 C 58 408 64 430 82 424 C 104 416 126 404 144 392 C 142 404 134 416 124 426 C 112 442 136 456 148 442 C 162 424 172 402 184 382 C 190 372 197 362 205 352 C 235 342 275 336 318 327 C 330 324 340 319 347 316 C 370 323 400 330 422 340"/>
+      <!-- line weight on the underside -->
+      <path class="inkfill" d="M 205 352 C 235 342 275 336 318 327 C 276 344 236 352 205 352 Z"/>
+      <path class="inkfill" d="M 347 316 C 370 323 400 330 422 340 C 398 338 368 332 347 316 Z"/>
+      <!-- deltoid and elbow creases, tapered -->
+      <path class="inkfill" d="M 394 266 C 399 256 408 248 420 244 C 410 252 402 259 398 268 Z"/>
+      <path class="inkfill" d="M 318 327 C 328 320 338 316 350 316 C 340 320 330 325 322 332 Z"/>
+    </g>
+
+
+
+    <!-- front leg (viewer's right) -->
+    <g id="leg-right" class="part leg-right">
+      <use href="#shape-thigh-right" class="base"/>
+      <g clip-path="url(#clip-thigh-right)">
+        <path class="shade" d="M 596 598 C 640 612 672 590 692 548 L 720 548 L 720 670 L 596 670 Z"/>
+      </g>
+      <path class="ink" d="M 669 490.5 C 678.5 495.5 686 502 690 510 C 699 540 693 583 674 610 C 660 630 643 641 620 645"/>
+      <path class="inkfill" d="M 690 510 C 699 540 693 583 674 610 C 702 586 708 540 690 510 Z"/>
+
+      <use href="#shape-leg-right" class="base"/>
+      <g clip-path="url(#clip-leg-right)">
+        <path class="hl" d="M 552 530 C 580 512 630 518 652 548 C 640 570 622 590 612 615 C 600 660 580 720 556 770 C 548 800 545 830 540 890 L 462 890 C 478 830 500 770 515 710 C 528 660 532 610 536 575 C 538 555 543 540 552 530 Z"/>
+        <path class="shade" d="M 500 598 C 492 660 478 720 462 765 C 450 790 425 805 405 832 L 428 852 C 450 822 478 792 488 762 C 500 716 510 660 517 604 Z"/>
+      </g>
+      <path class="ink" d="M 628 597 C 622 625 615 650 604 680 C 592 712 568 742 552 772 C 545 790 540 805 538 825 C 537 845 534 864 524 876 C 512 885 494 881 476 871 C 452 858 428 850 415 838 C 408 824 418 808 432 796 C 445 782 456 772 462 760 C 472 728 482 690 490 655 C 496 625 502 600 510 578 C 514 548 535 520 570 513 C 605 507 640 518 658 546"/>
+      <!-- line weight -->
+      <path class="inkfill" d="M 462 760 C 472 728 482 690 490 655 C 474 688 464 726 462 760 Z"/>
+      <path class="inkfill" d="M 524 876 C 512 885 494 881 476 871 C 452 858 428 850 415 838 C 426 858 452 868 474 880 C 494 890 516 892 524 876 Z"/>
+      <path class="inkfill" d="M 658 546 C 664 556 666 566 662 576 C 660 566 656 556 652 548 Z"/>
+      <!-- knee notch and foot crease, tapered -->
+      <path class="inkfill" d="M 636 570 C 635 580 633 590 631.6 598 L 624.4 596 C 628 588 632 579 636 570 Z"/>
+      <path class="inkfill" d="M 450 810 C 470 815 490 825 506 840 C 488 830 470 822 450 814 Z"/>
+      <path class="inkfill" d="M 520 566 C 522 580 520 596 514 612 C 515 596 516 580 516 566 Z"/>
+    </g>
+
+    <!-- reaching arm (viewer's right) -->
+    <g id="arm-right" class="part arm-right">
+      <use href="#shape-arm-right" class="base"/>
+      <g clip-path="url(#clip-arm-right)">
+        <path class="hl" d="M 694 336 C 702 370 708 410 718 450 C 731 500 749 550 766 600 C 780 640 796 682 808 722 C 802 740 796 756 792 772 L 800 900 L 1000 900 L 1000 700 L 800 325 Z"/>
+        <path class="hl" d="M 700 764 C 712 752 736 750 760 742 L 772 752 C 750 764 724 766 704 776 Z"/>
+        <path class="shade" d="M 684 500 L 706 504 C 720 530 732 562 744 594 C 756 628 770 664 780 694 C 786 712 790 724 794 734 L 768 742 L 730 640 Z"/>
+        <path class="shade" d="M 794 778 C 804 802 812 830 816 858 L 836 874 C 832 842 824 808 812 780 Z"/>
+        <path class="shade" d="M 854 778 C 866 802 876 830 882 854 L 898 866 C 892 834 882 804 868 780 Z"/>
+        <path class="shade" d="M 894 780 C 908 798 924 816 942 832 L 954 834 C 936 814 920 796 906 778 Z"/>
+      </g>
+      <path class="ink" d="M 668 324 C 680 322 694 330 706 338 C 724 348 742 372 750 405 C 752 432 764 458 780 490 C 795 525 812 565 826 602 C 838 640 848 675 856 706 C 868 728 892 746 916 764 C 936 780 956 792 968 804 C 984 820 960 846 942 832 C 924 816 908 798 894 780 C 902 800 912 824 918 844 C 924 868 890 878 882 854 C 876 830 866 802 854 778 C 858 804 862 832 860 854 C 858 880 822 882 816 858 C 812 830 804 802 794 778 C 780 788 760 796 736 799 C 708 802 684 786 694 766 C 702 750 730 748 752 738 C 764 733 772 730 775 726 C 770 700 755 660 740 628 C 728 595 713 552 693 514"/>
+      <!-- line weight -->
+      <path class="inkfill" d="M 775 726 C 770 700 755 660 740 628 C 746 662 760 702 775 726 Z"/>
+      <path class="inkfill" d="M 794 778 C 780 788 760 796 736 799 C 764 808 788 798 794 778 Z"/>
+      <path class="inkfill" d="M 740 628 C 728 595 713 552 693 514 C 704 556 722 598 740 628 Z"/>
+    </g>
+
+    <g id="head" class="part head">
+      <use href="#shape-head" class="base"/>
+      <g clip-path="url(#clip-head)">
+        <path class="hl" d="M 600 135 C 640 165 668 215 670 275 C 671 320 655 360 625 400 L 770 400 L 770 130 Z"/>
+      </g>
+      <use href="#shape-head" class="ink"/>
+      <path class="inkfill" d="M 611 390 C 560 391 522 335 521 275 C 514 340 552 399 611 390 Z"/>
+      <path class="inkfill" d="M 727 252 C 727 322 686 390 611 390 C 690 396 733 328 727 252 Z"/>
+      <path class="eye" d="M 562 281 C 575 296 592 317 608 334 C 594 335 580 329 572 316 C 565 304 562 292 562 281 Z"/>
+      <path class="eye" d="M 698 322 C 683 327 664 333 648 339 C 644 341 641 344 642 347 C 655 351 676 347 688 337 C 692 333 696 327 698 322 Z"/>
+    </g>
+
+  </g>
+</svg>

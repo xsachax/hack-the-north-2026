@@ -14,10 +14,16 @@ export async function releaseSourceFiles(root = process.cwd()): Promise<string[]
       if (entry.isDirectory()) await walk(path);
       else if (entry.isFile() && !entry.name.endsWith(".test.ts") &&
         (/\.(ts|tsx|css)$/.test(entry.name) ||
-          (path.startsWith(nativeExtension) && /\.(js|json)$/.test(entry.name)))) files.push(path);
+          (path.startsWith(nativeExtension) && /\.(js|json)$/.test(entry.name)) ||
+          (path.startsWith("public/surfers/") && entry.name.endsWith(".svg")))) files.push(path);
     }
   }
   await walk("src");
+  const publicDirectory = (await readdir(root, { withFileTypes: true })).find((entry) => entry.name === "public");
+  if (publicDirectory) {
+    if (!publicDirectory.isDirectory()) throw new Error("deployment_source_symlink");
+    await walk("public");
+  }
   for (const entry of await readdir(join(root, "scripts"))) {
     if (entry === "worker.ts" || /^deployment.*\.ts$/.test(entry)) files.push(join("scripts", entry));
   }

@@ -87,6 +87,13 @@ export function readPublicProofLedger(db: DatabaseSync) {
 }
 
 export type PublicProofLedger = ReturnType<typeof readPublicProofLedger>;
+export function assertNativeOnlyProofInventory(db: DatabaseSync) {
+  const managed = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='managed_attempts'").get();
+  if (managed && db.prepare("SELECT 1 FROM managed_attempts LIMIT 1").get()) {
+    throw new Error("public_proof_mixed_ledger_requires_managed_harness");
+  }
+}
+
 export function assertPublicProofSettled(ledger: PublicProofLedger) {
   if (ledger.unfinished || ledger.launches.some((launch) => {
     const resource = launch.resource;
@@ -127,6 +134,7 @@ export async function openPublicProofLedger(directory: string) {
 export async function publicLedgerPreflight(directory: string) {
   const db = await openPublicProofLedger(directory);
   try {
+    assertNativeOnlyProofInventory(db);
     const ledger = readPublicProofLedger(db);
     let localResourcesSettled = true;
     try { assertPublicProofSettled(ledger); }
@@ -171,6 +179,7 @@ export async function preparePublicProof(inputPath: string, outputPath: string) 
   if (sourceDigest !== await releaseSourceDigest(packageDir)) throw new Error("public_package_source_mismatch");
   const db = await openPublicProofLedger(input.dataDir);
   try {
+    assertNativeOnlyProofInventory(db);
     const ledger = readPublicProofLedger(db);
     assertPublicProofSettled(ledger);
     const plannedReservations = input.request.assignments.length * ledger.policy.sessionSeconds;

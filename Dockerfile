@@ -6,6 +6,7 @@ COPY package.json package-lock.json .npmrc ./
 RUN npm ci --no-audit --no-fund
 COPY next.config.ts tsconfig.json ./
 COPY src ./src
+COPY public ./public
 COPY scripts ./scripts
 RUN node --import tsx scripts/deployment-build.ts
 
@@ -19,6 +20,7 @@ COPY --from=build /app/package.json /app/package-lock.json /app/.npmrc /app/next
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/.next ./.next
 COPY --from=build /app/src ./src
+COPY --from=build /app/public ./public
 COPY --from=build /app/scripts ./scripts
 USER 1000:1000
 EXPOSE 4321

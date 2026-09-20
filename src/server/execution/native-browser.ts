@@ -8,7 +8,7 @@ import { NATIVE_SHUTDOWN_RESERVE_SECONDS } from "../../lib/public-execution";
 import { PUBLIC_EXECUTION_IMPLEMENTATION_READY } from "../public-execution-readiness";
 import { CloudStartupError, type CloudUsage, type PrivateSessionReference } from "./cloud";
 import { buildComposedExtension, COMPOSED_POLICY_VERSION } from "./composed-extension";
-import { establishNativePolicy, assertTrustedBootstrap } from "./native-policy-session";
+import { establishNativePolicy, assertTrustedBootstrap, NativeBootstrapError } from "./native-policy-session";
 import { createNativeSdk } from "./native-sdk";
 import { nativeSessionMetadataSchema } from "./native-session-metadata";
 import { isNativeSessionRetired, NativeResources, type NativeResource, type NativeSessionClosure } from "./native-resources";
@@ -42,6 +42,8 @@ export type NativeCloudUsage = CloudUsage & {
     step?: NativeCdpStep;
     code: z.infer<typeof nativeStartupCodeSchema>;
     browserVersion?: string;
+    browserRevision?: string;
+    bootstrap?: NativeBootstrapError["bootstrap"];
   };
   gatewayDispatches?: number;
   blockedNativeTelemetryRequests?: number;
@@ -69,6 +71,7 @@ export async function createNativeBrowser(config: AppConfig, options: NativeBrow
   let closing: Promise<CleanupOutcome> | undefined;
   let phase = "native_admission";
   let cdpStep: NativeCdpStep | undefined;
+  let browserRevision: string | undefined;
   let sessionId: string | undefined;
   let sdk: ReturnType<typeof createNativeSdk> | undefined;
   let initialized = false;
@@ -232,7 +235,11 @@ export async function createNativeBrowser(config: AppConfig, options: NativeBrow
     cdpStep = "runtime_version";
     const versionSession = await playwright.newBrowserCDPSession();
     let product: string;
-    try { product = (await versionSession.send("Browser.getVersion")).product; }
+    try {
+      const version = await versionSession.send("Browser.getVersion");
+      product = version.product;
+      if (/^@?[a-f0-9]{40}$/.test(version.revision)) browserRevision = version.revision;
+    }
     finally { await versionSession.detach(); }
     const observedVersion = /^(?:HeadlessChrome|Chrome)\/(\d{1,4}\.\d{1,4}\.\d{1,8}\.\d{1,8})$/.exec(product)?.[1];
     if (!observedVersion || observedVersion !== playwright.version()) throw new Error("native_browser_version_unavailable");
@@ -310,6 +317,8 @@ export async function createNativeBrowser(config: AppConfig, options: NativeBrow
       ...(cdpStep ? { step: cdpStep } : {}),
       code: code.success ? code.data : "unknown",
       ...(usage.nativeObservedBrowserVersion ? { browserVersion: usage.nativeObservedBrowserVersion } : {}),
+      ...(browserRevision ? { browserRevision } : {}),
+      ...(error instanceof NativeBootstrapError ? { bootstrap: error.bootstrap } : {}),
     };
     throw new CloudStartupError(await close(), usage, phase);
   }

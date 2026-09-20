@@ -10,6 +10,31 @@ const stateSchema = z.strictObject({
   phase: z.literal("active"),
 });
 
+function bootstrapCounts(urls: readonly string[], trusted: ReadonlySet<string>) {
+  const counts = { trusted: 0, newTab: 0, internal: 0, extension: 0, http: 0, https: 0, other: 0 };
+  for (const url of urls) {
+    if (trusted.has(url)) counts.trusted++;
+    else if (url === "chrome://newtab/" || url === "chrome://new-tab-page/") counts.newTab++;
+    else if (url.startsWith("chrome:") || url.startsWith("chrome-untrusted:")) counts.internal++;
+    else if (url.startsWith("chrome-extension:")) counts.extension++;
+    else if (url.startsWith("https:")) counts.https++;
+    else if (url.startsWith("http:")) counts.http++;
+    else counts.other++;
+  }
+  return counts;
+}
+
+export class NativeBootstrapError extends Error {
+  readonly bootstrap;
+  constructor(context: BrowserContext, trustedPages: ReadonlySet<string>, trustedWorker: string) {
+    super("native_untrusted_bootstrap");
+    this.bootstrap = {
+      pages: bootstrapCounts(context.pages().map((page) => page.url()), trustedPages),
+      workers: bootstrapCounts(context.serviceWorkers().map((worker) => worker.url()), new Set([trustedWorker])),
+    };
+  }
+}
+
 export function assertTrustedBootstrap(context: BrowserContext, extensionOrigin: string): void {
   const allowed = new Set([
     "about:blank", `${extensionOrigin}/blank.html`, `${extensionOrigin}/wake-service-worker.html`,
@@ -17,7 +42,7 @@ export function assertTrustedBootstrap(context: BrowserContext, extensionOrigin:
   ]);
   if (context.pages().some((page) => !allowed.has(page.url()))
     || context.serviceWorkers().some((worker) => worker.url() !== `${extensionOrigin}/service-worker.js`)) {
-    throw new Error("native_untrusted_bootstrap");
+    throw new NativeBootstrapError(context, allowed, `${extensionOrigin}/service-worker.js`);
   }
 }
 

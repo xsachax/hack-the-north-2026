@@ -22,6 +22,7 @@
     "browserbase:smoke": "tsx scripts/browserbase-smoke.ts",
     "persona:integration": "tsx scripts/persona-integration.ts",
     "public:integration": "node --conditions=react-server --import tsx scripts/public-integration.ts",
+    "managed:integration": "node --conditions=react-server --import tsx scripts/managed-integration.ts",
     "worker": "node --conditions=react-server --import tsx scripts/worker.ts",
     "worker:reconcile": "node --conditions=react-server --import tsx scripts/worker-reconcile.ts",
     "worker:integration": "tsx scripts/worker-integration.ts",

@@ -65,6 +65,7 @@ jobs:
         run: |
           npm run deployment:build
           npm run public:integration -- --offline-preflight
+          npm run managed:integration -- --offline-preflight
       - name: Clean Node deployment package and actual HTTPS restart (offline)
         timeout-minutes: 5
         run: |

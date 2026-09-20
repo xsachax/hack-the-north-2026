@@ -5,7 +5,7 @@ import { createServer, type Server } from "node:https";
 import { createServer as portProbe } from "node:net";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { chromium, type Browser } from "playwright-core";
+import { chromium, webkit, type Browser } from "playwright-core";
 import { releaseSourceDigest as packageSourceDigest } from "../src/server/deployment/build";
 import { assertPrivateDirectory } from "./advanced-proof";
 import type { ReleaseDeployment } from "./release-integration";
@@ -24,15 +24,17 @@ type PackagedDeployment = {
 export function releaseRuntimeEnvironment(input: {
   dataDir: string; accessCode: string; paid: boolean;
   provider: { apiKey: string; projectId: string; replayOrigins: string };
-}, policy: RuntimePolicy = releasePolicy, publicOnly = false): NodeJS.ProcessEnv {
+}, policy: RuntimePolicy = releasePolicy, publicOnly = false, managed?: { agentId: string; allowedOrigins: readonly string[] }): NodeJS.ProcessEnv {
   return {
     NODE_ENV: "production", PATH: process.env.PATH, HOME: process.env.HOME,
     NEXT_TELEMETRY_DISABLED: "1", DEBUG: "false", NODE_OPTIONS: "--max-old-space-size=768",
     APP_ORIGIN: origin, DATA_DIR: resolve(input.dataDir), FIXTURE_PORT: String(packagePort),
     DEPLOYMENT_BIND_HOST: "127.0.0.1",
     FLASH_FLOOD_ACCESS_CODE: input.accessCode,
-    ENABLE_DEMO_RUNS: String(input.paid && !publicOnly),
-    ENABLE_PUBLIC_RUNS: String(input.paid && publicOnly), DEPLOYMENT_CONFIRM_PAID: String(input.paid),
+    ENABLE_DEMO_RUNS: String(input.paid && !publicOnly && !managed),
+    ENABLE_PUBLIC_RUNS: String(input.paid && publicOnly && !managed), DEPLOYMENT_CONFIRM_PAID: String(input.paid),
+    ENABLE_MANAGED_AGENTS: String(input.paid && !!managed),
+    ...(managed ? { BROWSERBASE_MANAGED_AGENT_ID: managed.agentId, MANAGED_AGENT_ALLOWED_ORIGINS: managed.allowedOrigins.join(",") } : {}),
     BROWSERBASE_API_KEY: input.provider.apiKey, BROWSERBASE_PROJECT_ID: input.provider.projectId,
     BROWSERBASE_REPLAY_ORIGINS: input.provider.replayOrigins,
     STAGEHAND_MODEL: "google/gemini-2.5-flash",
@@ -108,9 +110,20 @@ export function packagedPublicDeployment(packageDirectory: string, provider: {
   return packagedDeployment(packageDirectory, { ...provider, replayOrigins: "" }, policy, true);
 }
 
+export function packagedManagedDeployment(packageDirectory: string, provider: {
+  apiKey: string; projectId: string; agentId: string; allowedOrigins: readonly string[];
+  localUiBrowser?: "chromium" | "webkit";
+}, policy: WorkerPolicy): PackagedDeployment {
+  return packagedDeployment(packageDirectory, { ...provider, replayOrigins: "" }, policy, false, {
+    agentId: provider.agentId, allowedOrigins: provider.allowedOrigins, localUiBrowser: provider.localUiBrowser ?? "chromium",
+  });
+}
+
 function packagedDeployment(packageDirectory: string, provider: {
   apiKey: string; projectId: string; replayOrigins: string;
-}, policy: RuntimePolicy, publicOnly: boolean): PackagedDeployment {
+}, policy: RuntimePolicy, publicOnly: boolean, managed?: {
+  agentId: string; allowedOrigins: readonly string[]; localUiBrowser: "chromium" | "webkit";
+}): PackagedDeployment {
   const root = resolve(packageDirectory);
   return {
     async verifyPackage() {
@@ -135,7 +148,7 @@ function packagedDeployment(packageDirectory: string, provider: {
         signal.throwIfAborted();
         child = spawn(process.execPath, ["--import", "tsx", "scripts/deployment-start.ts"], {
           cwd: root, stdio: "ignore",
-          env: releaseRuntimeEnvironment({ ...input, paid: nextPaid, provider }, policy, publicOnly),
+          env: releaseRuntimeEnvironment({ ...input, paid: nextPaid, provider }, policy, publicOnly, managed),
         });
         const error = new Promise<never>((_, reject) => child!.once("error", () => reject(new Error("release_packaged_spawn_failed"))));
         await Promise.race([waitReady(child, signal), error]);
@@ -191,7 +204,7 @@ function packagedDeployment(packageDirectory: string, provider: {
           proxy!.listen(4330, "127.0.0.1", done);
         });
         await launch(false);
-        browser = await chromium.launch({ headless: true });
+        browser = await (managed?.localUiBrowser === "webkit" ? webkit : chromium).launch({ headless: true });
         return {
           browser, origin, close,
           async startWorker() {

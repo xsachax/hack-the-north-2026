@@ -72,6 +72,30 @@ async function configureDemo(page: Page) {
   await page.getByLabel("I am authorized to test this scope").check();
 }
 
+test("surfer badges respect reduced motion and specialty templates save editable owner profiles", async ({ page }, info) => {
+  const fixture = await offlineApi(page, info.outputPath("api"));
+  try {
+    await unlock(page);
+    const sprite = page.locator(".person-chip .persona-avatar img").first();
+    await expect(sprite).toHaveAttribute("src", /\/surfers\/animated\/avatar-\w+-idle\.svg/);
+    await expect.poll(() => sprite.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(1024);
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await expect.poll(() => sprite.evaluate((image: HTMLImageElement) => image.currentSrc)).toContain("/surfers/static/");
+    for (const [template, name] of [["security-review", "Security reviewer"], ["ux-review", "UX reviewer"], ["network-review", "Loading reviewer"]]) {
+      await page.getByRole("button", { name: "+ Create persona", exact: true }).click();
+      const editor = page.getByRole("region", { name: "Meet someone new" });
+      await editor.getByLabel("Start from a template", { exact: false }).selectOption(template);
+      await expect(editor.getByLabel("Name", { exact: true })).toHaveValue(name);
+      await editor.getByRole("button", { name: "Save persona" }).click();
+      await expect(page.getByRole("checkbox", { name: new RegExp(name) })).toBeChecked();
+    }
+    const saved = fixture.repository.listPersonas(fixture.owner);
+    expect(saved.find((persona) => persona.name === "Security reviewer")?.character).toContain("Never probes exploits");
+    expect(saved.find((persona) => persona.name === "Loading reviewer")?.character).toContain("only when the tools supply actual measurements");
+    expect(fixture.submissions).toBe(0);
+  } finally { await fixture.close(); }
+});
+
 test("bootstrap rejects bad codes and preserves no access code in storage; public mode is explicitly blocked", async ({ page }, info) => {
   const fixture = await offlineApi(page, info.outputPath("api"));
   try {

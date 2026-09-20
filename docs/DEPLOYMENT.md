@@ -44,6 +44,17 @@ different worker dependency installation or worker-only config is used.
 
 ## Provision and build
 
+The same package now also contains the opt-in managed Agents MVP at `/managed`.
+Enable it only after reviewing the [managed policy and worker limits](WORKER.md#managed-agents-worker-separate-mvp):
+set `ENABLE_MANAGED_AGENTS=true`, `BROWSERBASE_MANAGED_AGENT_ID` to a provisioned
+agent in the reviewed account, `MANAGED_AGENT_ALLOWED_ORIGINS` to exact public
+origins, and `DEPLOYMENT_CONFIRM_PAID=true`. Keep native/demo flags false when
+only managed execution is intended. Runtime secrets remain server-only.
+The reusable agent is not automatically deleted by the worker; the operator
+owns its lifecycle. This mode does not enforce native network confinement or
+provider-side hard TTL/model-call caps, and does not change the health endpoint's
+truthful `productReleaseReady: false` / issue8 gate.
+
 Run from the repository root. Runtime files below are git-ignored and excluded
 from the allowlisted Docker build context. Do not copy `.env.local`, data, reports,
 screenshots, private run outputs, keys, or the host `node_modules` into the image.

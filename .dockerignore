@@ -11,6 +11,10 @@
 !src/**/*.css
 !src/server/execution/native-policy-extension/**/*.js
 !src/server/execution/native-policy-extension/**/*.json
+!public/
+!public/surfers/
+!public/surfers/**/
+!public/surfers/**/*.svg
 !scripts/
 !scripts/worker.ts
 !scripts/deployment*.ts
