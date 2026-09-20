@@ -165,14 +165,21 @@ async function createFromTemplate(page: Page, templateId: string, name: string) 
   await expect(page.getByLabel(`Select ${name}`, { exact: true })).toBeChecked();
 }
 
-test("managed execution is visibly disabled without starting anything", async ({ page }) => {
+test("disabled managed execution still allows preparing goals and personas without starting anything", async ({ page }) => {
   const fixture = await mockManaged(page, { enabled: false });
   await page.goto("/managed");
   await expect(page.getByRole("status")).toContainText("Managed launch is disabled by the operator");
-  await expect(page.getByLabel("Initial target URL")).toBeDisabled();
+  await page.getByLabel("Initial target URL").fill("https://example.com/help");
+  await page.getByLabel("What should the agents try?").fill("Review the help page.");
+  await page.getByLabel("Success criteria (one per line, up to 6)").fill("The help page is clear.");
   await expect(page.getByRole("button", { name: "Launch managed agents" })).toBeDisabled();
   await expect(page.getByText("Browserbase tools cannot be disabled.", { exact: false }).first()).toBeVisible();
   await expect(page.getByText("It is not arbitrary safe browsing.", { exact: false })).toBeVisible();
+  await createFromTemplate(page, "ux-review", "Offline UX reviewer");
+  await acknowledge(page);
+  await expect(page.getByRole("button", { name: "Launch 1 managed agent", exact: true })).toBeDisabled();
+  await page.getByLabel("Initial target URL").press("Enter");
+  expect(fixture.personaMutations).toHaveLength(1);
   expect(fixture.submissions).toHaveLength(0);
   expect(fixture.unexpected).toEqual([]);
 });

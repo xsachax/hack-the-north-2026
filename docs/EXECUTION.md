@@ -26,6 +26,10 @@ endpoint; no SDK private mutation or vendor rewrite is used. Requests retain the
 same owner isolation, immutable objectives and shared reservation ceiling as
 the original worker, in separate managed tables.
 
+The managed launch page lets an authenticated owner prepare objectives and save
+custom personas while execution is disabled. Only launch is operator-gated;
+editing a persona never allocates a browser.
+
 Browserbase controls the managed tool set, which includes non-browser tools.
 Using a browser is instructed, not guaranteed by dispatch alone. A Search/Fetch-only
 answer is not genuine browser acceptance. Scope and read-only instructions

@@ -251,7 +251,7 @@ export function ManagedLaunch() {
       </details>
     </section>}
     <form className="launch-form" onSubmit={submit} noValidate>
-      <fieldset disabled={locked || !enabled || !!editor || !!deleting}>
+      <fieldset disabled={locked || !loaded || !!editor || !!deleting}>
         <legend className="managed-form-title">Give your crowd a mission.</legend>
         <p className="muted">Start with a shared goal and criteria, then adjust them for each selected persona below. The server snapshots each persona when the run is saved.</p>
         <label>Initial target URL
@@ -318,7 +318,7 @@ export function ManagedLaunch() {
       </fieldset>
       <p className="muted center" role="status">{!loaded ? "Checking managed execution readiness…" : enabled
         ? "Browserbase-managed · up to 8 agents per run · no automatic paid retries"
-        : "Managed launch is disabled by the operator or has no approved initial origins. No browser will be started."}</p>
+        : "Managed launch is disabled by the operator or has no approved initial origins. You can prepare goals and personas, but no browser will be started."}</p>
     </form>
     {editor && !locked && <PersonaEditor key={editor === "new" ? "new" : editor.id}
       persona={editor === "new" ? undefined : editor} onClose={() => setEditor(null)}
