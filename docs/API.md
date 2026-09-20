@@ -6,12 +6,13 @@ The operator dashboard consumes these owner-scoped endpoints; mock preview data
 is separate from durable worker execution.
 
 The combined [native/public execution path](EXECUTION.md#native-browser-policy-candidate-offline-phase-a)
-remains disabled pending integrated acceptance. Unversioned website `/runs`
+is a hosted-validation candidate, disabled by default. Unversioned website `/runs`
 requests retain `blocked_unsupported` without allocation. New public opt-in is a
 distinct immutable contract; `/capabilities` must report its actual readiness.
-The isolated SDK lifecycle integration does not change admission: the source
-readiness constant remains false, and neither an operator flag nor passing local
-WSS/synthetic Gateway tests enables paid public work.
+The source readiness constant now permits the implemented path, but explicit
+operator enablement, strong owner authentication and per-session native
+attestation remain mandatory. Passing local WSS/synthetic Gateway tests does not
+establish hosted public-site acceptance.
 
 ### Explicit public opt-in (not enabled by default)
 

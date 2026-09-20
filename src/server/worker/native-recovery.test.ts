@@ -4,8 +4,6 @@ import { configSchema } from "../../lib/config";
 import type { NativeResource } from "../execution/native-resources";
 import { createCloudRecovery, type CloudRecoveryRequest } from "./cloud-recovery";
 
-// Future-path provider mocks only; the real checkpoint blocks native recovery.
-vi.mock("../public-execution-readiness", () => ({ PUBLIC_EXECUTION_IMPLEMENTATION_READY: true }));
 
 const mocks = vi.hoisted(() => ({
   sessions: { list: vi.fn(), retrieve: vi.fn(), update: vi.fn(), create: vi.fn() },

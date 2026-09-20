@@ -46,7 +46,7 @@ export async function createNativeBrowser(config: AppConfig, options: NativeBrow
   const started = Date.now();
   const timeoutSeconds = Math.min(config.SESSION_TIMEOUT_SECONDS, 300);
   const usage: NativeCloudUsage = { allocationAttempted: false, reservedSeconds: timeoutSeconds, elapsedSeconds: 0 };
-  if (!PUBLIC_EXECUTION_IMPLEMENTATION_READY) {
+  if (!PUBLIC_EXECUTION_IMPLEMENTATION_READY || !config.ENABLE_PUBLIC_RUNS) {
     throw new CloudStartupError({ status: "closed", errors: [] }, usage, "public_checkpoint", "unsupported");
   }
   const stop = new AbortController();

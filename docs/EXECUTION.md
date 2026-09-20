@@ -4,13 +4,13 @@ This reference covers the typed execution engine, the legacy fixture integration
 and layer04b's reusable controlled-site execution. Layer04 integrates it with a separate
 [durable worker](WORKER.md), protected demo admission, private artifact mapping
 and owner SSE. The standalone layer03 command remains a separate manual ledger.
-Public website admission is **hard-disabled in this offline checkpoint** (release
-blocker #8), even with `ENABLE_PUBLIC_RUNS=true`. The source-level
-`PUBLIC_EXECUTION_IMPLEMENTATION_READY=false` stop applies to API admission,
-worker execution and both direct public/native factories. Paid public CLI modes
-reject before provider operations; there is no approval-file or environment
-override. The legacy controlled factory rejects public targets. This is a release blocker, not a
-claim that the final product no longer needs authorized arbitrary websites.
+Public website admission is an **operator-gated hosted-validation candidate**.
+`PUBLIC_EXECUTION_IMPLEMENTATION_READY=true` permits the implemented path;
+`ENABLE_PUBLIC_RUNS` remains false by default. Explicit immutable request policies,
+strong owner authentication, bounded worker accounting and actual per-session
+native attestation are still required. Source readiness alone is not hosted
+acceptance or authorization to spend. The legacy controlled factory rejects
+public targets.
 
 ## Offline integration and deferred public acceptance
 
@@ -18,7 +18,7 @@ The integration starts from checkpoint #24 at
 `ccb57a7929c37b9329e1aee0b9305af4c256ed66` and preserves immutable admission contracts, historical idempotency,
 resource journals, native composition, scoped CDP routing, bounded HTTP/Gateway
 transports, source binding and offline regression coverage. Controlled execution
-remains available under its existing gates. Public activation is still blocked:
+remains available under its existing gates. Public acceptance is still unproved:
 the issue's GitHub state is not proof that the #8 acceptance requirements are met.
 
 The production native factory now owns pinned Stagehand through an exclusive
@@ -59,14 +59,16 @@ require a single owned-sentinel refusal before starting the negative lane:
 `chrome.proxy.settings.set()` completion alone is not a network-service barrier.
 
 Deferred acceptance includes actual hosted version/profile/native-policy
-conformance and a separately approved external-goal
-proof with independently verified accounting and closure. Timer expiry is never
-retirement evidence. No provider reads, uploads, allocations or model calls are
-authorized. The existing shared 1,800-second lifetime reservation ledger must be
-identified and reconciled without resetting it. Fresh explicit approval must bind
-source/package/harness/archive/ledger digests; default concurrency is one,
-maximum two, TTL <=300 seconds and failed attempts count. Operator flags cannot
-replace approval or per-session attestation.
+conformance and an authorized external-goal proof with independently verified
+accounting and closure. Timer expiry is never retirement evidence. Following
+the merge of #25, the owner authorized repeated genuine testing with a
+100-hour total ceiling. This does not reset earlier accounting: provider usage,
+rounding uncertainty and the complete earlier 1,800-second reservation allowance
+must be carried conservatively into the new test baseline. The initial batch
+retains a smaller 1,800-second non-refundable reservation ceiling, concurrency
+one (maximum two), TTL <=300, and no automatic allocation retry. Freeze exact
+source/package/harness/archive/ledger receipts before each invocation. Operator
+flags cannot replace authorization or per-session attestation.
 
 ### Guarded public-goal integration command
 
@@ -75,8 +77,8 @@ source-gated hosted runner. It uses the actual Browserbase API, the clean
 packaged supervisor/worker, owner API, durable artifacts, live-wall events and
 reports. It does not call a second model provider or inherit `OPENAI_API_KEY`;
 the pinned Stagehand Gateway retains Browserbase key/session attribution.
-These commands are **not authorization**, and the hosted mode remains blocked
-by the source readiness constant until the reviewed acceptance plan permits it.
+These commands are **not authorization**. The hosted mode requires an approved,
+digest-bound plan and the source readiness gate; no environment override exists.
 
 ```sh
 npm run deployment:build
@@ -631,16 +633,16 @@ unsafe opt-out. Until these inputs and real positive/negative proofs exist,
 
 #### Composed extension and trusted bootstrap
 
-The offline integration adds `composed-extension.ts`, `native-browser.ts`,
+The integration adds `composed-extension.ts`, `native-browser.ts`,
 `native-policy-session.ts`, `native-proxy-attestation.ts` and
-`native-resources.ts`. These are not public API admission or hosted acceptance.
-The maintained public integration CLI accepts only offline modes. Its
+`native-resources.ts`. These components alone are not hosted acceptance.
+The maintained public integration CLI has offline and guarded hosted modes. Its
 `--offline-preflight` checks a clean verified deployment package;
 `--offline-native-probe` executes the actual TSX entry path with a local composed
 browser, real SDK initialization, native attestation and read-only driver/CDP
 mechanics against explicitly synthetic owned responses. It uses no provider
-configuration or inference and is not public-site acceptance. Paid modes fail
-before allocation.
+configuration or inference and is not public-site acceptance. Paid modes require
+the separate plan/approval and existing-ledger checks described above.
 
 The deployable package source fingerprint is not the proof-harness fingerprint:
 release packaging intentionally omits manual integration scripts and test sources.

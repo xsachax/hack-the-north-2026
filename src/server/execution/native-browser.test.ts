@@ -9,7 +9,6 @@ import type { NativeResource } from "./native-resources";
 import type { Brain } from "./types";
 
 // Test-only access while hosted acceptance is pending; provider/worker bindings are mocked.
-vi.mock("../public-execution-readiness", () => ({ PUBLIC_EXECUTION_IMPLEMENTATION_READY: true }));
 
 const mocks = vi.hoisted(() => {
   class APIError extends Error {
@@ -121,6 +120,7 @@ vi.mock("./native-policy-session", async (importOriginal) => ({
 const config = configSchema.parse({
   BROWSERBASE_API_KEY: "unit-test-native-key",
   BROWSERBASE_PROJECT_ID: "00000000-0000-4000-8000-000000000001",
+  ENABLE_PUBLIC_RUNS: "true",
 });
 const sessionId = "00000000-0000-4000-8000-000000000002";
 const extensionId = "00000000-0000-4000-8000-000000000003";
@@ -221,6 +221,16 @@ afterEach(() => {
 });
 
 describe("offline fresh native browser admission", () => {
+  it("rejects direct native allocation without operator opt-in before preparing an archive or provider", async () => {
+    const error = await startupError(options(), { ...config, ENABLE_PUBLIC_RUNS: false });
+    expect(error).toMatchObject({ code: "unsupported", usage: { allocationAttempted: false },
+      cleanup: { status: "closed", errors: [] } });
+    expect(mocks.build).not.toHaveBeenCalled();
+    expect(mocks.sdk).not.toHaveBeenCalled();
+    expect(mocks.extensions.create).not.toHaveBeenCalled();
+    expect(mocks.sessions.create).not.toHaveBeenCalled();
+  });
+
   it("uses exact no-retry SDK and fresh correlated session settings", async () => {
     const input = options();
     const execution = await createNativeBrowser(config, input);

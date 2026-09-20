@@ -9,12 +9,13 @@ const provider = vi.hoisted(() => ({
   sessions: { list: vi.fn(), retrieve: vi.fn(), update: vi.fn(), create: vi.fn() },
   extensions: { delete: vi.fn(), retrieve: vi.fn(), create: vi.fn() },
 }));
+vi.mock("../public-execution-readiness", () => ({ PUBLIC_EXECUTION_IMPLEMENTATION_READY: false }));
 vi.mock("@browserbasehq/sdk", () => ({
   default: class { sessions = provider.sessions; extensions = provider.extensions; },
 }));
 beforeEach(() => vi.clearAllMocks());
 
-it.each([false, true])("blocks direct native recovery with actual readiness=false, known resource=%s", async (known) => {
+it.each([false, true])("blocks direct native recovery with source readiness=false, known resource=%s", async (known) => {
   expect(PUBLIC_EXECUTION_IMPLEMENTATION_READY).toBe(false);
   const resource: NativeResource = { version: 1, archiveSha256: "a".repeat(64), state: "quarantined",
     extensionId: randomUUID(), sessionId: randomUUID(), sessionAllocationAttempted: true };

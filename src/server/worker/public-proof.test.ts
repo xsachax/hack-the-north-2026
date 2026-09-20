@@ -15,6 +15,7 @@ import { runPublicGoal, verifyPublicProofClosure } from "../../../scripts/public
 import { releaseRuntimeEnvironment } from "../../../scripts/release-runtime";
 
 vi.mock("server-only", () => ({}));
+vi.mock("../public-execution-readiness", () => ({ PUBLIC_EXECUTION_IMPLEMENTATION_READY: false }));
 const request = publicProofRequestSchema.parse({
   authorizationAcknowledged: true as const, executionPolicy: PUBLIC_EXECUTION_POLICY, assetPolicy: PUBLIC_ASSET_POLICY,
   scope: { targetUrl: "https://example.com/docs", allowedSubdomains: [], pathPrefixes: ["/docs"] },
@@ -180,7 +181,7 @@ describe("bounded public proof planning and existing ledger", () => {
     }
   });
 
-  it("keeps real execution source-disabled even with files and environment flags supplied", async () => {
+  it("keeps a disabled source gate closed even with files and environment flags supplied", async () => {
     const outbound = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("provider_access_forbidden"));
     await expect(runPublicGoal("not-read.json", "not-read.json", new AbortController().signal)).rejects.toThrow("public_checkpoint_disabled");
     expect(outbound).not.toHaveBeenCalled();

@@ -7,8 +7,6 @@ import { ModelBudget } from "./budget";
 import { personas } from "../../lib/personas";
 import type { PublicNetworkOptions } from "./public-network";
 
-// Test-only composition coverage, not a runtime opt-out from the checkpoint gate.
-vi.mock("../public-execution-readiness", () => ({ PUBLIC_EXECUTION_IMPLEMENTATION_READY: true }));
 
 const mocks = vi.hoisted(() => {
   const order: string[] = [];

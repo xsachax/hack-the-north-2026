@@ -53,11 +53,13 @@ describe("deployment configuration", () => {
     expect(config.env.DEPLOYMENT_BIND_HOST).toBe("127.0.0.1");
     expect(config.env.FIXTURE_PORT).toBe("4321");
   });
-  it("cannot start paid public work through a deployment flag while source readiness is false", () => {
-    const env = { ...environment(), ENABLE_PUBLIC_RUNS: "true" };
-    expect(deploymentConfig(env).paid).toBe(false);
-    expect(() => deploymentConfig({ ...env, DEPLOYMENT_CONFIRM_PAID: "true" }))
-      .toThrow("deployment_paid_confirmation_required");
+  it("requires explicit paid confirmation and private configuration for public-only startup", () => {
+    const env = { ...environment(), ENABLE_PUBLIC_RUNS: "true",
+      BROWSERBASE_API_KEY: "offline-unused", BROWSERBASE_PROJECT_ID: randomUUID() };
+    expect(() => deploymentConfig(env)).toThrow("deployment_paid_confirmation_required");
+    const config = deploymentConfig({ ...env, DEPLOYMENT_CONFIRM_PAID: "true" });
+    expect(config.paid).toBe(true);
+    expect(config.env.ENABLE_DEMO_RUNS).not.toBe("true");
   });
   it.each([
     { APP_ORIGIN: "http://example.com" },

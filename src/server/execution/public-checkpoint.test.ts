@@ -12,6 +12,7 @@ const forbidden = vi.hoisted(() => ({
   network: vi.fn(() => { throw new Error("network_forbidden"); }),
 }));
 vi.mock("server-only", () => ({}));
+vi.mock("../public-execution-readiness", () => ({ PUBLIC_EXECUTION_IMPLEMENTATION_READY: false }));
 vi.mock("@browserbasehq/sdk", () => ({
   default: class { constructor() { forbidden.provider(); } },
   toFile: forbidden.provider,
@@ -48,7 +49,7 @@ function options(): PublicExecutionOptions {
 }
 afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); });
 
-describe("actual offline checkpoint hard stop, no readiness mock", () => {
+describe("source-disabled factory rollback", () => {
   it.each([true, false])("blocks both direct factories with ENABLE_PUBLIC_RUNS=%s", async (enabled) => {
     vi.stubEnv("ENABLE_PUBLIC_RUNS", "true");
     vi.stubEnv("PUBLIC_EXECUTION_IMPLEMENTATION_READY", "true");

@@ -19,7 +19,6 @@ const testState = vi.hoisted(() => ({
   start: vi.fn(), retrieve: vi.fn(), extension: vi.fn(), provider: vi.fn(),
 }));
 vi.mock("server-only", () => ({}));
-vi.mock("../public-execution-readiness", () => ({ PUBLIC_EXECUTION_IMPLEMENTATION_READY: true }));
 vi.mock("../deployment/build", () => ({
   releaseSourceDigest: async () => "a".repeat(64), assertReleaseBuild: async () => "b".repeat(64),
 }));

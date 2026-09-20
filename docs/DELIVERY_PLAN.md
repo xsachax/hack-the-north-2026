@@ -21,10 +21,10 @@ The native-policy baseline (#22) and bounded public HTTP broker (#23,
 product acceptance. Checkpoint #24 is merged at
 `ccb57a7929c37b9329e1aee0b9305af4c256ed66`. This integration preserves its
 durable worker contracts, explicit immutable API opt-in, UI capability gates
-and private resource reconciliation while replacing unsafe SDK cleanup. Public execution is
-source-level hard-disabled, including when `ENABLE_PUBLIC_RUNS=true` or a caller
-supplies a readiness configuration. API, worker, direct factories and paid public
-CLI paths remain disabled until separately approved hosted acceptance.
+and private resource reconciliation while replacing unsafe SDK cleanup. After
+the merge of #25 and explicit authorization for genuine testing, the implemented
+public path is a hosted-validation candidate. Operator enablement remains
+default-off; source readiness never substitutes for native session attestation.
 Unversioned historical website requests never become executable retroactively.
 
 The initial public surface is fresh-profile, read-only HTTP navigation/assets,
@@ -39,23 +39,23 @@ now integrates metadata-only connection and an exclusive SDK worker: actual
 thread exit settles inner retries before listener/CDP retirement. It preserves
 branded one-key/session attribution without invoking SDK browser close methods.
 The socket-monitor prototype is not a production lifecycle dependency. No merge
-authority has been granted, and this integration must not close #1/#8/#16.
+authority is implied by testing, and this integration must not close #1/#8/#16.
 
-No provider operations are authorized for this integration yet. A hosted plan must
-require fresh source/package/harness/archive/ledger-bound approval; credentials
-and operator flags are not approval. The shared public-egress reservation ceiling is 1800
-browser-seconds for the whole effort, not per child or invocation; failed attempts
-spend it and refunds do not renew it. Planning baseline is 1346 external seconds
-(historical actual 1345.293 seconds, 32 closed sessions, three deleted contexts).
-Default proof concurrency is one, maximum two, TTL <=300 seconds. Possession of
-credentials, offline conformance or this plan is not provider authorization.
+The owner subsequently authorized repeated genuine tests with a 100-hour total
+ceiling. Provider usage must be reconciled before allocation; retain historical
+accounting and conservatively carry the complete former 1,800-second reservation
+allowance rather than resetting it. The first batch retains a smaller 1,800-second
+non-refundable reservation cap. Source/package/harness/archive/ledger receipts
+remain bound to each invocation. Default proof concurrency is one, maximum two,
+TTL <=300 seconds, with no automatic allocation retry. Credentials and operator
+flags alone are still not authorization.
 
 The follow-up product ceiling is eight agents, with conservative concurrency
 defaults retained. This does not raise the separate proof concurrency or lifetime
 spending ceiling. The guarded public integration command now prepares an offline
 plan from the existing authoritative worker ledger, binds both harness and clean
 package inputs, and has an approval-gated Browserbase/API/worker/wall/report
-runner. Its source checkpoint remains off. No hosted goal has been accepted and
+runner. Its source gate now permits the opt-in candidate. No hosted goal has been accepted and
 no OpenAI key is needed by the current one-key Gateway path.
 
 ## 2. Architecture and invariants
@@ -133,7 +133,7 @@ separately recorded in the accountability ledger.
 | Human takeover | Managed acknowledged exclusivity enabled | Bounded grants/window, drained agent work, fresh handback; interval markers, not detailed human actions or provider-wide revocation |
 | Scoped rerun/comparison | Enabled | Immutable selected snapshots, exact criterion/scope/version, confirming coverage; absence is not a fix |
 | Regression export/reduction | Controlled second-coupon only | Grounded finite actions, independent failure oracle, fresh reserved candidates, shortest found not global minimum |
-| Arbitrary authorized public websites | Blocked, #8 open | No opt-out or fixture substitution; genuine browser network prerequisite still required |
+| Arbitrary authorized public websites | Hosted-validation candidate; operator default off | Genuine hosted acceptance remains unproved regardless of #8's GitHub state; no unsafe opt-out or fixture substitution |
 
 One-key Gateway persona decisions are proven through Stagehand v4's constrained
 structured extraction. The implemented input is DOM plus viewport screenshot,

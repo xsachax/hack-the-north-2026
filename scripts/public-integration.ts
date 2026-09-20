@@ -4,6 +4,7 @@ import { assertCleanEnvironment, assertReleaseBuild, releaseSourceDigest } from 
 import { buildComposedExtension, COMPOSED_POLICY_VERSION } from "../src/server/execution/composed-extension";
 import { PROVED_CHROMIUM_VERSION } from "../src/server/execution/native-policy-session";
 import { publicHarnessDigest } from "./public-proof-source";
+import { PUBLIC_EXECUTION_IMPLEMENTATION_READY } from "../src/server/public-execution-readiness";
 
 export async function publicPreflight(args = process.argv.slice(2)) {
   if (args.length !== 1 || args[0] !== "--offline-preflight") throw new Error("public_checkpoint_disabled");
@@ -18,6 +19,7 @@ export async function publicPreflight(args = process.argv.slice(2)) {
     harnessDigest: await publicHarnessDigest(),
     archiveDigest: bundle.sha256, vendorArchiveDigest: bundle.provenance.vendorArchiveSha256,
     remotePolicyProved: false,
+    implementationReady: PUBLIC_EXECUTION_IMPLEMENTATION_READY,
     publicExecutionEnabled: false,
   };
 }
@@ -38,7 +40,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       ? import("./public-goal").then(({ runPublicGoal }) => runPublicGoal(args[1], args[2], controller.signal))
     : publicPreflight(args);
   result.then((receipt) => console.log(JSON.stringify(receipt))).catch(() => {
-    console.error("Public offline preflight failed closed; paid public execution is unavailable in this checkpoint.");
+    console.error("Public integration failed closed; inspect the private plan, configuration and resource ledger.");
     process.exitCode = 1;
   }).finally(() => {
     process.off("SIGINT", abort);

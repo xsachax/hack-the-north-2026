@@ -1,7 +1,7 @@
 # Durable worker runbook (layer 04)
 
 The separate Node process preserves registered controlled-site execution and
-contains a distinct, source-disabled public read-only path. Legacy/unversioned
+contains a distinct, operator-gated public read-only path. Legacy/unversioned
 website requests remain `blocked_unsupported` without allocating a browser;
 enabling a flag cannot upgrade those stored requests. Release gate #8 remains
 unproved regardless of the issue's GitHub state. There is no fixture fallback or target-validation exception.
@@ -13,23 +13,21 @@ The genuine public factory binds the [HTTP broker](EXECUTION.md#public-http-tran
 to immutable navigation/asset snapshots and the durable lease. The worker
 requires both `native-public-v1` and `public-http-readonly-v1`, operator enablement
 and implementation readiness; all native profile/policy checks remain mandatory.
-This offline checkpoint hard-disables new public claims and execution directly
-through `PUBLIC_EXECUTION_IMPLEMENTATION_READY=false`. Neither
-`ENABLE_PUBLIC_RUNS=true` nor injected runtime/admission readiness can override
-the source-level stop. Queued versioned public jobs finish `blocked_unsupported` before
-any launch reservation or public factory call. Re-enablement requires the new
-public-execution plan and a reviewed source change, not configuration changes.
-Historical tests and the standalone broker proof are not acceptance.
+The hosted-validation candidate sets `PUBLIC_EXECUTION_IMPLEMENTATION_READY=true`;
+`ENABLE_PUBLIC_RUNS` remains false by default. A rollback to false still blocks
+claims, direct factories and native recovery before provider operations. Never
+requeue historical blocked jobs when enabling a new deployment. Historical tests
+and the standalone broker proof are not acceptance.
 
 The startup path distinguishes controlled and public authorization. Once source
 readiness is approved, a public-only worker can start without enabling demo runs
 or fetching the fixture health page. It skips queued controlled jobs rather than
 spending on them, and does not pump controlled reproduction work. Deployment
-still requires explicit paid confirmation. This future-path wiring does not
-override the current source stop; existing orphan cleanup remains separate from
+still requires explicit paid confirmation. This wiring does not
+override a disabled source gate; existing orphan cleanup remains separate from
 authority to launch a new job.
 
-The same source stop suspends automatic and manual public/native reconciliation,
+When disabled, the same source stop suspends automatic and manual public/native reconciliation,
 including restored native-resource or discovery-event rows attached to a launch.
 Worker startup and `worker:reconcile` perform no provider lookup, release, or
 extension deletion for those records. Known identities, pending/quarantined
@@ -38,10 +36,9 @@ The reconciliation CLI exits unsuccessfully with
 `public_recovery_checkpoint_disabled_reservation_retained`. Controlled-only
 reconciliation is unchanged.
 
-`public-checkpoint.test.ts` exercises the actual false constant and operator/
-admission flags together. Future-path worker and deadline unit tests explicitly
-mock readiness inside Vitest only; their passing results do not enable public
-execution or establish live acceptance.
+`public-checkpoint.test.ts` injects the disabled source state to exercise rollback
+with operator/admission flags. Public API, worker and deadline tests now use the
+actual candidate source state. Passing offline tests do not establish live acceptance.
 
 The #8 [native-policy probe](EXECUTION.md#native-browser-policy-candidate-offline-phase-a)
 has both offline conformance tests and a production adapter used by the gated
@@ -181,11 +178,12 @@ the requirement for fresh explicit digest-bound hosted approval changes.
 | `WORKER_SHUTDOWN_MS` | 60000 | 10000..120000 graceful deadline, then process exits with durable recovery required |
 | `FIXTURE_PORT` | 4321 | Trusted loopback Next fixture source; no public tunnel |
 | `ENABLE_DEMO_RUNS` | false | Required for demo/registered-site API admission and ordinary paid worker CLI |
-| `ENABLE_PUBLIC_RUNS` | false | Cannot enable public execution at this offline checkpoint; the immutable source-level readiness stop overrides this flag |
+| `ENABLE_PUBLIC_RUNS` | false | Explicit public-only admission; source readiness and per-session native attestation remain mandatory |
 
-The checkpoint worker always requires `ENABLE_DEMO_RUNS=true` plus
-`--confirm-paid` and a healthy controlled fixture source. The public flag cannot
-substitute for this paid-execution gate. All maintained harness worker subprocesses
+The worker requires `--confirm-paid` and at least one authorized execution mode.
+Controlled mode additionally requires `ENABLE_DEMO_RUNS=true` and a healthy
+controlled fixture source; public-only mode never grants controlled authority.
+All maintained harness worker subprocesses
 pass Node's `--conditions=react-server`; they retain the server-only import guard.
 
 Explicit environment settings override worker defaults; `.env.example` keeps

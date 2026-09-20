@@ -103,7 +103,7 @@ test("public opt-in stays unavailable without implementation readiness and expla
     await unlock(page);
     await page.getByLabel("Opt in to public read-only execution").check();
     await expect(page.getByRole("button", { name: "Launch public read-only run" })).toBeDisabled();
-    await expect(page.getByRole("status").filter({ hasText: "disabled in this offline checkpoint" })).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: "native browser and broker integration is not ready" })).toBeVisible();
     await expect(page.getByText("Assets never create an exception", { exact: false })).toBeVisible();
     await expect(page.getByText("Fresh profiles only; no typing, forms, saved state or human takeover.", { exact: false })).toBeVisible();
     await expect(page.getByText("not transparent browser-request replay", { exact: false })).not.toBeVisible();
@@ -115,7 +115,7 @@ test("public opt-in stays unavailable without implementation readiness and expla
   } finally { await fixture.close(); }
 });
 
-test("checkpoint blocks public opt-in even with injected readiness and operator enablement", async ({ page }, info) => {
+test("public opt-in rejects a TTL without native shutdown reserve even when enabled", async ({ page }, info) => {
   const fixture = await offlineApi(page, info.outputPath("api"), {
     allowPublicRuns: true, publicExecutionReady: true, publicSessionTimeoutSeconds: 80,
   });
@@ -123,12 +123,34 @@ test("checkpoint blocks public opt-in even with injected readiness and operator 
     await unlock(page);
     await page.getByLabel("Opt in to public read-only execution").check();
     await expect(page.getByRole("button", { name: "Launch public read-only run" })).toBeDisabled();
-    await expect(page.getByRole("status").filter({ hasText: "Operator flags and injected readiness cannot enable it" })).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: "session timeout above 80 seconds" })).toBeVisible();
     expect(fixture.repository.listRuns(fixture.owner, { after: 0, limit: 100 }).items).toEqual([]);
   } finally { await fixture.close(); }
 });
 
-test("stored public snapshots retain wall/report surfaces without enabling admission or unsupported workflows", async ({ page }, info) => {
+test("enabled public launch preserves explicit policies through the owner API without allocating in the UI", async ({ page }, info) => {
+  const fixture = await offlineApi(page, info.outputPath("api"), {
+    allowPublicRuns: true, publicExecutionReady: true, publicSessionTimeoutSeconds: 300,
+  });
+  try {
+    await unlock(page);
+    await page.getByLabel("What should the crowd try?").fill("Read the example domain heading without following links.");
+    await page.getByLabel("Website URL", { exact: true }).fill("https://example.com/");
+    await page.getByLabel("Opt in to public read-only execution").check();
+    await page.getByLabel("I am authorized to test this scope").check();
+    await page.getByRole("button", { name: "Launch public read-only run" }).click();
+    await expect(page).toHaveURL(/\/runs\/[a-f0-9-]+$/);
+    const runs = fixture.repository.listRuns(fixture.owner, { after: 0, limit: 100 }).items;
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ executionMode: "public-readonly", status: "queued",
+      executionPolicy: PUBLIC_EXECUTION_POLICY, assetPolicy: PUBLIC_ASSET_POLICY });
+    expect(fixture.repository.attemptSummaries(fixture.owner, runs[0].id)[0]).toMatchObject({
+      launchState: "not_launched", reservedSeconds: 0,
+    });
+  } finally { await fixture.close(); }
+});
+
+test("stored public snapshots retain wall/report surfaces without enabling unsupported workflows", async ({ page }, info) => {
   const fixture = await offlineApi(page, info.outputPath("api"), { allowPublicRuns: true, publicExecutionReady: true });
   try {
     await unlock(page);

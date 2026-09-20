@@ -11,7 +11,7 @@ import { PUBLIC_EXECUTION_IMPLEMENTATION_READY } from "../public-execution-readi
 import { WorkerRepository, type Claim } from "./repository";
 import { DurableWorker, type WorkerDependencies } from "./runtime";
 
-// Deliberately no readiness mock: this suite locks the real offline checkpoint.
+vi.mock("../public-execution-readiness", () => ({ PUBLIC_EXECUTION_IMPLEMENTATION_READY: false }));
 describe("source-disabled public worker checkpoint", () => {
   let directory: string;
   let repository: WorkerRepository;

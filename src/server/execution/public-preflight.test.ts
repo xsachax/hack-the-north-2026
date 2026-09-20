@@ -49,7 +49,7 @@ describe("maintained public CLI preallocation boundary", () => {
         },
       });
       expect(result.status).toBe(1);
-      expect(result.stderr.trim()).toBe("Public offline preflight failed closed; paid public execution is unavailable in this checkpoint.");
+      expect(result.stderr.trim()).toBe("Public integration failed closed; inspect the private plan, configuration and resource ledger.");
       expect(result.stdout).toBe("");
       expect(result.stderr).not.toContain("offline_network_forbidden");
       expect(result.stderr).not.toContain("OFFLINE_NETWORK_ATTEMPT");
