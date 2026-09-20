@@ -61,6 +61,13 @@ Lifetime reservations are not refunded after failures or early closure.
 Lease fencing and cancellation surround provider awaits; independently retrieved
 Browserbase session `COMPLETED` is necessary for confirmed cleanup.
 
+For the managed wall's live windows the worker makes one extra `sessions.debug`
+metadata read per attempt. It allocates nothing and adds no browser-seconds or
+reservations. It is attempted once per execution, never retried and never on
+recovery claims; failure is recorded as `managed_live_view_unavailable` and does
+not fail the attempt. Live-view URLs are access-bearing: never put them in logs,
+PR text, analytics, reports or browser storage.
+
 `SESSION_TIMEOUT_SECONDS` is an **operational stop deadline**, not a provider
 hard TTL in managed mode. The Agents API exposes neither a hard model-call cap
 nor a way to disable its built-in tools. Existing `MAX_MODEL_CALLS_PER_PERSONA`

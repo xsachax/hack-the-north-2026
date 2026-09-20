@@ -57,6 +57,21 @@ Elapsed time includes allocation and cleanup and freezes at settlement; it is
 separate from independently measured browser usage. Historical missing
 timestamps stay unavailable. Results and cleanup are displayed independently.
 
+The managed wall now opens a window for every agent automatically. After
+session identity validation and a provider `RUNNING` status, the worker performs
+exactly one `sessions.debug` metadata read per attempt. It is never retried;
+failure is non-fatal and recorded as `managed_live_view_unavailable`. The link
+is served only by the owner-only `GET /managed-runs/:id/sessions` route while
+the attempt is running, leased and not cancelled, and is cleared at settlement.
+It never appears in run, report or progress payloads. The wall renders it in an
+inert, sandboxed iframe with `readOnly=true` and `navbar=false`. That is
+pointer-blocking in our page, **not a provider-enforced read-only capability**,
+and it is not managed takeover. This supersedes the earlier "no live control
+URL" stance for the managed path only; the native path is unchanged. Status:
+offline-verified only. Hosted live-view rendering for Agents-API sessions is
+unproved until an approved rehearsal. Surfer sprites, speech bubbles and window
+chrome are presentation, not execution evidence.
+
 The explicitly authorized local five-agent demo uses a 60-second operational
 allowance (not a provider TTL), global and owner concurrency five, and a bounded
 21,600-second lifetime reservation pool within the user's 360,000-second
