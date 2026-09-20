@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApi, type ApiConfiguration } from "../api";
 import { Repository } from "../repository";
-import { managedCreateSchema, managedRunSchema, MANAGED_EXECUTION_POLICY } from "../../lib/managed-contracts";
+import { managedCreateSchema, managedRunSchema, managedSessionsSchema, MANAGED_EXECUTION_POLICY } from "../../lib/managed-contracts";
 import { managedAllowedOrigins, managedCapabilities, requireManagedWorker } from "./config";
 import { managedSpecialists } from "../../lib/managed-specialists";
 
@@ -88,6 +88,19 @@ describe("managed owner API with no provider operations", () => {
     expect((await handle()(request("managed-runs", "POST", input(), owner, randomUUID(), { "x-csrf-token": "" }))).status).toBe(403);
     expect((await handle()(request("managed-runs", "POST", input(), owner, randomUUID(), { origin: "https://other.example" }))).status).toBe(403);
     expect((await handle()(request("managed-runs", "GET", undefined, owner, randomUUID(), { cookie: "" }))).status).toBe(401);
+  });
+  it("serves owner-only live sessions with no link before the attempt is active", async () => {
+    const created = await handle()(request("managed-runs", "POST", input()));
+    const run = managedRunSchema.parse((await created.json()).data);
+    const response = await handle()(request(`managed-runs/${run.id}/sessions`));
+    expect(response.status).toBe(200);
+    expect(managedSessionsSchema.parse((await response.json()).data)).toEqual({
+      items: [{ attemptId: run.attempts[0].id, available: false, liveViewUrl: null }],
+    });
+    expect((await handle()(request(`managed-runs/${run.id}/sessions`, "GET", undefined, other))).status).toBe(404);
+    expect((await handle()(request(`managed-runs/${run.id}/sessions`, "GET", undefined, owner, randomUUID(), { cookie: "" }))).status).toBe(401);
+    expect((await handle()(request(`managed-runs/${run.id}/sessions`, "POST", {}))).status).toBe(404);
+    expect((await handle()(request(`managed-runs/${run.id}/sessions?x=1`))).status).toBe(400);
   });
   it("requires exact approved initial origin and denies missing acknowledgement or ninth persona", async () => {
     const changed = input(); changed.scope.targetUrl = "https://iana.org/help";

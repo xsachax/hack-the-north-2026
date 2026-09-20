@@ -3,8 +3,9 @@ import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import { z } from "zod";
 import { idempotencyKeySchema, personaSchema, type Persona } from "../../lib/contracts";
 import {
-  managedCreateSchema, managedProgressSchema, managedResultSchema, managedRunSchema,
-  type ManagedAttempt, type ManagedCreate, type ManagedResult, type ManagedRun,
+  browserbaseUrlSchema, managedCreateSchema, managedProgressSchema, managedResultSchema, managedRunSchema,
+  managedSessionsSchema,
+  type ManagedAttempt, type ManagedCreate, type ManagedResult, type ManagedRun, type ManagedSessionView,
 } from "../../lib/managed-contracts";
 import { targetScopeSchema } from "../../lib/target-scope";
 import { ServiceError } from "../errors";
@@ -132,6 +133,19 @@ export class ManagedStore {
     if (!row) throw notFound();
     if (row.cleanup !== "closed" || !row.replay_url) return null;
     return { liveViewUrl: "", replayUrl: z.string().parse(row.replay_url) };
+  }
+
+  sessions(owner: string, runId: string): ManagedSessionView[] {
+    if (!this.db.prepare("SELECT id FROM managed_runs WHERE id=? AND owner_id=?").get(runId, owner)) throw notFound();
+    const now = this.clock();
+    return managedSessionsSchema.shape.items.parse(this.db.prepare(`SELECT id,status,provider_status,cancel_requested_at,
+      cleanup,lease_expires_at,live_view_url FROM managed_attempts WHERE run_id=? ORDER BY rowid`).all(runId).map((row) => {
+      const url = row.live_view_url;
+      const available = row.status === "running" && row.provider_status === "RUNNING" && row.cancel_requested_at === null &&
+        row.cleanup !== "closed" && typeof row.lease_expires_at === "number" && row.lease_expires_at > now &&
+        typeof url === "string" && url !== "" && browserbaseUrlSchema.safeParse(url).success;
+      return { attemptId: row.id, available, liveViewUrl: available ? url : null };
+    }));
   }
 
   claim(workerId: string, input: WorkerPolicy): ManagedClaim | null {
@@ -279,6 +293,16 @@ export class ManagedStore {
     });
   }
 
+  liveView(claim: ManagedClaim, input: { liveViewUrl: string }): void {
+    const view = z.strictObject({ liveViewUrl: browserbaseUrlSchema }).parse(input);
+    this.transaction(() => {
+      this.assertLease(claim);
+      if (!this.row(claim.id).provider_session_id) throw new Error("managed_identity_missing");
+      this.db.prepare("UPDATE managed_attempts SET live_view_url=? WHERE id=?").run(view.liveViewUrl, claim.id);
+      this.touch(claim.runId);
+    });
+  }
+
   finish(claim: ManagedClaim, input: ManagedOutcome): void {
     const outcome = outcomeSchema.parse(input);
     this.transaction(() => {
@@ -299,7 +323,7 @@ export class ManagedStore {
       const retryAfter = this.clock() + Math.min(60_000, 2000 * 2 ** z.number().parse(row.recovery_count));
       this.db.prepare(`UPDATE managed_attempts SET state=?,status=?,cleanup=?,provider_status=?,result=?,error=?,
         actual_browser_seconds=?,consumed_seconds=?,released_seconds=?,lease_owner=NULL,lease_expires_at=NULL,
-        recovery_after=?,finished_at=COALESCE(finished_at,?) WHERE id=?`).run(closed ? "settled" : "quarantined", status, outcome.cleanup,
+        live_view_url='',recovery_after=?,finished_at=COALESCE(finished_at,?) WHERE id=?`).run(closed ? "settled" : "quarantined", status, outcome.cleanup,
           outcome.providerStatus === null ? null : safeText(outcome.providerStatus, 64, secrets),
           result ? JSON.stringify(result) : null, outcome.error === null ? null : safeText(outcome.error, 2000, secrets),
           actual ?? (closed && !allocated ? 0 : null), consumed, released, closed ? null : retryAfter,

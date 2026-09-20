@@ -42,7 +42,8 @@ the original body/key, never an automatically generated replacement.
 | `GET /managed-runs/:id` | Durable progress and per-persona lifecycle |
 | `POST /managed-runs/:id/cancel` | Request stop; does not claim remote closure |
 | `GET /managed-runs/:id/report` | Same durable report, with provider-reported criteria |
-| `GET /managed-runs/:id/attempts/:attemptId/view` | Explicit owner-only Browserbase replay link after independent closure; no live control URL |
+| `GET /managed-runs/:id/attempts/:attemptId/view` | Explicit owner-only Browserbase replay link after independent closure; the live view is served by `/sessions` while active |
+| `GET /managed-runs/:id/sessions` | Owner-only `{items:[{attemptId,available,liveViewUrl}]}`; pointer-blocked Browserbase live-view link only while the attempt is RUNNING, leased and not cancelled; never in run/report payloads |
 
 Progress includes bounded provider text and tool names, never reasoning parts
 or raw tool payloads. Agent completion, criterion satisfaction, and independently
