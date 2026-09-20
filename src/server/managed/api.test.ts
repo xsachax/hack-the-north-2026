@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApi, type ApiConfiguration } from "../api";
 import { Repository } from "../repository";
 import { managedCreateSchema, managedRunSchema, managedSessionsSchema, MANAGED_EXECUTION_POLICY } from "../../lib/managed-contracts";
-import { managedAllowedOrigins, managedCapabilities, requireManagedWorker } from "./config";
+import { managedAllowedOrigins, managedCapabilities, managedEngine, requireManagedWorker } from "./config";
 import { managedSpecialists } from "../../lib/managed-specialists";
 
 const origin = "http://127.0.0.1:3000";
@@ -131,5 +131,14 @@ describe("managed configuration", () => {
   it.each(["http://127.0.0.1", "https://example.com/path", "https://example.com/", "https://user:pass@example.com",
     "https://example.com,https://example.com"])("rejects unsafe or noncanonical origin %s", (value) => {
     expect(() => managedAllowedOrigins(value)).toThrow();
+  });
+  it("selects the Agents engine by default and the session engine only when named exactly", () => {
+    expect(managedEngine({ NODE_ENV: "test" })).toBe("agents");
+    expect(managedEngine({ NODE_ENV: "test", MANAGED_ENGINE: "" })).toBe("agents");
+    expect(managedEngine({ NODE_ENV: "test", MANAGED_ENGINE: "agents" })).toBe("agents");
+    expect(managedEngine({ NODE_ENV: "test", MANAGED_ENGINE: "sessions" })).toBe("sessions");
+    for (const value of ["Sessions", "stagehand", "agents,sessions"]) {
+      expect(() => managedEngine({ NODE_ENV: "test", MANAGED_ENGINE: value })).toThrow("managed_engine_invalid");
+    }
   });
 });

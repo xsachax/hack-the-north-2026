@@ -26,6 +26,26 @@ endpoint; no SDK private mutation or vendor rewrite is used. Requests retain the
 same owner isolation, immutable objectives and shared reservation ceiling as
 the original worker, in separate managed tables.
 
+`MANAGED_ENGINE=sessions` swaps only the provider behind that runner. Instead of
+an Agents-API run, `src/server/managed/session-provider.ts` launches an ordinary
+Browserbase session and runs our own bounded Stagehand `extract`/`act` loop and
+a final report extraction, so it is expected to consume browser time plus
+model-gateway inference instead of Agents-API runs; gateway billing/quota for
+this account is unverified until a paid run. The runner still validates run/session identity,
+publishes the real live view once and independently retrieves the real session
+before claiming closure. Scope and read-only behaviour keep the same
+un-enforced stance: prompts, a click-label keyword guard and a best-effort URL
+check after each action (a click that opens a new tab is closed and switched
+back to the original tab), **not confinement**. No model report is written
+from a final page outside the declared scope. Runs exist only in the worker's
+memory, so a worker crash mid-run leaves the attempt for fenced
+recovery/quarantine rather than rediscovery. Model calls stay unknown. The
+result is a model-authored report, criteria rebuilt in code against the exact
+supplied strings. The wall's provider wording still says Browserbase-managed
+(known copy limitation). Status: offline-tested with fakes only; hosted
+behaviour is unproved until an approved paid run. See the
+[worker runbook](WORKER.md).
+
 The managed launch page lets an authenticated owner prepare objectives and save
 custom personas while execution is disabled. Only launch is operator-gated;
 editing a persona never allocates a browser.

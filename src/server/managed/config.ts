@@ -35,6 +35,13 @@ export function managedConfiguration(env: NodeJS.ProcessEnv) {
   };
 }
 
+/** "sessions" drives an ordinary Browserbase session with our Stagehand loop instead of an Agents-API run. */
+export function managedEngine(env: NodeJS.ProcessEnv): "agents" | "sessions" {
+  const value = env.MANAGED_ENGINE?.trim() || "agents";
+  if (value !== "agents" && value !== "sessions") throw new Error("managed_engine_invalid");
+  return value;
+}
+
 export function managedCapabilities(options: {
   enabled?: boolean; allowedOrigins?: readonly string[]; agentConfigured?: boolean;
   accessCode?: string; keyConfigured?: boolean; projectConfigured?: boolean;
