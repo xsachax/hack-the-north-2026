@@ -21,20 +21,24 @@ let networkGuardInstalled = false;
 
 type OfflineNativePhase = "setup" | "archive" | "refused-proxy" | "sentinel" | "browser" |
   "extension-worker" | "cdp-endpoint" | "sdk-connect" | "sdk-initialize" | "native-attestation" |
-  "routing" | "navigation" | "observation" | "readonly-negative" | "readonly-link" |
+  "routing" | "navigation" | "page-activation" | "observation" | "readonly-negative" | "readonly-link" |
   "metrics" | "policy-verify" | "cleanup";
 const offlineFailureCodes = [
   "native_policy_state_rejected", "native_proxy_endpoint_unconfirmed", "native_browser_version_unsupported",
   "native_untrusted_bootstrap", "native_extension_identity_rejected", "offline_native_worker_missing",
   "offline_native_endpoint_rejected", "offline_native_observation_failed", "offline_native_readonly_guard_failed",
   "offline_native_routing_failed", "offline_native_inference_forbidden", "offline_native_outbound_forbidden",
+  "offline_native_page_not_visible", "fixture_network_failed", "public_transport_failed",
+  "page_out_of_scope", "subframes_unsupported", "telemetry_limit", "page_screenshot_failed", "page_evaluation_failed",
 ] as const;
 
 export class OfflineNativeProbeError extends Error {
   readonly code: typeof offlineFailureCodes[number] | "unknown";
   constructor(readonly step: OfflineNativePhase, error: unknown) {
     super("offline_native_probe_failed");
-    this.code = offlineFailureCodes.find((code) => error instanceof Error && error.message === code) ?? "unknown";
+    this.code = offlineFailureCodes.find((code) => error instanceof Error && error.message === code) ??
+      (error instanceof Error && error.message.startsWith("page.screenshot:") ? "page_screenshot_failed" :
+        error instanceof Error && error.message.startsWith("page.evaluate:") ? "page_evaluation_failed" : "unknown");
   }
 }
 
@@ -243,6 +247,9 @@ async function runOfflineNativeProbe(
     }));
     phase("navigation");
     await page.goto(`${origin}/category/start`, { waitUntil: "domcontentloaded", timeout: 10000 });
+    phase("page-activation");
+    await page.bringToFront();
+    if (await page.evaluate(() => document.visibilityState) !== "visible") throw new Error("offline_native_page_not_visible");
     const reference = (bytes: Uint8Array, kind: "screenshot" | "json") => {
       const sha256 = createHash("sha256").update(bytes).digest("hex");
       return { key: sha256, sha256, bytes: bytes.length, kind };

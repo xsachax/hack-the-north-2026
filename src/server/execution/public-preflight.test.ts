@@ -16,6 +16,10 @@ describe("maintained public CLI preallocation boundary", () => {
     expect(JSON.stringify(error)).not.toMatch(/private-value|private.invalid|wss:/);
     expect(new OfflineNativeProbeError("native-attestation", new Error("native_proxy_endpoint_unconfirmed")).code)
       .toBe("native_proxy_endpoint_unconfirmed");
+    expect(new OfflineNativeProbeError("observation", new Error("page.screenshot: private-value")).code)
+      .toBe("page_screenshot_failed");
+    expect(new OfflineNativeProbeError("observation", new Error("page.evaluate: private-value")).code)
+      .toBe("page_evaluation_failed");
   });
 
   it("reports a safe browser-launch failure from the real offline CLI and still exits unsuccessfully", async () => {

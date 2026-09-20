@@ -112,6 +112,9 @@ green result. The probe uses only owned synthetic endpoints and an outbound
 guard, never Browserbase credentials or inference. Failures report a fixed stage
 and allowlisted code, not raw exceptions or connection URLs. Repetition checks
 bootstrap reliability; it is not public-site acceptance.
+The probe explicitly activates its owned target and checks document visibility
+before driver observation, rather than assuming the SDK's bootstrap tab leaves
+that page foregrounded. Screenshot deadlines and native policy remain unchanged.
 
 The dedicated native-policy job is independent of the application and container
 gates. It evaluates the native Chromium extension hypothesis with owned local
