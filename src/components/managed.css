@@ -110,7 +110,6 @@
 .managed-window-meta { display: flex; flex-wrap: wrap; flex-basis: 100%; gap: 2px 12px; }
 .managed-window-meta small { color: var(--muted); font-size: 11px; }
 .managed-wall-heading { position: relative; isolation: isolate; overflow: hidden; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 18px 26px 30px; border-radius: 24px; background: linear-gradient(135deg, #e7f8f6, #cbe9f1); }
-.managed-wall-heading .wave-divider { position: absolute; bottom: -1px; left: 0; z-index: -1; }
 .managed-wall-heading h1 { font-size: clamp(28px, 3vw, 40px); }
 .managed-wall-heading .eyebrow { margin-bottom: 12px; }
 .managed-wall-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 12px 0; font-size: 12px; }

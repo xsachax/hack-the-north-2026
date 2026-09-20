@@ -12,7 +12,6 @@ import { managedLiveSummary } from "@/lib/managed-live";
 import { useOwnerSession } from "./owner-session";
 import { ManagedWindows } from "./managed-windows";
 import { PersonaAvatar } from "./persona-avatar";
-import { WaveDivider } from "./wave-divider";
 
 const viewerSchema = z.strictObject({ liveViewUrl: z.literal(""), replayUrl: browserbaseUrlSchema }).nullable();
 type Viewer = z.infer<typeof viewerSchema>;
@@ -234,10 +233,9 @@ export function ManagedWall({ runId }: { runId: string }) {
   return <section className="managed-wall" aria-label="Managed run wall" data-testid="managed-run-wall"
     data-run-id={runId} data-run-loaded={!!run} data-run-status={run?.status}>
     <div className="managed-wall-heading">
-      <div><p className="eyebrow">BROWSERBASE-MANAGED · OWNER WORKSPACE</p><h1>Your crowd, in motion.</h1>
+      <div><p className="eyebrow">BROWSERBASE-MANAGED · OWNER WORKSPACE</p><h1>Your crowd, <span>in motion.</span></h1>
         <p className="muted managed-wrap">{run?.scope.targetUrl ?? "Loading saved run…"}</p></div>
       {run && <span className="managed-status" data-status={run.status}>{run.status.replaceAll("_", " ")}</span>}
-      <WaveDivider />
     </div>
     <div className="managed-policy">
       <strong>Completion is not a success verdict.</strong>
