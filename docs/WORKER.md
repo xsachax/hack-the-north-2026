@@ -86,8 +86,13 @@ store, wall and live windows, but replaces the Agents-API run with
 `src/server/managed/session-provider.ts`: the worker launches one ordinary
 Browserbase session per attempt (`keepAlive: false`, no proxies, provider
 timeout `max(60, min(300, SESSION_TIMEOUT_SECONDS))`) and drives it with a short
-Stagehand `extract`/`act` loop (default five steps) plus one report extraction
-through Browserbase's model gateway. It is expected to consume browser time
+Stagehand `extract`/`act` loop (default six steps, fewer when time runs out)
+plus one report extraction through Browserbase's model gateway. The loop may
+also press the Tab key (three presses per tab step; no other key is ever
+pressed) and run two fixed read-only `page.evaluate` expressions in the target
+page (Navigation Timing, and the focused element's tag, text, outline and
+box-shadow); their output reaches the model as `engineFacts`. A wall-clock time
+is reported only for the initial page open, never for a click. It is expected to consume browser time
 plus model-gateway inference instead of Agents-API runs; gateway billing/quota
 for this account is unverified until a paid run. Only the Browserbase key is
 used.
@@ -114,7 +119,7 @@ Limits, stated plainly:
   is closed and switched back to the original tab. Neither is confinement; an
   out-of-scope page can load before the check runs, and Stagehand's `act` picks
   its own method for a click instruction. When the model says it is done before
-  two actions, the loop scrolls instead (no model call) so the page is looked
+  three actions, the loop scrolls instead (no model call) so the page is looked
   at. No model report is written from a final page outside the declared scope. Every result carries that
   limitation.
 - Runs live only in the worker's memory. A worker crash mid-run cannot be

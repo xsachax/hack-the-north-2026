@@ -28,8 +28,8 @@ the original worker, in separate managed tables.
 
 `MANAGED_ENGINE=sessions` swaps only the provider behind that runner. Instead of
 an Agents-API run, `src/server/managed/session-provider.ts` launches an ordinary
-Browserbase session and runs our own bounded Stagehand `extract`/`act` loop and
-a final report extraction, so it is expected to consume browser time plus
+Browserbase session and runs our own bounded Stagehand `extract`/`act` loop
+(plus Tab presses and two read-only page probes) and a final report extraction, so it is expected to consume browser time plus
 model-gateway inference instead of Agents-API runs; gateway billing/quota for
 this account is unverified until a paid run. The runner still validates run/session identity,
 publishes the real live view once and independently retrieves the real session
