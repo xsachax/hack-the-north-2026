@@ -31,7 +31,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   process.once("SIGINT", abort);
   process.once("SIGTERM", abort);
   const result = args.length === 1 && args[0] === "--offline-native-probe"
-    ? import("./public-native-offline").then(({ offlineNativeProbe }) => offlineNativeProbe())
+    ? import("./public-native-offline").then(({ offlineNativeProbe, OfflineNativeProbeError }) =>
+      offlineNativeProbe().catch((error: unknown) => {
+        if (error instanceof OfflineNativeProbeError) console.error(JSON.stringify({
+          phase: "offline-native-probe-failure", step: error.step, code: error.code,
+        }));
+        throw error;
+      }))
     : args.length === 2 && args[0] === "--ledger-preflight"
       ? import("./public-proof").then(({ publicLedgerPreflight }) => publicLedgerPreflight(args[1]))
     : args.length === 3 && args[0] === "--prepare-plan"
