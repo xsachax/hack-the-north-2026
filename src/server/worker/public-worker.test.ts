@@ -427,4 +427,36 @@ describe("public worker admission and native durable journal (offline)", () => {
       .toMatchObject({ status: "infrastructure_failed" });
     expect(repository.accounting().releasedSeconds).toBe(0);
   });
+
+  it("retains safe native startup detail privately without publishing connection metadata or implying attestation", async () => {
+    const held = claim();
+    const detail: NonNullable<NativeCloudUsage["nativeStartupFailure"]> = {
+      step: "extension_worker", code: "native_extension_identity_rejected", browserVersion: "145.0.7632.6",
+    };
+    const deps: WorkerDependencies = { publicEnabled: true, publicImplementationReady: true,
+      launch: vi.fn(), artifacts: () => ({ screenshot: vi.fn(), json: vi.fn(), telemetry: vi.fn() }),
+      recover: vi.fn(), diagnostic: vi.fn(),
+      launchPublic: async (options) => {
+        const resource: NativeResource = {
+          ...uploaded(held), state: "allocated", sessionAllocationAttempted: true, sessionId: randomUUID(),
+        };
+        options.onResource(resource);
+        await options.onSession({ sessionId: resource.sessionId!, liveViewUrl: "",
+          replayUrl: `https://www.browserbase.com/sessions/${resource.sessionId}`, timeoutSeconds: 240 });
+        options.onResource({ ...resource, state: "delete_intent" });
+        options.onResource({ ...resource, state: "deleted" });
+        const usage: NativeCloudUsage = { reservedSeconds: 240, elapsedSeconds: 2, actualBrowserSeconds: 2,
+          allocationAttempted: true, remoteStatus: "COMPLETED", nativeStartupFailure: detail };
+        throw new CloudStartupError({ status: "closed", errors: [] }, usage, "native_cdp_connect");
+      },
+    };
+    await new DurableWorker(repository, deps, 4321).executeClaim(held, new AbortController().signal);
+    const stored = JSON.parse(String(database.prepare("SELECT usage FROM launches WHERE job_id=?").get(held.jobId)?.usage));
+    expect(stored).toMatchObject({ startupPhase: "native_cdp_connect", nativeStartupFailure: detail });
+    expect(stored).not.toHaveProperty("nativePolicy");
+    const summaries = repository.attemptSummaries(owner, held.runId);
+    expect(summaries[0]).toMatchObject({ launchState: "settled", summary: { cleanup: { status: "closed" } } });
+    expect(repository.getRun(owner, held.runId).status).toBe("infrastructure_failed");
+    expect(JSON.stringify(summaries)).not.toMatch(/nativeStartupFailure|browserVersion|145.0.7632.6/);
+  });
 });

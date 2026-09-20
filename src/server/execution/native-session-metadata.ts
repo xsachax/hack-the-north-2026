@@ -2,7 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { z } from "zod";
 
-const sessionSchema = z.strictObject({
+export const nativeSessionMetadataSchema = z.strictObject({
   id: z.uuid(),
   connectUrl: z.string().max(4096).url().refine((value) => {
     const url = new URL(value);
@@ -13,12 +13,12 @@ const sessionSchema = z.strictObject({
 
 /** One-use local metadata, not a proxy: no request can dispatch provider traffic. */
 export async function serveNativeSessionMetadata(options: {
-  session: z.infer<typeof sessionSchema>;
+  session: z.infer<typeof nativeSessionMetadataSchema>;
   apiKey: string;
   signal: AbortSignal;
   assertActive: () => void;
 }) {
-  const session = sessionSchema.parse(options.session);
+  const session = nativeSessionMetadataSchema.parse(options.session);
   const key = Buffer.from(z.string().min(1).max(2048).parse(options.apiKey));
   const payload = Buffer.from(JSON.stringify(session));
   let consumed = false;

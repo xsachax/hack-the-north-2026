@@ -150,6 +150,28 @@ version or weaken native attestation from this result. Subsequent failures retai
 an allowlisted `startupPhase` in private usage and the stored execution result's
 reason, without exception messages, credentials or connection URLs. A new attempt
 requires a new digest-bound plan and fresh approval, retaining the same ledger.
+
+The second separately approved attempt reproduced `native_cdp_connect` failure
+before observations, actions or inference. It used 1.575 browser-seconds; both
+sessions independently read `COMPLETED` and both extensions returned authenticated
+404. Cumulative actual time is 3.097 seconds, conservatively booked as 4 seconds;
+600 lifetime-reserved seconds remain counted, leaving 1,200 of the initial cap.
+This identifies the startup phase, not its precise substep or a successful
+public goal.
+
+The next candidate uses the connection capability from the actual session-create
+response, rather than requiring the optional `connectUrl` on later readback.
+Authenticated readback still verifies session/project/correlation identity before
+attachment, and the original capability passes the same WSS metadata validation
+used by the SDK adapter. An absent/invalid original capability is rejected, not
+reconstructed or replaced. Fresh extension-worker discovery now waits at most
+five seconds, as the maintained local bootstrap already does; cancellation,
+lease ownership, exact worker identity and trusted bootstrap are rechecked before
+SDK initialization. Fixed failure substeps/codes and a syntactically verified
+observed runtime version stay in private diagnostics, never raw provider errors
+or connection URLs. Native attestation and runtime support requirements are
+unchanged. These are offline-tested startup corrections, not proof of the cause
+of either historical attempt or of hosted public-site acceptance.
 Additional recovered session identities block further proof until explicitly
 reconciled; they are included in the approval fingerprint, not silently omitted.
 Unit tests of that sequence use explicitly synthetic adapters, never hosted
