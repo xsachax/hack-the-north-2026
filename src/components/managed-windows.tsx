@@ -1,6 +1,7 @@
 "use client";
 
 import { browserbaseUrlSchema, type ManagedAttempt, type ManagedRun, type ManagedSessionView } from "@/lib/managed-contracts";
+import { managedRunFilename, managedRunMarkdown } from "@/lib/managed-export";
 import { managedLiveSummary, managedWindowState } from "@/lib/managed-live";
 import { managedSpecialistForAssignment } from "@/lib/managed-specialists";
 import { takeoverViewerUrl } from "@/lib/takeover-contracts";
@@ -55,10 +56,20 @@ function AgentWindow({ attempt, session, hidden, now, slot }: {
 export function ManagedWindows({ run, sessions, hidden, now }: {
   run: ManagedRun; sessions: readonly ManagedSessionView[]; hidden: boolean; now: number;
 }) {
+  // Built in the browser from the run already on screen; nothing new is fetched and no provider link is included.
+  function download() {
+    const url = URL.createObjectURL(new Blob([managedRunMarkdown(run, new Date())], { type: "text/markdown;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = managedRunFilename(run);
+    link.click();
+    URL.revokeObjectURL(url);
+  }
   return <section className="managed-overview" aria-label="All agents live overview" data-testid="managed-live-overview">
     <div className="section-heading"><h2>All {run.attempts.length} agents</h2>
       <span className="muted">{run.attempts.filter((attempt) => attempt.providerStatus === "RUNNING"
-        && attempt.status === "running").length} provider runs reporting RUNNING</span></div>
+        && attempt.status === "running").length} provider runs reporting RUNNING</span>
+      <button type="button" onClick={download}>Download findings (.md)</button></div>
     <p className="muted">Starting is not browser-allocation proof. Elapsed includes startup; results and cleanup remain separate. No simulated progress.</p>
     <div className="managed-window-grid">
       {run.attempts.map((attempt, slot) => <AgentWindow key={attempt.id} attempt={attempt} slot={slot} hidden={hidden} now={now}

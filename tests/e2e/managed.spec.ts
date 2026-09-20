@@ -1069,6 +1069,38 @@ test("finished runs drop their frames", async ({ page }) => {
   expect(fixture.unexpected).toEqual([]);
 });
 
+test("findings download is one organised markdown file built from the run on screen", async ({ page }) => {
+  const run = runningDemoRun();
+  run.status = "completed";
+  run.attempts = run.attempts.map((attempt, index) => ({ ...attempt, status: "completed", providerStatus: "COMPLETED",
+    cleanup: "closed", finishedAt: new Date().toISOString(), actualBrowserSeconds: 12.5,
+    result: {
+      summary: `Summary for agent ${index + 1}.`, finalUrl: "https://www.iana.org/domains/reserved",
+      criteria: attempt.criteria.map((criterion, position) => ({
+        criterion, status: index === 0 && position === 0 ? "not_met" as const : "met" as const,
+        observation: `Observation ${index + 1}.${position + 1}`,
+      })),
+      limitations: ["Model-authored report, not independently verified."],
+    } }));
+  const { fixture } = await liveWall(page, run);
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByRole("button", { name: "Download findings (.md)", exact: true }).click(),
+  ]);
+  expect(download.suggestedFilename()).toBe(`flash-flood-findings-${run.id.slice(0, 8)}.md`);
+  const stream = await download.createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(chunk as Buffer);
+  const text = Buffer.concat(chunks).toString("utf8");
+  expect(text).toContain(`# Flash Flood findings: ${run.scope.targetUrl}`);
+  expect(text).toContain("Agent-reported, not independently verified");
+  expect(text).toContain("## Problems reported (criteria marked not met)");
+  expect(text).toContain("Observation 1.1");
+  expect(text.match(/^## /gm)?.length).toBe(2 + run.attempts.length);
+  expect(text).not.toContain("browserbase.com/devtools");
+  expect(fixture.unexpected).toEqual([]);
+});
+
 test("wall shows actual progress, failure and cleanup independently, and never treats completion as success", async ({ page }) => {
   const run = makeRun({
     ...defaultBody, assignments: [
