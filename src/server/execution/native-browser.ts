@@ -10,10 +10,19 @@ import { CloudStartupError, type CloudUsage, type PrivateSessionReference } from
 import { buildComposedExtension, COMPOSED_POLICY_VERSION } from "./composed-extension";
 import { establishNativePolicy, assertTrustedBootstrap } from "./native-policy-session";
 import { createNativeSdk } from "./native-sdk";
+import { nativeSessionMetadataSchema } from "./native-session-metadata";
 import { isNativeSessionRetired, NativeResources, type NativeResource, type NativeSessionClosure } from "./native-resources";
 import type { Brain, CleanupOutcome } from "./types";
 
 export { NATIVE_SHUTDOWN_RESERVE_SECONDS };
+
+const nativeStartupCodeSchema = z.enum([
+  "unknown", "native_session_identity_rejected", "native_browser_version_unavailable",
+  "native_fresh_context_required", "native_extension_identity_rejected", "native_untrusted_bootstrap",
+  "native_browser_version_unsupported", "native_policy_state_rejected", "native_execution_deadline",
+]);
+type NativeCdpStep = "session_readback" | "connection_metadata" | "cdp_attach" |
+  "runtime_version" | "profile" | "extension_worker" | "trusted_bootstrap";
 
 export type NativeBrowserOptions = {
   runId: string;
@@ -29,7 +38,13 @@ export type NativeCloudUsage = CloudUsage & {
   nativeResource?: Readonly<NativeResource>;
   nativePolicy?: { version: string; browserVersion: string; archiveSha256: string };
   nativeObservedBrowserVersion?: string;
+  nativeStartupFailure?: {
+    step?: NativeCdpStep;
+    code: z.infer<typeof nativeStartupCodeSchema>;
+    browserVersion?: string;
+  };
   gatewayDispatches?: number;
+  blockedNativeTelemetryRequests?: number;
 };
 
 async function bounded<T>(work: PromiseLike<T>, milliseconds = 10000): Promise<T> {
@@ -53,6 +68,7 @@ export async function createNativeBrowser(config: AppConfig, options: NativeBrow
   const signal = AbortSignal.any([options.signal, stop.signal]);
   let closing: Promise<CleanupOutcome> | undefined;
   let phase = "native_admission";
+  let cdpStep: NativeCdpStep | undefined;
   let sessionId: string | undefined;
   let sdk: ReturnType<typeof createNativeSdk> | undefined;
   let initialized = false;
@@ -196,15 +212,24 @@ export async function createNativeBrowser(config: AppConfig, options: NativeBrow
     }), 5000);
     assertActive();
     phase = "native_cdp_connect";
+    cdpStep = "session_readback";
     const session = await bb.sessions.retrieve(sessionId);
     if (session.id !== sessionId || session.projectId !== config.BROWSERBASE_PROJECT_ID
-      || session.userMetadata?.correlationToken !== options.correlationToken || !session.connectUrl) {
+      || session.userMetadata?.correlationToken !== options.correlationToken) {
       throw new Error("native_session_identity_rejected");
     }
     assertActive();
-    const attaching = chromium.connectOverCDP(session.connectUrl, { timeout: 10000 });
+    cdpStep = "connection_metadata";
+    // Creation returns the connection capability; later readback may omit it.
+    const metadata = nativeSessionMetadataSchema.parse({
+      id: sessionId, connectUrl: allocated.connectUrl, region: session.region,
+    });
+    cdpStep = "cdp_attach";
+    const attaching = chromium.connectOverCDP(metadata.connectUrl, { timeout: 10000 });
     void attaching.then(async (late) => { if (closing) await late.close(); }).catch(() => { diagnostic("late_cdp_connect"); });
     playwright = await bounded(attaching, 10000);
+    assertActive();
+    cdpStep = "runtime_version";
     const versionSession = await playwright.newBrowserCDPSession();
     let product: string;
     try { product = (await versionSession.send("Browser.getVersion")).product; }
@@ -213,17 +238,25 @@ export async function createNativeBrowser(config: AppConfig, options: NativeBrow
     if (!observedVersion || observedVersion !== playwright.version()) throw new Error("native_browser_version_unavailable");
     usage.nativeObservedBrowserVersion = observedVersion;
     assertActive();
+    cdpStep = "profile";
     if (playwright.contexts().length !== 1) throw new Error("native_fresh_context_required");
     const context = playwright.contexts()[0];
+    cdpStep = "extension_worker";
+    if (!context.serviceWorkers().length) {
+      await bounded(context.waitForEvent("serviceworker", { timeout: 5000 }), 5000);
+      assertActive();
+    }
     const workers = context.serviceWorkers().filter((candidate) => /^chrome-extension:\/\/[a-p]{32}\/service-worker.js$/.test(candidate.url()));
     if (workers.length !== 1) throw new Error("native_extension_identity_rejected");
     worker = workers[0];
     worker.once("close", () => { nativeFault = true; stop.abort(); void close(); });
     const extensionOrigin = worker.url().slice(0, -"/service-worker.js".length);
+    cdpStep = "trusted_bootstrap";
     assertTrustedBootstrap(context, extensionOrigin);
+    cdpStep = undefined;
     phase = "native_browser_connect";
     sdk = createNativeSdk({
-      session: { id: sessionId, connectUrl: session.connectUrl, region: session.region },
+      session: metadata,
       extensionId: extensionOrigin.slice("chrome-extension://".length),
       apiKey: config.BROWSERBASE_API_KEY!, model: config.STAGEHAND_MODEL,
       signal, assertActive, onLost: () => { nativeFault = true; stop.abort(); void close(); },
@@ -271,7 +304,13 @@ export async function createNativeBrowser(config: AppConfig, options: NativeBrow
         assertActive();
       },
     };
-  } catch {
+  } catch (error) {
+    const code = nativeStartupCodeSchema.safeParse(error instanceof Error ? error.message : undefined);
+    usage.nativeStartupFailure = {
+      ...(cdpStep ? { step: cdpStep } : {}),
+      code: code.success ? code.data : "unknown",
+      ...(usage.nativeObservedBrowserVersion ? { browserVersion: usage.nativeObservedBrowserVersion } : {}),
+    };
     throw new CloudStartupError(await close(), usage, phase);
   }
 }

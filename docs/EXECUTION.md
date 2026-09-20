@@ -130,12 +130,76 @@ Lost submission responses are resolved by the original owner/idempotency key
 after settling the submitting server; the committed run is cancelled without
 resending a creation request. A durably proven pre-start non-allocation may have
 no native-resource row, but its recorded lifetime reservation is never reset.
+
+### First hosted attempt after #26
+
+After explicit approval, merged #26 (`83017fba`) was exercised through the
+clean packaged owner API and public-only worker. The real Browserbase API
+uploaded one composed extension and allocated one fresh session for a scoped
+IANA documentation-link goal. Startup failed before the execution loop produced
+observations, model calls or actions; **this is not public-site acceptance**.
+Independent readback confirmed the session `COMPLETED` and the extension's
+exact-ID authenticated 404. Actual browser time was 1.522 seconds, rounded up to
+2 consumed seconds; all 300 reserved seconds still count against the initial
+1,800-second lifetime cap. No retry was dispatched.
+
+The persisted failure was only `Worker execution failed`: the worker discarded
+the factory's startup phase, and provider log readback returned no entries.
+The precise startup cause therefore remains unproved; do not infer a browser
+version or weaken native attestation from this result. Subsequent failures retain
+an allowlisted `startupPhase` in private usage and the stored execution result's
+reason, without exception messages, credentials or connection URLs. A new attempt
+requires a new digest-bound plan and fresh approval, retaining the same ledger.
+
+The second separately approved attempt reproduced `native_cdp_connect` failure
+before observations, actions or inference. It used 1.575 browser-seconds; both
+sessions independently read `COMPLETED` and both extensions returned authenticated
+404. Cumulative actual time is 3.097 seconds, conservatively booked as 4 seconds;
+600 lifetime-reserved seconds remain counted, leaving 1,200 of the initial cap.
+This identifies the startup phase, not its precise substep or a successful
+public goal.
+
+The next candidate uses the connection capability from the actual session-create
+response, rather than requiring the optional `connectUrl` on later readback.
+Authenticated readback still verifies session/project/correlation identity before
+attachment, and the original capability passes the same WSS metadata validation
+used by the SDK adapter. An absent/invalid original capability is rejected, not
+reconstructed or replaced. Fresh extension-worker discovery now waits at most
+five seconds, as the maintained local bootstrap already does; cancellation,
+lease ownership, exact worker identity and trusted bootstrap are rechecked before
+SDK initialization. Fixed failure substeps/codes and a syntactically verified
+observed runtime version stay in private diagnostics, never raw provider errors
+or connection URLs. Native attestation and runtime support requirements are
+unchanged. These are offline-tested startup corrections, not proof of the cause
+of either historical attempt or of hosted public-site acceptance.
 Additional recovered session identities block further proof until explicitly
 reconciled; they are included in the approval fingerprint, not silently omitted.
 Unit tests of that sequence use explicitly synthetic adapters, never hosted
 acceptance evidence. Browserbase limits, inaccessible sites and unsupported
 channels may still prevent a goal from completing; “public URL” does not mean
 every website feature is supported.
+
+### Background SDK export denial
+
+The repeated offline probe exposed a separate timing-dependent observation
+failure: the pinned SDK exports OTLP traces every second, even without inference.
+Waiting across that interval reproduced `gateway_control_failed` before the
+first observation. This is distinct from the two hosted startup failures.
+
+The native SDK now explicitly targets a reserved `.invalid` trace destination.
+Only its exact POST from the currently verified extension service worker receives
+a local **403 denial** after native-policy/lease checks. No trace body, headers or
+credentials are forwarded, and no successful export is fabricated. Page and
+offscreen initiators, endpoint variants and other methods retain failure behavior.
+The denial is capped at 128 requests; overflow fails closed. Private usage records
+`blockedNativeTelemetryRequests` separately from paid Gateway dispatches. SDK
+trace export is unsupported, not necessary evidence for the browsing objective.
+The exact Gateway inference endpoint remains the only outbound control exception.
+
+The credential-free probe now requires an actual denied SDK export before it
+observes the synthetic page, and checks network failures through SDK shutdown.
+This removes the race in the probe instead of retrying a failure or weakening
+native enforcement. It is still not hosted public-site acceptance.
 
 ## Public HTTP transport library (offline, not enabled)
 

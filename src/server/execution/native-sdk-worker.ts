@@ -3,6 +3,7 @@ import { browserbase, Stagehand, type StagehandBrowser, type Page } from "@brows
 import { decisionSchema } from "./types";
 import { semanticResponseSchema } from "./evaluator";
 import { nativeSdkCommandSchema, nativeSdkOptionsSchema } from "./native-sdk-protocol";
+import { NATIVE_TELEMETRY_ENDPOINT } from "./native-telemetry";
 
 const port = parentPort;
 if (!port) throw new Error("native_sdk_worker_required");
@@ -37,6 +38,7 @@ port.on("message", async (message: unknown) => {
       if (!browser || stagehand) throw new Error("native_sdk_initialization_rejected");
       stagehand = await Stagehand.create({
         browser, apiKey: options.apiKey, model: { modelName: options.model },
+        telemetry: { traces: { endpoint: NATIVE_TELEMETRY_ENDPOINT } },
         cache: false, selfHeal: false, logging: { level: "off" },
       });
     } else {

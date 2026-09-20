@@ -5,6 +5,7 @@ import { browserHeaderPermits, capturePublicBrowserHeaders } from "./public-brow
 import { createPublicTransport, PUBLIC_TRANSPORT_LIMITS, PublicTransportError, type PublicRequestContext } from "./public-transport";
 import { isGatewayControlRequest, type NetworkSignal } from "./fixture-network";
 import { createGatewayTransport } from "./gateway-transport";
+import { NATIVE_TELEMETRY_ENDPOINT } from "./native-telemetry";
 
 const pausedSchema = z.object({
   requestId: z.string().min(1).max(200), frameId: z.string().max(200),
@@ -27,6 +28,7 @@ export type PublicNetworkOptions = {
   onFatal: () => void;
   /** Omit only for zero-inference probes: absent authorization denies Gateway dispatch. */
   onGatewayDispatch?: () => void;
+  onTelemetryBlocked?: () => void;
   diagnostics?: string[];
 };
 
@@ -51,6 +53,7 @@ async function installNetwork(options: PublicNetworkOptions, createTransport: ty
   let closing: Promise<void> | undefined;
   let fatal = false;
   let installed = false;
+  let blockedTelemetry = 0;
   const identities = new Map<string, GatewayIdentity>();
   const offscreenUrl = `${extensionOrigin}/offscreen/service-worker-heartbeat.html`;
   const report = (code: string, url = "") => {
@@ -122,10 +125,23 @@ async function installNetwork(options: PublicNetworkOptions, createTransport: ty
       active();
       const current = (await root.send("Target.getTargetInfo", { targetId: identity.targetId })).targetInfo;
       active();
-      if (current.url !== identity.url || current.type !== identity.type
-        || !isGatewayControlRequest(event.request.url, event.request.method, current.url, extensionOrigin)) throw new Error("gateway_control_denied");
+      if (current.url !== identity.url || current.type !== identity.type) throw new Error("gateway_control_denied");
       await verifyActive();
       active();
+      if (current.type === "service_worker" && current.url === `${extensionOrigin}/service-worker.js`
+        && event.request.url === NATIVE_TELEMETRY_ENDPOINT && event.request.method === "POST") {
+        if (++blockedTelemetry > 128) { trip("native_telemetry_limit"); await abort(target, event.requestId); return; }
+        // An explicit local denial avoids exporter retries without acknowledging or exporting traces.
+        await target.send("Fetch.fulfillRequest", {
+          requestId: event.requestId, responseCode: 403,
+          responseHeaders: [{ name: "content-type", value: "text/plain" }, { name: "cache-control", value: "no-store" }],
+          body: Buffer.from("Native SDK telemetry export is disabled by policy.").toString("base64"),
+        });
+        active();
+        options.onTelemetryBlocked?.();
+        return;
+      }
+      if (!isGatewayControlRequest(event.request.url, event.request.method, current.url, extensionOrigin)) throw new Error("gateway_control_denied");
       if (!event.networkId) throw new Error("gateway_body_identity_unavailable");
       const body = z.object({ postData: z.string() }).parse(
         await target.send("Network.getRequestPostData", { requestId: event.networkId }),
@@ -256,7 +272,7 @@ async function installNetwork(options: PublicNetworkOptions, createTransport: ty
     }
     installed = true;
     active();
-    return { close, errors };
+    return { close, errors, get blockedTelemetryRequests() { return blockedTelemetry; } };
   } catch {
     await close();
     throw new Error("public_network_install_failed");

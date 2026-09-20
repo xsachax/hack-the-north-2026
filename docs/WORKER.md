@@ -54,6 +54,13 @@ evidence but never grants a stale lease authority to alter lifecycle, usage or
 cleanup. Unknown allocation/upload/deletion outcomes stay quarantined; there is
 no automatic browser retry.
 
+Native SDK trace export is unsupported and locally denied, not forwarded.
+Private `blockedNativeTelemetryRequests` counts these bounded policy denials,
+including during startup, separately from `gatewayDispatches`. A successful local
+403 denial does not consume model budget or turn the browsing goal into an
+infrastructure failure. Identity/policy failures and denial-limit overflow still
+fail closed; no page or offscreen export exemption exists.
+
 The absolute public deadline starts before session-create dispatch and reserves
 80 seconds of the provider TTL for Gateway drain, metrics and release/readback.
 The loop receives only the remaining duration; TTL <=80 seconds is unsupported,

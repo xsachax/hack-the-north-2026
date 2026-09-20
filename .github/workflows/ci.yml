@@ -99,9 +99,13 @@ jobs:
       - name: Actual CDP redirect, cookie, CSP and Gateway provenance (synthetic upstream)
         timeout-minutes: 2
         run: npm run test:public-browser
-      - name: Maintained public native CLI (synthetic, no provider calls)
+      - name: Repeated public native CLI (synthetic, no provider calls)
         timeout-minutes: 2
-        run: npm run public:integration -- --offline-native-probe
+        run: |
+          for attempt in 1 2 3 4 5; do
+            echo "Offline native probe $attempt/5"
+            npm run public:integration -- --offline-native-probe
+          done
       - name: Isolated private addresses and actual DNS answer changes
         timeout-minutes: 5
         run: node node_modules/tsx/dist/cli.mjs scripts/native-policy-linux.ts --ci-sudo

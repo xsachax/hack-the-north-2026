@@ -16,8 +16,33 @@ import { PUBLIC_ASSET_POLICY, PUBLIC_EXECUTION_POLICY } from "../src/lib/public-
 import { ScopedBrowserDriver } from "../src/server/execution/driver";
 import { ExecutionError } from "../src/server/execution/types";
 import type { ArtifactSinks } from "../src/server/execution/artifacts";
+import { NATIVE_TELEMETRY_ENDPOINT } from "../src/server/execution/native-telemetry";
 
 let networkGuardInstalled = false;
+
+type OfflineNativePhase = "setup" | "archive" | "refused-proxy" | "sentinel" | "browser" |
+  "extension-worker" | "cdp-endpoint" | "sdk-connect" | "sdk-initialize" | "native-attestation" |
+  "routing" | "navigation" | "page-activation" | "observation" | "readonly-negative" | "readonly-link" |
+  "metrics" | "policy-verify" | "cleanup";
+const offlineFailureCodes = [
+  "native_policy_state_rejected", "native_proxy_endpoint_unconfirmed", "native_browser_version_unsupported",
+  "native_untrusted_bootstrap", "native_extension_identity_rejected", "offline_native_worker_missing",
+  "offline_native_endpoint_rejected", "offline_native_observation_failed", "offline_native_readonly_guard_failed",
+  "offline_native_routing_failed", "offline_native_inference_forbidden", "offline_native_outbound_forbidden",
+  "offline_native_page_not_visible", "fixture_network_failed", "public_transport_failed",
+  "page_out_of_scope", "subframes_unsupported", "telemetry_limit", "page_screenshot_failed", "page_evaluation_failed",
+  "offline_native_telemetry_not_denied",
+] as const;
+
+export class OfflineNativeProbeError extends Error {
+  readonly code: typeof offlineFailureCodes[number] | "unknown";
+  constructor(readonly step: OfflineNativePhase, error: unknown) {
+    super("offline_native_probe_failed");
+    this.code = offlineFailureCodes.find((code) => error instanceof Error && error.message === code) ??
+      (error instanceof Error && error.message.startsWith("page.screenshot:") ? "page_screenshot_failed" :
+        error instanceof Error && error.message.startsWith("page.evaluate:") ? "page_evaluation_failed" : "unknown");
+  }
+}
 
 /** Process-local offline CLI guard; only ports opened by this probe may be added. */
 export function installOfflineNativeNetworkGuard() {
@@ -92,12 +117,19 @@ export function installOfflineNativeNetworkGuard() {
 /** Maintained actual-tsx callback/SDK probe. No provider configuration or inference is used. */
 export async function offlineNativeProbe() {
   const outbound = installOfflineNativeNetworkGuard();
-  try { return await runOfflineNativeProbe(outbound); }
+  let step: OfflineNativePhase = "setup";
+  try { return await runOfflineNativeProbe(outbound, (value) => { step = value; }); }
+  catch (error) { throw new OfflineNativeProbeError(step, error); }
   finally { outbound.close(); }
 }
 
-async function runOfflineNativeProbe(outbound: ReturnType<typeof installOfflineNativeNetworkGuard>) {
+async function runOfflineNativeProbe(
+  outbound: ReturnType<typeof installOfflineNativeNetworkGuard>,
+  phase: (step: OfflineNativePhase) => void,
+) {
+  phase("archive");
   const bundle = await buildComposedExtension();
+  phase("refused-proxy");
   const guard = createServer();
   await new Promise<void>((resolve, reject) => {
     guard.once("error", reject);
@@ -113,6 +145,7 @@ async function runOfflineNativeProbe(outbound: ReturnType<typeof installOfflineN
   let modelCalls = 0;
   let apiCalls = 0;
   let sentinelFailures = 0;
+  let verified = false;
   const sentinel = createHttpServer((request, response) => {
     const telemetry = request.method === "POST" && request.url === "/v1/traces";
     if (!telemetry) apiCalls++;
@@ -130,6 +163,7 @@ async function runOfflineNativeProbe(outbound: ReturnType<typeof installOfflineN
     });
   });
   try {
+    phase("sentinel");
     await new Promise<void>((resolve, reject) => {
       sentinel.once("error", reject);
       sentinel.listen(0, "127.0.0.1", resolve);
@@ -145,6 +179,7 @@ async function runOfflineNativeProbe(outbound: ReturnType<typeof installOfflineN
       await mkdir(dirname(path), { recursive: true, mode: 0o700 });
       await writeFile(path, bytes, { mode: 0o600 });
     }
+    phase("browser");
     context = await chromium.launchPersistentContext(profile, {
       channel: "chromium", headless: true,
       args: [
@@ -154,23 +189,28 @@ async function runOfflineNativeProbe(outbound: ReturnType<typeof installOfflineN
         "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1, EXCLUDE localhost",
       ],
     });
+    phase("extension-worker");
     const worker = context.serviceWorkers().find((entry) => entry.url().endsWith("/service-worker.js"))
       ?? await context.waitForEvent("serviceworker");
     if (!/^chrome-extension:\/\/[a-p]{32}\/service-worker.js$/.test(worker.url())) throw new Error("offline_native_worker_missing");
+    phase("cdp-endpoint");
     const endpoint = (await readFile(join(profile, "DevToolsActivePort"), "utf8")).trim().split("\n");
     if (endpoint.length !== 2 || !/^[1-9]\d{0,4}$/.test(endpoint[0]) || Number(endpoint[0]) > 65535
       || !/^\/devtools\/browser\/[a-f0-9-]{36}$/.test(endpoint[1])) throw new Error("offline_native_endpoint_rejected");
     outbound.allowOwnedPort(Number(endpoint[0]));
+    phase("sdk-connect");
     browser = await localBrowser.connect({
       cdpUrl: `ws://127.0.0.1:${endpoint[0]}${endpoint[1]}`,
       extensionId: worker.url().split("/")[2],
     });
+    phase("sdk-initialize");
     stagehand = await Stagehand.create({
       browser, apiKey: "offline-native-no-provider", apiUrl: apiOrigin,
       model: { generate: async () => { modelCalls++; throw new Error("offline_native_inference_forbidden"); } },
-      telemetry: { traces: { endpoint: `${apiOrigin}/v1/traces` } },
+      telemetry: { traces: { endpoint: NATIVE_TELEMETRY_ENDPOINT } },
       cache: false, selfHeal: false, logging: { level: "off" },
     });
+    phase("native-attestation");
     policy = await establishNativePolicy({ context, worker, files: bundle.files, assertActive() {} });
     const origin = "https://offline-native.example.com";
     const page = context.pages().find((entry) => entry.url() === "about:blank" || entry.url().endsWith("/blank.html"));
@@ -180,6 +220,7 @@ async function runOfflineNativeProbe(outbound: ReturnType<typeof installOfflineN
       executionPolicy: PUBLIC_EXECUTION_POLICY, assetPolicy: PUBLIC_ASSET_POLICY,
       scope: { targetUrl: `${origin}/category/start`, pathPrefixes: ["/category"], allowedSubdomains: [] },
     });
+    phase("routing");
     network = await installOfflinePublicNetworkForProbe({
       context, page, extensionOrigin: policy.extensionOrigin, authorize: scope.authorize,
       assertActive() {}, verifyActive: policy.verify, signal: new AbortController().signal,
@@ -206,7 +247,18 @@ async function runOfflineNativeProbe(outbound: ReturnType<typeof installOfflineN
       },
       async close() {}, async drain() {},
     }));
+    // Cross the pinned SDK's one-second export interval instead of racing past background telemetry.
+    await stagehand.metrics();
+    const telemetryDeadline = Date.now() + 5000;
+    while (!network.blockedTelemetryRequests && Date.now() < telemetryDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    if (!network.blockedTelemetryRequests) throw new Error("offline_native_telemetry_not_denied");
+    phase("navigation");
     await page.goto(`${origin}/category/start`, { waitUntil: "domcontentloaded", timeout: 10000 });
+    phase("page-activation");
+    await page.bringToFront();
+    if (await page.evaluate(() => document.visibilityState) !== "visible") throw new Error("offline_native_page_not_visible");
     const reference = (bytes: Uint8Array, kind: "screenshot" | "json") => {
       const sha256 = createHash("sha256").update(bytes).digest("hex");
       return { key: sha256, sha256, bytes: bytes.length, kind };
@@ -221,10 +273,12 @@ async function runOfflineNativeProbe(outbound: ReturnType<typeof installOfflineN
       close: async () => ({ status: "closed", errors: [] }),
     });
     const signal = new AbortController().signal;
+    phase("observation");
     const observed = await driver.observe(signal);
     const button = observed.candidates.find((candidate) => candidate.label === "Mutate state");
     const link = observed.candidates.find((candidate) => candidate.label === "Read next");
     if (!button || !link) throw new Error("offline_native_observation_failed");
+    phase("readonly-negative");
     let rejected = false;
     try {
       await driver.act({ actor: "agent", action: "click", candidateId: button.id, value: null, commentary: "" }, signal);
@@ -232,25 +286,34 @@ async function runOfflineNativeProbe(outbound: ReturnType<typeof installOfflineN
       rejected = error instanceof ExecutionError && error.message === "read_only_link_required";
     }
     if (!rejected) throw new Error("offline_native_readonly_guard_failed");
+    phase("readonly-link");
     await driver.act({ actor: "agent", action: "click", candidateId: link.id, value: null, commentary: "" }, signal);
     await driver.observe(signal);
     if (page.url() !== `${origin}/category/next` || requests.length !== 3 || network.errors.length) {
       throw new Error("offline_native_routing_failed");
     }
     await driver.close();
+    phase("metrics");
     const metrics = await stagehand.metrics();
     if (modelCalls || apiCalls || sentinelFailures || outbound.blockedAttempts
       || metrics.totalPromptTokens !== 0 || metrics.totalCompletionTokens !== 0 || metrics.totalInferenceTimeMs !== 0) {
       throw new Error("offline_native_inference_forbidden");
     }
+    phase("policy-verify");
     await policy.verify();
+    verified = true;
     return {
       phase: "offline-native-probe", providerCalls: 0, modelCalls: 0,
       browserVersion: policy.version, archiveDigest: bundle.sha256, remotePolicyProved: false,
       broker: "synthetic-owned-fixture", publicSiteAcceptance: false, readonlyActionsVerified: true,
+      sdkTelemetry: "denied-no-egress",
     };
   } finally {
-    try { await stagehand?.close(); }
+    if (verified) phase("cleanup");
+    try {
+      await stagehand?.close();
+      if (verified && network?.errors.length) throw new Error("offline_native_routing_failed");
+    }
     finally {
       try { await network?.close(); }
       finally {

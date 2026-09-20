@@ -143,6 +143,20 @@ describe("real public factory composition, mocked provider boundary only", () =>
     networkOptions!.onGatewayDispatch!();
     expect(result.usage.gatewayDispatches).toBe(1);
   });
+  it("records blocked SDK exports privately without charging a Gateway call or losing startup denials", async () => {
+    let networkOptions: PublicNetworkOptions | undefined;
+    mocks.install.mockImplementation(async (value: PublicNetworkOptions) => {
+      networkOptions = value;
+      value.onTelemetryBlocked!();
+      return mocks.network;
+    });
+    const result = await createPublicExecution(config, options());
+    expect(result.usage).toMatchObject({ blockedNativeTelemetryRequests: 1, gatewayDispatches: 0 });
+    networkOptions!.onTelemetryBlocked!();
+    expect(result.usage).toMatchObject({ blockedNativeTelemetryRequests: 2, gatewayDispatches: 0 });
+    expect(mocks.gatewayDispatch).not.toHaveBeenCalled();
+    expect(mocks.network.errors).toEqual([]);
+  });
   it("closes a native browser on failed target navigation without labeling a target bug", async () => {
     mocks.native.page.goto.mockRejectedValue(new Error("upstream private details"));
     await expect(createPublicExecution(config, options())).rejects.toMatchObject({ phase: "public_navigation" });

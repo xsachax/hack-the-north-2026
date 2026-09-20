@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => {
   const context = {
     pages: vi.fn(() => [page]),
     serviceWorkers: vi.fn(() => [worker]),
+    waitForEvent: vi.fn<(event: "serviceworker", options: { timeout: number }) => Promise<typeof worker>>(),
     newPage: vi.fn(async () => page),
   };
   const browser = { close: vi.fn<() => Promise<void>>() };
@@ -61,7 +62,7 @@ const mocks = vi.hoisted(() => {
     toFile: vi.fn(async () => ({ name: "flash-flood-native.zip" })),
     build: vi.fn(async () => bundle),
     sessions: {
-      create: vi.fn<(input: unknown) => Promise<{ id: string }>>(),
+      create: vi.fn<(input: unknown) => Promise<{ id: string; connectUrl?: string }>>(),
       retrieve: vi.fn<(id: string, options?: { timeout: number }) => Promise<Session>>(),
       update: vi.fn<(id: string, body: unknown) => Promise<void>>(),
       debug: vi.fn(async () => ({ debuggerFullscreenUrl: "https://example.invalid/private-debug" })),
@@ -176,7 +177,7 @@ beforeEach(() => {
   mocks.extensions.create.mockResolvedValue({ id: extensionId });
   mocks.extensions.delete.mockResolvedValue(undefined);
   mocks.extensions.retrieve.mockRejectedValue(new mocks.APIError(404));
-  mocks.sessions.create.mockResolvedValue({ id: sessionId });
+  mocks.sessions.create.mockResolvedValue({ id: sessionId, connectUrl: running.connectUrl });
   mocks.sessions.retrieve.mockResolvedValue(completed);
   mocks.sessions.update.mockResolvedValue(undefined);
   mocks.sessions.debug.mockResolvedValue({ debuggerFullscreenUrl: "https://example.invalid/private-debug" });
@@ -195,6 +196,7 @@ beforeEach(() => {
   mocks.playwright.contexts.mockReturnValue([mocks.context]);
   mocks.context.pages.mockReturnValue([mocks.page]);
   mocks.context.serviceWorkers.mockReturnValue([mocks.worker]);
+  mocks.context.waitForEvent.mockRejectedValue(new Error("worker unavailable"));
   mocks.context.newPage.mockResolvedValue(mocks.page);
   mocks.worker.url.mockReturnValue(`${extensionOrigin}/service-worker.js`);
   mocks.page.url.mockReturnValue("about:blank");
@@ -278,6 +280,103 @@ describe("offline fresh native browser admission", () => {
     await execution.close();
   });
 
+  it("uses the original allocation capability when authenticated session readback omits its optional URL", async () => {
+    mocks.sessions.retrieve.mockResolvedValue({ ...completed, connectUrl: undefined });
+    const execution = await createNativeBrowser(config, options());
+    expect(mocks.connect).toHaveBeenCalledExactlyOnceWith(running.connectUrl, { timeout: 10000 });
+    expect(mocks.sdkWorker).toHaveBeenCalledWith(expect.objectContaining({
+      session: { id: sessionId, connectUrl: running.connectUrl, region: undefined },
+    }));
+    await execution.close();
+  });
+
+  it.each([undefined, "", "https://example.invalid/cdp", "wss://user:password@example.invalid/cdp",
+    "wss://example.invalid/cdp#fragment"])("rejects invalid original connection metadata %j without falling back to readback", async (connectUrl) => {
+    mocks.sessions.create.mockResolvedValue({ id: sessionId, connectUrl });
+    const input = options();
+    const error = await startupError(input);
+    expect((error.usage as NativeCloudUsage).nativeStartupFailure).toEqual({ step: "connection_metadata", code: "unknown" });
+    expect(input.onSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId }));
+    expect(mocks.connect).not.toHaveBeenCalled();
+    expect(resource(error)?.state).toBe("deleted");
+  });
+
+  it("waits for delayed extension startup before checking the exact worker and trusted bootstrap", async () => {
+    mocks.context.serviceWorkers.mockReturnValue([]);
+    mocks.context.waitForEvent.mockImplementation(async () => {
+      mocks.context.serviceWorkers.mockReturnValue([mocks.worker]);
+      return mocks.worker;
+    });
+    const execution = await createNativeBrowser(config, options());
+    expect(mocks.context.waitForEvent).toHaveBeenCalledExactlyOnceWith("serviceworker", { timeout: 5000 });
+    expect(mocks.attest).toHaveBeenCalledOnce();
+    await execution.close();
+  });
+
+  it.each(["cancel", "lease"])("fences %s arriving while extension startup is pending", async (kind) => {
+    const pending = deferred<typeof mocks.worker>();
+    const controller = new AbortController();
+    let leased = true;
+    const input = options({ signal: controller.signal, assertActive: () => { if (!leased) throw new Error("lease lost"); } });
+    mocks.context.serviceWorkers.mockReturnValue([]);
+    mocks.context.waitForEvent.mockReturnValue(pending.promise);
+    const task = startupError(input);
+    await vi.advanceTimersByTimeAsync(0);
+    if (kind === "cancel") controller.abort();
+    else leased = false;
+    mocks.context.serviceWorkers.mockReturnValue([mocks.worker]);
+    pending.resolve(mocks.worker);
+    const error = await task;
+    expect((error.usage as NativeCloudUsage).nativeStartupFailure?.step).toBe("extension_worker");
+    expect(mocks.sdkWorker).not.toHaveBeenCalled();
+    expect(mocks.attest).not.toHaveBeenCalled();
+    expect(resource(error)?.state).toBe("deleted");
+  });
+
+  it("bounds extension startup at five seconds and never resumes after a late worker", async () => {
+    const pending = deferred<typeof mocks.worker>();
+    mocks.context.serviceWorkers.mockReturnValue([]);
+    mocks.context.waitForEvent.mockReturnValue(pending.promise);
+    const task = startupError();
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(mocks.extensions.delete).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    const error = await task;
+    expect((error.usage as NativeCloudUsage).nativeStartupFailure).toEqual({ step: "extension_worker", code: "unknown",
+      browserVersion: "145.0.7632.6" });
+    mocks.context.serviceWorkers.mockReturnValue([mocks.worker]);
+    pending.resolve(mocks.worker);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.sdkWorker).not.toHaveBeenCalled();
+    expect(mocks.attest).not.toHaveBeenCalled();
+    expect(resource(error)?.state).toBe("deleted");
+  });
+
+  it.each(["duplicate", "foreign", "untrusted-page"])("rejects delayed %s bootstrap without starting the SDK", async (kind) => {
+    mocks.context.serviceWorkers.mockReturnValue([]);
+    mocks.context.waitForEvent.mockImplementation(async () => {
+      mocks.context.serviceWorkers.mockReturnValue(kind === "duplicate" ? [mocks.worker, mocks.worker] :
+        kind === "foreign" ? [{ ...mocks.worker, url: vi.fn(() => "https://untrusted.invalid/service-worker.js") }] : [mocks.worker]);
+      if (kind === "untrusted-page") mocks.page.url.mockReturnValue("https://untrusted.invalid/");
+      return mocks.worker;
+    });
+    const error = await startupError();
+    expect((error.usage as NativeCloudUsage).nativeStartupFailure).toMatchObject({
+      step: kind === "untrusted-page" ? "trusted_bootstrap" : "extension_worker",
+      code: kind === "untrusted-page" ? "native_untrusted_bootstrap" : "native_extension_identity_rejected",
+    });
+    expect(mocks.sdkWorker).not.toHaveBeenCalled();
+    expect(mocks.attest).not.toHaveBeenCalled();
+  });
+
+  it("records a fixed CDP failure step without copying raw transport errors or connection credentials", async () => {
+    mocks.connect.mockRejectedValue(new Error("wss://example.invalid/?apiKey=private-value secret-marker"));
+    const error = await startupError();
+    expect((error.usage as NativeCloudUsage).nativeStartupFailure).toEqual({ step: "cdp_attach", code: "unknown" });
+    expect(JSON.stringify(error.usage)).not.toMatch(/private-value|secret-marker|wss:/);
+    expect(resource(error)?.state).toBe("deleted");
+  });
+
   it.each([30, 80])("rejects a %s-second session timeout before provider construction", async (seconds) => {
     const error = await startupError(options(), { ...config, SESSION_TIMEOUT_SECONDS: seconds });
     expect(error.phase).toBe("native_admission");
@@ -338,7 +437,7 @@ describe("offline fresh native browser admission", () => {
     });
     mocks.sessions.create.mockImplementation(async () => {
       expect(events).toEqual(["upload_intent", "uploaded", "allocated"]);
-      return { id: sessionId };
+      return { id: sessionId, connectUrl: running.connectUrl };
     });
     const execution = await createNativeBrowser(config, input);
     expect(events).toEqual(["upload_intent", "uploaded", "allocated", "session-resource", "session-reference"]);
@@ -457,7 +556,7 @@ describe("offline fresh native browser admission", () => {
 
   it("records a late allocated session even when cancellation arrives during create", async () => {
     const controller = new AbortController();
-    const allocation = deferred<{ id: string }>();
+    const allocation = deferred<{ id: string; connectUrl?: string }>();
     const input = options({ signal: controller.signal });
     mocks.sessions.create.mockReturnValue(allocation.promise);
     const result = startupError(input);
@@ -475,7 +574,7 @@ describe("offline native absolute execution deadline", () => {
   it("charges slow allocation and bootstrap against the original budget and closes 80 seconds before provider TTL", async () => {
     expect(NATIVE_SHUTDOWN_RESERVE_SECONDS).toBe(80);
     const start = Date.now();
-    const allocation = deferred<{ id: string }>();
+    const allocation = deferred<{ id: string; connectUrl: string }>();
     const attachment = deferred<typeof mocks.browser>();
     mocks.sessions.create.mockImplementation(() => {
       expect(Date.now()).toBe(start);
@@ -485,7 +584,7 @@ describe("offline native absolute execution deadline", () => {
     mocks.attach.mockReturnValue(attachment.promise);
     const startup = createNativeBrowser({ ...config, SESSION_TIMEOUT_SECONDS: 120 }, options());
     await vi.advanceTimersByTimeAsync(5000);
-    allocation.resolve({ id: sessionId });
+    allocation.resolve({ id: sessionId, connectUrl: running.connectUrl });
     await vi.advanceTimersByTimeAsync(0);
     expect(mocks.attach).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(10000);
@@ -602,6 +701,9 @@ describe("offline native startup failures", () => {
     const error = await startupError(input);
     expect(error.phase).toBe("native_attestation");
     expect((error.usage as NativeCloudUsage).nativeObservedBrowserVersion).toBe(actualVersion);
+    expect((error.usage as NativeCloudUsage).nativeStartupFailure).toEqual({
+      code: "native_browser_version_unsupported", browserVersion: actualVersion,
+    });
     expect((error.usage as NativeCloudUsage).nativePolicy).toBeUndefined();
     expect(input.onSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ liveViewUrl: "" }));
     expect(mocks.sessions.debug).not.toHaveBeenCalled();

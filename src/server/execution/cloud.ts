@@ -22,6 +22,15 @@ export type PrivateSessionReference = {
   replayUrl: string;
   timeoutSeconds: number;
 };
+const startupPhaseSchema = z.enum([
+  "unknown", "admission", "client_initialization", "extension_upload", "launch", "session_reference",
+  "browser_connect", "stagehand_create", "cdp_connect", "extension_identity", "network_install",
+  "fixture_setup", "stagehand_page", "live_reference", "public_checkpoint", "public_admission",
+  "native_admission", "native_extension_upload", "native_launch", "native_session_reference",
+  "native_cdp_connect", "native_browser_connect", "native_stagehand_create", "native_attestation",
+  "public_network", "public_navigation", "public_stagehand_page", "public_live_reference",
+]);
+export type CloudStartupPhase = z.infer<typeof startupPhaseSchema>;
 export type CloudUsage = {
   /** False is trusted proof that this factory never dispatched session creation. Missing means unknown. */
   allocationAttempted?: boolean;
@@ -33,6 +42,7 @@ export type CloudUsage = {
   cleanupDiagnostics?: { operation: string; category: "timeout" | "rejected" | "unconfirmed" }[];
   cleanupErrors?: string[];
   networkDiagnostics?: readonly string[];
+  startupPhase?: CloudStartupPhase;
 };
 export type FixtureExecutionOptions = {
   mode: "controlled-fixture";
@@ -62,6 +72,10 @@ export type FixtureExecutionOptions = {
 export class CloudStartupError extends Error {
   constructor(readonly cleanup: CleanupOutcome, readonly usage: CloudUsage, readonly phase = "unknown", readonly code?: ExecutionError["code"]) {
     super("cloud_startup_failed");
+  }
+  get safePhase(): CloudStartupPhase {
+    const parsed = startupPhaseSchema.safeParse(this.phase);
+    return parsed.success ? parsed.data : "unknown";
   }
 }
 

@@ -82,6 +82,37 @@ describe("durable worker with injected execution adapters", () => {
   });
   afterEach(() => { repository.close(); rmSync(dir, { recursive: true, force: true }); vi.useRealTimers(); });
 
+  it.each([
+    ["native_cdp_connect", "native_cdp_connect"],
+    ["public_navigation", "public_navigation"],
+    ["https://untrusted.invalid/?key=private-startup-value", "unknown"],
+  ])("persists only an allowlisted startup phase for %s without raw exception details", async (phase, expectedPhase) => {
+    const run = create();
+    deps.launch = vi.fn(async () => {
+      const error = new CloudStartupError({ status: "closed", errors: [] },
+        { ...usage, allocationAttempted: false }, phase);
+      error.message = "private-startup-value";
+      throw error;
+    });
+    const worker = new DurableWorker(repository, deps, 4321);
+    await worker.executeClaim(repository.claim(worker.id)!, new AbortController().signal);
+    const summary = repository.attemptSummaries(owner, run.id)[0].summary;
+    expect(summary).toMatchObject({ cleanup: { status: "closed" }, steps: 0, modelCalls: 0 });
+    expect(repository.getRun(owner, run.id).status).toBe("infrastructure_failed");
+    const db = new DatabaseSync(join(dir, "flash-flood.sqlite"), { readOnly: true });
+    try {
+      const row = db.prepare("SELECT usage,summary FROM launches").get()!;
+      expect(JSON.parse(String(row.usage))).toMatchObject({ startupPhase: expectedPhase, allocationAttempted: false });
+      expect(JSON.parse(String(row.summary))).toMatchObject({
+        status: "infrastructure_failed",
+        reason: expectedPhase === "unknown" ? "Worker execution failed" : `Browser startup failed during ${expectedPhase}`,
+      });
+      expect(String(row.usage) + String(row.summary)).not.toMatch(/untrusted.invalid|private-startup-value/);
+    } finally { db.close(); }
+    expect(repository.accounting()).toMatchObject({ reservedSeconds: 240, committedSeconds: 0 });
+    expect(deps.diagnostic).toHaveBeenCalledWith("worker_attempt_failed");
+  });
+
   it("persists private evidence, steps and returned success without duplicate lifecycle hooks", async () => {
     const run = create();
     const worker = new DurableWorker(repository, deps, 4321);
