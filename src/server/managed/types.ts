@@ -39,4 +39,5 @@ export type ManagedJournal = {
   identity(reference: { providerRunId: string; providerSessionId?: string }): void;
   progress(event: { id: string; kind: "status" | "text" | "tool" | "error"; text: string }): void;
   sessionView(value: { liveViewUrl: string; replayUrl: string }): void;
+  liveView(value: { liveViewUrl: string }): void;
 };

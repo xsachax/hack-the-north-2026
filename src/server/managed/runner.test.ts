@@ -46,6 +46,7 @@ function fixture() {
     identity: vi.fn((value) => events.push(value.providerSessionId ? "session-identity" : "run-identity")),
     progress: vi.fn(),
     sessionView: vi.fn(),
+    liveView: vi.fn(),
   };
   let task = "";
   const run = (overrides: Partial<ManagedProviderRun> = {}): ManagedProviderRun => ({
@@ -133,7 +134,7 @@ describe("managed Agents runner", () => {
       "not enforced tool restrictions"]) expect(task).toContain(value);
     expect(task).not.toContain(SECRET);
     expect(task).not.toContain(PROJECT);
-    expect(f.provider.debugSession).not.toHaveBeenCalled();
+    expect(f.provider.debugSession).toHaveBeenCalledOnce();
     expect(f.journal.sessionView).toHaveBeenCalledExactlyOnceWith({
       liveViewUrl: "", replayUrl: `https://www.browserbase.com/sessions/${SESSION}`,
     });
@@ -701,18 +702,135 @@ describe("managed Agents runner", () => {
     expect(f.provider.releaseSession).not.toHaveBeenCalled();
   });
 
-  it("never fetches or publishes an interactive debugger URL, even with readOnly=true", async () => {
+  function running(f: ReturnType<typeof fixture>, polls = 1) {
+    for (let index = 0; index < polls; index++) {
+      f.provider.retrieveRun.mockImplementationOnce(async () => f.run({ status: "RUNNING" }));
+      f.provider.retrieveSession.mockImplementationOnce(async () => f.session({ status: "RUNNING", endedAt: undefined }));
+    }
+  }
+
+  it("publishes one validated live view only while the session is RUNNING", async () => {
     const f = fixture();
-    f.provider.debugSession.mockResolvedValue({
-      debuggerFullscreenUrl: `https://www.browserbase.com/devtools?readOnly=true&key=${SECRET}`,
-    });
+    running(f);
     const outcome = await executeManagedAgent(f.claim, f.journal, f.options);
-    expect(outcome).toMatchObject({ status: "completed", cleanup: "closed" });
-    expect(f.provider.debugSession).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({ status: "completed", cleanup: "closed", error: null });
+    expect(f.provider.debugSession).toHaveBeenCalledExactlyOnceWith(SESSION);
+    expect(f.journal.liveView).toHaveBeenCalledOnce();
+    const live = new URL(vi.mocked(f.journal.liveView).mock.calls[0][0].liveViewUrl);
+    expect(live.protocol).toBe("https:");
+    expect(live.hostname).toBe("www.browserbase.com");
+    expect(live.searchParams.get("navbar")).toBe("false");
     expect(f.journal.sessionView).toHaveBeenCalledExactlyOnceWith({
       liveViewUrl: "", replayUrl: `https://www.browserbase.com/sessions/${SESSION}`,
     });
-    expect(JSON.stringify(vi.mocked(f.journal.sessionView).mock.calls)).not.toMatch(/devtools|readOnly|key=/);
+    expect(vi.mocked(f.journal.liveView).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(f.journal.sessionView).mock.invocationCallOrder[0]);
+    expect(JSON.stringify({ outcome, progress: vi.mocked(f.journal.progress).mock.calls })).not.toMatch(/devtools|navbar/);
+  });
+
+  it("never requests a live view for a session that is not RUNNING", async () => {
+    const f = fixture();
+    const outcome = await executeManagedAgent(f.claim, f.journal, f.options);
+    expect(outcome).toMatchObject({ status: "completed", cleanup: "closed" });
+    expect(f.provider.debugSession).not.toHaveBeenCalled();
+    expect(f.journal.liveView).not.toHaveBeenCalled();
+  });
+
+  it("requests the live view exactly once across repeated RUNNING polls", async () => {
+    const f = fixture();
+    running(f, 4);
+    const outcome = await executeManagedAgent(f.claim, f.journal, f.options);
+    expect(outcome).toMatchObject({ status: "completed", cleanup: "closed" });
+    expect(f.provider.retrieveRun.mock.calls.length).toBeGreaterThanOrEqual(5);
+    expect(f.provider.debugSession).toHaveBeenCalledOnce();
+    expect(f.journal.liveView).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a healthy run healthy when the live view request fails, without retrying", async () => {
+    const f = fixture();
+    running(f, 3);
+    f.provider.debugSession.mockRejectedValue(new Error(`debug ${SECRET} https://private.invalid/`));
+    const outcome = await executeManagedAgent(f.claim, f.journal, f.options);
+    expect(outcome).toMatchObject({
+      status: "completed", cleanup: "closed", error: null, actualBrowserSeconds: 3.5,
+      result: { ...modelResult, finalUrl: "https://approved.example/pricing" },
+    });
+    expect(f.provider.debugSession).toHaveBeenCalledOnce();
+    expect(f.journal.liveView).not.toHaveBeenCalled();
+    expect(f.journal.progress).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "error", text: "managed_live_view_unavailable",
+    }));
+    expect(f.journal.sessionView).toHaveBeenCalledOnce();
+    expect(JSON.stringify({ outcome, progress: vi.mocked(f.journal.progress).mock.calls }))
+      .not.toMatch(/private\.invalid|bb_test/);
+  });
+
+  it.each([
+    "https://browserbase.com.evil.example/x",
+    `http://www.browserbase.com/devtools?sessionId=${SESSION}`,
+    `https://user:password@www.browserbase.com/devtools`,
+    `https://www.browserbase.com/devtools?key=${SECRET}`,
+    `https://www.browserbase.com/devtools?key=${encodeURIComponent(encodeURIComponent(SECRET))}`,
+    "not a url",
+  ])("does not publish the rejected live view %s", async (debuggerFullscreenUrl) => {
+    const f = fixture();
+    running(f);
+    f.provider.debugSession.mockResolvedValue({ debuggerFullscreenUrl });
+    const outcome = await executeManagedAgent(f.claim, f.journal, f.options);
+    expect(outcome).toMatchObject({ status: "completed", cleanup: "closed", error: null });
+    expect(f.provider.debugSession).toHaveBeenCalledOnce();
+    expect(f.journal.liveView).not.toHaveBeenCalled();
+    expect(f.journal.progress).toHaveBeenCalledWith(expect.objectContaining({ text: "managed_live_view_unavailable" }));
+    const exposed = JSON.stringify({ outcome, journal: Object.values(f.journal).map((entry) => vi.mocked(entry).mock.calls) });
+    expect(exposed).not.toContain(SECRET);
+    expect(exposed).not.toMatch(/evil\.example|devtools/);
+  });
+
+  it("does not swallow a lease lost while journaling the live view", async () => {
+    const f = fixture();
+    running(f);
+    vi.mocked(f.journal.liveView).mockImplementation(() => {
+      vi.mocked(f.journal.assertActive).mockImplementation(() => { throw new Error(`stale ${SECRET}`); });
+      throw new Error(`stale ${SECRET}`);
+    });
+    const outcome = await executeManagedAgent(f.claim, f.journal, f.options);
+    expect(outcome).toMatchObject({ status: "failed", cleanup: "unconfirmed", error: "managed_lease_lost" });
+    expect(f.provider.stopRun).not.toHaveBeenCalled();
+    expect(f.journal.progress).not.toHaveBeenCalledWith(expect.objectContaining({ text: "managed_live_view_unavailable" }));
+    expect(JSON.stringify(outcome)).not.toContain(SECRET);
+  });
+
+  it("does not swallow a cancellation that lands during the live view request", async () => {
+    const f = fixture();
+    f.provider.retrieveRun.mockImplementation(async () => f.run({
+      status: f.provider.stopRun.mock.calls.length ? "STOPPED" : "RUNNING",
+    }));
+    f.provider.retrieveSession.mockImplementationOnce(async () => f.session({ status: "RUNNING", endedAt: undefined }));
+    f.provider.debugSession.mockImplementation(async () => { f.controller.abort(); throw new Error("aborted"); });
+    const outcome = await executeManagedAgent(f.claim, f.journal, f.options);
+    expect(outcome).toMatchObject({ status: "cancelled", cleanup: "closed", error: "managed_cancelled", providerStatus: "STOPPED" });
+    expect(f.provider.debugSession).toHaveBeenCalledOnce();
+    expect(f.provider.stopRun).toHaveBeenCalledExactlyOnceWith(RUN);
+    expect(f.journal.liveView).not.toHaveBeenCalled();
+  });
+
+  it("never requests a live view while recovering a prior dispatch", async () => {
+    const f = fixture();
+    await executeManagedAgent(f.claim, f.journal, f.options);
+    f.provider.debugSession.mockClear();
+    vi.mocked(f.journal.liveView).mockClear();
+    f.provider.retrieveRun.mockImplementation(async () => f.run({
+      status: f.provider.stopRun.mock.calls.length ? "STOPPED" : "RUNNING",
+    }));
+    f.provider.retrieveSession
+      .mockImplementationOnce(async () => f.session({ status: "RUNNING", endedAt: undefined }))
+      .mockImplementationOnce(async () => f.session({ status: "RUNNING", endedAt: undefined }));
+    const outcome = await executeManagedAgent(
+      f.recoveredClaim({ providerRunId: RUN, providerSessionId: SESSION }), f.journal, f.options);
+    expect(outcome).toMatchObject({ status: "failed", cleanup: "closed", error: "managed_recovery_stopped" });
+    expect(f.provider.retrieveSession).toHaveBeenCalled();
+    expect(f.provider.debugSession).not.toHaveBeenCalled();
+    expect(f.journal.liveView).not.toHaveBeenCalled();
   });
 
   it("does not publish even a generated replay URL containing the configured API key", async () => {

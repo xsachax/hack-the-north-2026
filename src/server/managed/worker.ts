@@ -51,6 +51,7 @@ export class ManagedWorker {
       identity: (value) => store.identity(claim, value),
       progress: (value) => store.progress(claim, value),
       sessionView: (value) => store.sessionView(claim, value),
+      liveView: (value) => store.liveView(claim, value),
     };
     try {
       const result = await this.execute(claim, journal, { ...this.options, signal });
